@@ -1,0 +1,49 @@
+@namespace UI.Components.Shared
+@inject NavigationManager Navigation
+
+<ErrorBoundary @ref="_boundary">
+	<ChildContent>@ChildContent</ChildContent>
+	<ErrorContent>
+		<Alert Tone="AlertTone.Error">
+			<p>The app couldn't reach Auth0's Management API. Try again, or ask whoever runs the app to check its Auth0 Management settings.</p>
+			@if (RendererInfo.IsInteractive)
+			{
+				<button type="button" @onclick="Recover" class="@TryAgainClass">Try again</button>
+			}
+			else
+			{
+				<a href="@Navigation.Uri" class="@TryAgainClass">Try again</a>
+			}
+		</Alert>
+	</ErrorContent>
+</ErrorBoundary>
+
+@code {
+	private const string TryAgainClass =
+		"mt-2 inline-block rounded-md font-medium underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:focus-visible:outline-red-300";
+
+	private ErrorBoundary? _boundary;
+
+	private string? _uri;
+
+	/// <summary>
+	///   The management content the boundary guards.
+	/// </summary>
+	[Parameter]
+	public RenderFragment? ChildContent { get; set; }
+
+	// A routed page is reused when only its URL's parameters change, such as ?user=, so the boundary would keep showing the
+	// last error after the Admin moves on. ChildContent counts as changed on every render of the page, so recover only when
+	// the URL has changed: recovering on every render would call the Management API again each time the page renders.
+	protected override void OnParametersSet()
+	{
+		if (_uri is not null && _uri != Navigation.Uri)
+		{
+			_boundary?.Recover();
+		}
+
+		_uri = Navigation.Uri;
+	}
+
+	private void Recover() => _boundary?.Recover();
+}
