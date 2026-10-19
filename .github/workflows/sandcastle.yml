@@ -25,6 +25,9 @@ name: Sandcastle
   # names, not file names. Claude Review posts its review with GITHUB_TOKEN,
   # which starts no pull_request_review run, so its completion is followed
   # here instead, as PR Auto-Merge does, to start a follow-up pass on its threads.
+  # A Claude Review run on a PR without review:claude skips every job and
+  # concludes skipped, so the job's if: lets only a successful one through.
+  # Claude Review runs on pull_request, so its head_branch is the PR's branch.
   workflow_run:
     workflows: ["Build and Test Suite", "Claude Review"]
     types: [completed]
@@ -64,6 +67,7 @@ jobs:
           || startsWith(github.event.pull_request.head.ref, 'fix/')
           || startsWith(github.event.pull_request.head.ref, 'hotfix/')))
       || (github.event_name == 'workflow_run'
+        && (github.event.workflow_run.name != 'Claude Review' || github.event.workflow_run.conclusion == 'success')
         && github.event.workflow_run.head_repository.full_name == github.repository
         && (startsWith(github.event.workflow_run.head_branch, 'feature/')
           || startsWith(github.event.workflow_run.head_branch, 'fix/')

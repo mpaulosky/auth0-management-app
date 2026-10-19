@@ -100,7 +100,9 @@ writes when it publishes, so a collaborator's PR on a matching branch is never s
 The Copilot-review, CI-completion and Claude-Review-completion triggers only start a run; this check decides which PRs it touches.
 
 **Settled.** A PR gets a pass only when every check run on its head has completed and Copilot has reviewed the head (a Copilot review with `commit.oid == headRefOid`, and Copilot not in
-`reviewRequests`). If CI has been settled for about an hour with no Copilot review and no pending request, the host re-requests one with `requestReviewsByLogin` (once per head).
+`reviewRequests`). A red check or an unresolved bot or owner thread gets a pass as soon as the checks have completed,
+without waiting for Copilot, so a Claude review's threads are answered whether or not Copilot ever reviews the head.
+If CI has been settled for about an hour with no Copilot review and no pending request, the host re-requests one with `requestReviewsByLogin` (once per head).
 A settled PR that is `CLEAN` with every thread resolved, or with only human threads open, is left alone. A PR with open human threads doesn't merge until
 that human resolves them. That is deliberate: a human who comments has joined the review, and resolving the thread is their sign-off.
 
@@ -124,8 +126,9 @@ for a conflict, and also for a PR that's merely behind main when it has a settle
 red check is left to the sweep's update-branch once it's settled. When `main` merges in cleanly and nothing is left for the role, the follow-up role doesn't run: the host
 gates and pushes the merge itself.
 
-**Thread rules.** Follow-up acts on bot threads (Copilot, CodeQL) and the repository owner's threads, but resolves only bot threads. Threads anyone else opens never reach the role; they
-stay open for the owner, and the job summary lists them. The owner resolves their own threads, because that's their sign-off. It may decline a
+**Thread rules.** Follow-up acts on bot threads (Copilot, CodeQL, and Claude Review, which posts as `github-actions[bot]`) and the repository owner's threads,
+but resolves only bot threads. Threads anyone else opens never reach the role; they stay open for the owner, and the job summary lists them.
+The owner resolves their own threads, because that's their sign-off. It may decline a
 bot thread without a change only because the suggestion contradicts the issue's acceptance criteria or `CODING_STANDARDS.md`, is factually wrong (the reply cites the code), or is out of
 the issue's scope. Outdated threads whose concern the current code handles are resolved `ADDRESSED`. When it disagrees with an owner thread, it replies with its reasoning and leaves the
 thread open.
