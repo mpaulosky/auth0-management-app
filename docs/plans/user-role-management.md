@@ -48,7 +48,7 @@ This is variant A's landing page. It is **open to everyone** and stays staticall
   with no counts.
 - The counts come from:
   - Users: the search total with an empty query.
-  - Admins: `CountRoleMembersAsync(Admin, atMost: 1000)`, shown as "1,000+" at the cap.
+  - Admins: the cached `ListRoleMembersAsync(Admin)`, as the Users page's Admin badge uses, shown as "1,000+" when `Truncated`.
   - Roles: the `ListRolesAsync` count.
 
   They sit inside the [Management API error boundary](#where-each-failure-shows). The page is static, so there the boundary's **Try again** is a link that reloads
@@ -187,10 +187,12 @@ The limiter counts HTTP requests, not `IManagementApi` calls: one call can send 
   retries included. `/oauth/token` doesn't take one: the token is cached, and it's the Authentication API, with its own limits.
 - **The bucket** matches Auth0's own, from `PermitsPerSecond` and `Burst`. It queues requests in order: `QueueProcessingOrder.OldestFirst`, with a `QueueLimit` of
   100 (the default, 0, would refuse at once instead of queueing).
-- **A timeout:** a request still waiting after `QueueTimeout` gets a 429 from the handler itself, with no `X-RateLimit-*` headers, and never reaches Auth0. It then goes
-  through the SDK's retry and the adapter's mapping like Auth0's own 429, so the call fails with `ManagementApi.RateLimited`.
-  `QueueTimeout` is at most 4 s because the SDK's 10 s `Timeout` covers both attempts: two waits of 4 s plus the retry's backoff still end inside it, so the call fails
-  as `RateLimited` rather than as a timeout that throws.
+- **A timeout or a full queue:** a request still waiting after `QueueTimeout`, or whose lease comes back not acquired because the queue is full, gets a 429 from the
+  handler itself, with no `X-RateLimit-*` headers, and never reaches Auth0. It then goes through the SDK's retry and the adapter's mapping like Auth0's own 429, so the
+  call fails with `ManagementApi.RateLimited`.
+- **When the SDK's timeout wins:** the SDK's 10 s `Timeout` covers both attempts, Auth0's round trips and the backoff, so it can fire first. The handler marks the call,
+  in an `AsyncLocal` the adapter sets up for each call, whenever it answers with its own 429 or passes on one from Auth0. If the SDK's timeout then cancels a marked
+  call, the adapter returns `ManagementApi.RateLimited`. An unmarked timeout still throws. `QueueTimeout` is at most 4 s to keep each wait well inside the 10 s.
 - **In tests:** the limiter is registered as a singleton `RateLimiter`, so a test can replace it with one built with `AutoReplenishment = false` and replenish it by hand.
 
 ### Options
@@ -462,7 +464,7 @@ throws.
 - **What throws:**
   - a failed token exchange (`Auth0.Core.Exceptions.ErrorApiException`, a wrong secret)
   - a 403 (a missing permission)
-  - a 5xx or a timeout after the retry
+  - a 5xx or a timeout after the retry, unless the call met a 429 ([The rate limiter](#the-rate-limiter))
 - **Logging:** each is logged at Error. The token exchange and 403 logs carry a hint naming the `Auth0:Management:*` settings and the README's permission table.
 
 ### Where each failure shows
@@ -527,7 +529,8 @@ These tests run everywhere, the Sandcastle sandbox included.
     - `CountRoleMembersAsync` stopping at `atMost`, and `UserHoldsRoleAsync`
     - each cache lifetime and invalidation rule, a cache hit showing as no second request
     - the limiter pacing a multi-page listing, one token per request, with a hand-replenished limiter
-    - the limiter timing out a queued request, which reaches `ManagementApi.RateLimited` and never reaches the stub
+    - the limiter timing out a queued request, and refusing one when the queue is full, each reaching `ManagementApi.RateLimited` without reaching the stub
+    - both attempts waiting the full `QueueTimeout`, which ends in `ManagementApi.RateLimited` even if the SDK's timeout fires first
 - **Handlers and validators, in `UI.Tests.Unit/Components/Features/<Slice>/`:**
   - Each handler's success path, and every code it can return.
   - A `[Theory]` for each validator rule.
@@ -568,7 +571,7 @@ The Tenant in the UI's user secrets is a private testing Tenant on the Free tier
 - **Where the settings come from:** locally the UI's user secrets, and in CI the `TEST_ENV` secret.
 - **The contract tests,** in `UI.Tests.Integration/ManagementApi/`:
   - They run the real `IManagementApi` from `AddManagementApi()`, one at a time in a single collection.
-  - Each one puts back what it changed.
+  - Each one puts back what it changed, except `CreateRoleAsync`'s test: the app can't delete Roles, so the Role it creates on the first run stays in the Tenant.
   - A `ManagementApi.RateLimited` result skips the test instead of failing it.
   - What they cover:
     - search and paging return our records

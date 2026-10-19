@@ -44,10 +44,12 @@ This departs from `mpaulosky/Articles`, the reference `CLAUDE.md` points to, who
   because Auth0 refills its bucket by rate and answers a call over the limit with a 429 at once rather than queueing it
   ([rate limit findings](../research/auth0-user-search-and-rate-limits.md)). The limiter queues requests in order, and the handler answers one still waiting after
   `ManagementApiOptions.QueueTimeout` with a 429 of its own, so the call fails with `ManagementApi.RateLimited` through the same mapping as Auth0's 429.
-  `QueueTimeout` is 4 s by default and at most 4 s, so both attempts and the SDK's backoff fit inside the SDK's 10 s timeout.
+  The same goes for a request refused because the queue is full. If the SDK's own 10 s timeout fires first, on a call that met a 429 from either source, the adapter
+  maps it to `ManagementApi.RateLimited` too, so a rate limit never surfaces as an outage.
 - The cache is in memory, in one process, with a short absolute expiry, and the app's own writes clear what they make stale. A change made elsewhere, such as in the Auth0
   Dashboard or by another instance of the app, shows only once the entry expires. So the last-Admin guard counts the `Admin` Role's members with
-  `CountRoleMembersAsync(roleId, atMost)`, which the decorator never caches and which stops paging once it has seen `atMost` members, and never trusts a stale count.
+  `CountRoleMembersAsync(roleId, atMost)`, which the decorator never caches and which stops paging once it has seen `atMost` members, and never trusts a stale count. The guard is
+  `CountRoleMembersAsync`'s only caller; a count that's only displayed uses the cached listing.
 - The guard first checks, with `UserHoldsRoleAsync`, uncached, that the User holds `Admin` at all: removing it from someone who doesn't is a no-op that succeeds,
   never a refusal.
 - The guard's read and the removal are two calls, and Auth0 has no conditional removal, so two Admins removing each other at once could both pass the guard. After removing
