@@ -96,11 +96,13 @@ Decided in [How Sandcastle follows up on an open PR until it can merge](https://
 
 **Scope.** Open, non-draft, same-repo PRs into `main` whose head is `feature/{n}-…`, `fix/{n}-…` or `hotfix/{n}-…`, where `#n` is an open issue in scope. PRs labelled `sandcastle:needs-human` are
 skipped. A PR is Sandcastle's only when the repository owner opened it (the host publishes with the owner's PAT) and its body carries the `<!-- sandcastle:pr -->` marker the host
-writes when it publishes, so a collaborator's PR on a matching branch is never swept. The Copilot-review and CI-completion triggers only start a run; this check decides which PRs it
-touches.
+writes when it publishes, so a collaborator's PR on a matching branch is never swept.
+The Copilot-review, CI-completion and Claude-Review-completion triggers only start a run; this check decides which PRs it touches.
 
 **Settled.** A PR gets a pass only when every check run on its head has completed and Copilot has reviewed the head (a Copilot review with `commit.oid == headRefOid`, and Copilot not in
-`reviewRequests`). If CI has been settled for about an hour with no Copilot review and no pending request, the host re-requests one with `requestReviewsByLogin` (once per head).
+`reviewRequests`). A red check or an unresolved bot or owner thread gets a pass as soon as the checks have completed,
+without waiting for Copilot, so a Claude review's threads are answered whether or not Copilot ever reviews the head.
+If CI has been settled for about an hour with no Copilot review and no pending request, the host re-requests one with `requestReviewsByLogin` (once per head).
 A settled PR that is `CLEAN` with every thread resolved, or with only human threads open, is left alone. A PR with open human threads doesn't merge until
 that human resolves them. That is deliberate: a human who comments has joined the review, and resolving the thread is their sign-off.
 
@@ -119,13 +121,14 @@ that human resolves them. That is deliberate: a human who comments has joined th
    posts one pass-summary PR comment carrying `<!-- sandcastle:follow-up -->`. GitHub's `resolveReviewThread` takes only the thread id, so the resolution is named in the reply's first
    line and in the pass summary, not on the thread. A `declined` verdict with `"invalid": true` resolves as `INVALID`, any other as `WONT_FIX`.
 
-Only a conflict with `main` (`DIRTY`), an unresolved bot thread or a red check starts a pass; an owner thread is answered only alongside one of them. A pass merges `main` in
+Only a conflict with `main` (`DIRTY`), an unresolved bot or owner thread or a red check starts a pass; a human's thread never does. A pass merges `main` in
 for a conflict, and also for a PR that's merely behind main when it has a settled red check (see **Red CI** below, which the gate needs the merge for); a behind PR with no
 red check is left to the sweep's update-branch once it's settled. When `main` merges in cleanly and nothing is left for the role, the follow-up role doesn't run: the host
 gates and pushes the merge itself.
 
-**Thread rules.** Follow-up acts on bot threads (Copilot, CodeQL) and the repository owner's threads, but resolves only bot threads. Threads anyone else opens never reach the role; they
-stay open for the owner, and the job summary lists them. The owner resolves their own threads, because that's their sign-off. It may decline a
+**Thread rules.** Follow-up acts on bot threads (Copilot, CodeQL, and Claude Review, which posts as `github-actions[bot]`) and the repository owner's threads,
+but resolves only bot threads. Threads anyone else opens never reach the role; they stay open for the owner, and the job summary lists them.
+The owner resolves their own threads, because that's their sign-off. It may decline a
 bot thread without a change only because the suggestion contradicts the issue's acceptance criteria or `CODING_STANDARDS.md`, is factually wrong (the reply cites the code), or is out of
 the issue's scope. Outdated threads whose concern the current code handles are resolved `ADDRESSED`. When it disagrees with an owner thread, it replies with its reasoning and leaves the
 thread open.
@@ -394,8 +397,10 @@ Triggers:
 
 - `issues: labeled` where the label is exactly `Sandcastle`;
 - `issues` / `pull_request: unlabeled` where the label is exactly `sandcastle:needs-info` or `sandcastle:needs-human`;
-- `pull_request_review` submitted by Copilot, and `workflow_run` completed for `Build and Test Suite` (the `name:` of `ci.yml`,
-  since `workflow_run` matches workflow names, not file names), only for same-repo `feature/*` / `fix/*` / `hotfix/*` heads, so a fork never runs with secrets;
+- `pull_request_review` submitted by Copilot, and `workflow_run` completed for `Build and Test Suite` or `Claude Review` (the `name:` of `ci.yml` and of
+  `claude-review.yml`, since `workflow_run` matches workflow names, not file names), only for same-repo `feature/*` / `fix/*` / `hotfix/*` heads, so a fork never runs with
+  secrets. Claude Review is followed by its completion because it posts with `GITHUB_TOKEN`, whose review starts no `pull_request_review` run, so without it a Claude review
+  that lands after CI would wait for the next scheduled run;
 - `workflow_dispatch`, and `schedule` every 2 hours as a backstop for blockers cleared by merges and PRs that fall behind `main` (`push: main` deliberately isn't a trigger).
 
 Event triggers can't filter by label name, so every `labeled` / `unlabeled` event starts the workflow. The job's `if:` checks `github.event.label.name` against the
