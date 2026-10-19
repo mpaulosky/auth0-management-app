@@ -1,0 +1,38 @@
+@namespace UI.Components.Shared
+
+<div role="alert" class="@ToneClass @Class" @attributes="AdditionalAttributes">@ChildContent</div>
+
+@code {
+	/// <summary>
+	///   The hue the alert renders in.
+	/// </summary>
+	[Parameter]
+	public AlertTone Tone { get; set; } = AlertTone.Error;
+
+	/// <summary>
+	///   The message the alert shows.
+	/// </summary>
+	[Parameter]
+	public RenderFragment? ChildContent { get; set; }
+
+	/// <summary>
+	///   Extra classes for the caller's layout, such as spacing.
+	/// </summary>
+	[Parameter]
+	public string? Class { get; set; }
+
+	/// <summary>
+	///   Any other attributes, passed through to the alert's element.
+	/// </summary>
+	[Parameter(CaptureUnmatchedValues = true)]
+	public IReadOnlyDictionary<string, object>? AdditionalAttributes { get; set; }
+
+	private string ToneClass => Tone switch
+	{
+		AlertTone.Error =>
+			"rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/15 dark:text-red-300",
+		AlertTone.Warning =>
+			"rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300",
+		_ => throw new ArgumentOutOfRangeException(nameof(Tone), Tone, "Unknown AlertTone."),
+	};
+}
