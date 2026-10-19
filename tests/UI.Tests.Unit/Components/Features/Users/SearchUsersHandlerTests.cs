@@ -16,14 +16,14 @@ namespace UI.Tests.Unit.Components.Features.Users;
 
 public class SearchUsersHandlerTests
 {
-		private readonly IManagementApi _api = Substitute.For<IManagementApi>();
+	private readonly IManagementApi _api = Substitute.For<IManagementApi>();
 	private readonly SearchUsersHandler _sut;
 
 	public SearchUsersHandlerTests()
 	{
 		_sut = new SearchUsersHandler(_api, new SearchUsersQueryValidator());
 		_api.SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>())
-			.Returns(call => Task.FromResult(Result.Ok(new UserPage(UsersOf(1), 1))));
+			.Returns(Task.FromResult(Result.Ok(new UserPage(UsersOf(1), 1))));
 		_api.ListRolesAsync(Arg.Any<CancellationToken>())
 			.Returns(Task.FromResult(Result.Ok<IReadOnlyList<RoleSummary>>([new RoleSummary("role-admin", "Admin", null)])));
 		_api.ListRoleMembersAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
