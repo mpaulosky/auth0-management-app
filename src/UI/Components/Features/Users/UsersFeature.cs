@@ -7,6 +7,10 @@
 // Project Name :  UI
 // =============================================
 
+using FluentValidation;
+
+using UI.ManagementApi;
+
 namespace UI.Components.Features.Users;
 
 /// <summary>
@@ -21,6 +25,14 @@ public static class UsersFeature
 	/// <returns>The same service collection, for chaining.</returns>
 	public static IServiceCollection AddUsersFeature(this IServiceCollection services)
 	{
-		throw new NotImplementedException();
+		ArgumentNullException.ThrowIfNull(services);
+
+		services.AddManagementApi();
+
+		// Neither holds state, and the seam they call is a singleton, so one instance serves every circuit.
+		services.AddSingleton<IValidator<SearchUsersQuery>, SearchUsersQueryValidator>();
+		services.AddSingleton<SearchUsersHandler>();
+
+		return services;
 	}
 }

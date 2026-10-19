@@ -17,10 +17,28 @@ namespace UI.Components.Features.Users;
 public sealed class SearchUsersQueryValidator : AbstractValidator<SearchUsersQuery>
 {
 	/// <summary>
+	///   The error code of every failure this validator reports.
+	/// </summary>
+	public const string SearchInvalid = "User.SearchInvalid";
+
+	/// <summary>
+	///   The longest search text, after trimming.
+	/// </summary>
+	public const int MaxQueryLength = 100;
+
+	/// <summary>
 	///   Initializes a new instance of <see cref="SearchUsersQueryValidator" />.
 	/// </summary>
 	public SearchUsersQueryValidator()
 	{
-		throw new NotImplementedException();
+		RuleFor(query => query.Query)
+			.Must(text => text is null || text.Trim().Length <= MaxQueryLength)
+			.WithErrorCode(SearchInvalid)
+			.WithMessage($"Search for at most {MaxQueryLength} characters.");
+
+		RuleFor(query => query.Page)
+			.GreaterThanOrEqualTo(1)
+			.WithErrorCode(SearchInvalid)
+			.WithMessage("The page must be 1 or more.");
 	}
 }

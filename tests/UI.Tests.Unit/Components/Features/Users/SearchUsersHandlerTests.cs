@@ -302,6 +302,58 @@ public class SearchUsersHandlerTests
 		result.Error.Should().Be("Auth0 said no.");
 	}
 
+	[Fact]
+	public async Task HandleAsync_RoleListFails_ReturnsItsErrorAndListsNoRoleMembers()
+	{
+		// Arrange
+		_api.ListRolesAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(
+			Result.Fail<IReadOnlyList<RoleSummary>>("Try again in 3 seconds.", ResultErrorCode.RateLimited, "ManagementApi.RateLimited")));
+
+		// Act
+		Result<UserListPage> result = await _sut.HandleAsync(new SearchUsersQuery(null, 1), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Failure.Should().BeTrue();
+		result.ErrorCode.Should().Be(ResultErrorCode.RateLimited);
+		result.Details.Should().Be("ManagementApi.RateLimited");
+		result.Error.Should().Be("Try again in 3 seconds.");
+		await _api.DidNotReceiveWithAnyArgs().ListRoleMembersAsync(default!, Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public async Task HandleAsync_AdminMembersFail_ReturnsTheirError()
+	{
+		// Arrange
+		_api.ListRoleMembersAsync("role-admin", Arg.Any<CancellationToken>()).Returns(Task.FromResult(
+			Result.Fail<RoleMembers>("Try again in 3 seconds.", ResultErrorCode.RateLimited, "ManagementApi.RateLimited")));
+
+		// Act
+		Result<UserListPage> result = await _sut.HandleAsync(new SearchUsersQuery(null, 1), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Failure.Should().BeTrue();
+		result.ErrorCode.Should().Be(ResultErrorCode.RateLimited);
+		result.Details.Should().Be("ManagementApi.RateLimited");
+	}
+
+	[Fact]
+	public async Task HandleAsync_LastReachablePageFailsAfterAnOvershoot_ReturnsItsErrorAndLooksUpNoRoles()
+	{
+		// Arrange
+		_api.SearchUsersAsync(Arg.Is<UserSearch>(search => search.Page == 7), Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Ok(new UserPage([], 60))));
+		_api.SearchUsersAsync(Arg.Is<UserSearch>(search => search.Page == 3), Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Fail<UserPage>("Try again in 3 seconds.", ResultErrorCode.RateLimited, "ManagementApi.RateLimited")));
+
+		// Act
+		Result<UserListPage> result = await _sut.HandleAsync(new SearchUsersQuery("jane", 7), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Failure.Should().BeTrue();
+		result.Details.Should().Be("ManagementApi.RateLimited");
+		await _api.DidNotReceive().ListRolesAsync(Arg.Any<CancellationToken>());
+	}
+
 	private static UserSummary[] UsersOf(int count) =>
 		[.. Enumerable.Range(1, count).Select(index => new UserSummary($"auth0|user-{index}", $"User {index}", $"user{index}@example.com", null, "Username-Password-Authentication"))];
 }
