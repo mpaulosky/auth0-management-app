@@ -1,0 +1,19 @@
+@namespace UI.Components.Shared
+
+@{
+	throw new NotImplementedException();
+}
+
+@code {
+	/// <summary>
+	///   The hue the alert renders in.
+	/// </summary>
+	[Parameter]
+	public AlertTone Tone { get; set; } = AlertTone.Error;
+
+	/// <summary>
+	///   The message the alert shows.
+	/// </summary>
+	[Parameter]
+	public RenderFragment? ChildContent { get; set; }
+}
