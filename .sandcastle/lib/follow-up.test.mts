@@ -856,8 +856,9 @@ describe("sweepPullRequests", () => {
     const ownerRemoved: IssueEvent[] = [
       { event: "unlabeled", actor: "owner", label: "sandcastle:needs-human", createdAt: "2026-10-10T09:00:00Z" },
     ];
+    // Carries review:claude, so the sweep's review label (#51) adds nothing.
     const { updatedBranches, addedPrLabels, github } = stubGithub({
-      prs: [pr({ mergeStateStatus: "BEHIND" })],
+      prs: [pr({ mergeStateStatus: "BEHIND", labels: [REVIEW_LABEL] })],
       isOwner: (login) => login === "owner",
       pullRequestEvents: () => ownerRemoved,
     });

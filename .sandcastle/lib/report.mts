@@ -153,8 +153,9 @@ export class HumanThreadReport {
 // The one report every follow-up pass this run makes records into.
 export const humanThreadReport = new HumanThreadReport();
 
-// A PR the host opened or reused without REVIEW_LABEL because adding it failed
-// (lib/github.mts#openPullRequest): Claude never reviews it until a person
+// A PR the host opened, reused or swept without REVIEW_LABEL because adding it,
+// or reading whether it ever carried it, failed (lib/github.mts#openPullRequest,
+// lib/follow-up.mts#sweepPullRequests): Claude never reviews it until a person
 // adds the label, and the run log alone is a line nobody reads in an
 // unattended run.
 export type UnlabelledPrEntry = { pr: number; url: string };
@@ -178,7 +179,7 @@ export const unlabelledPrReport = new UnlabelledPrReport();
 // Whether main.mts must exit non-zero for the PRs it left without REVIEW_LABEL:
 // a failed label add ends the run green otherwise, and nobody is notified.
 export function unlabelledPrExitCode(entries: readonly UnlabelledPrEntry[]): number {
-  throw new Error("Not implemented");
+  return entries.length > 0 ? 1 : 0;
 }
 
 // One round where intake (lib/intake.mts#intakeRound) stopped rather than

@@ -1143,6 +1143,7 @@ describe("openPullRequestsForSweep", () => {
               {
                 id: "PR_1",
                 number: 42,
+                url: "https://github.com/o/r/pull/42",
                 isDraft: false,
                 isCrossRepository: false,
                 baseRefName: "main",
@@ -1199,6 +1200,7 @@ describe("openPullRequestsForSweep", () => {
     const [pr] = openPullRequestsForSweep(run, "o/r");
 
     assert.equal(pr!.number, 42);
+    assert.equal(pr!.url, "https://github.com/o/r/pull/42");
     assert.equal(pr!.headRefOid, "a".repeat(40));
     assert.deepEqual(pr!.reviewRequests, [COPILOT_REVIEWER]);
     assert.deepEqual(pr!.reviews, [{ author: COPILOT_REVIEWER, commitOid: "a".repeat(40) }]);

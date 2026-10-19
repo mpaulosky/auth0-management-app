@@ -135,7 +135,7 @@ import { UncountedStopError } from "./lib/errors.mts";
 import { followUpPassPhase } from "./lib/follow-up-pass.mts";
 import { followUpPhase } from "./lib/follow-up.mts";
 import { gateIssues } from "./lib/gate.mts";
-import { cacheHostLogin, ensureLabels, openPullRequests, repoName } from "./lib/github.mts";
+import { cacheHostLogin, ensureHostLabels, openPullRequests, repoName } from "./lib/github.mts";
 import { protectHostGit } from "./lib/host-safety.mts";
 import { intakePhase } from "./lib/intake.mts";
 import { runLimits } from "./lib/limits.mts";
@@ -150,6 +150,7 @@ import {
   outcomeReport,
   renderSummary,
   REPORT_DIR,
+  unlabelledPrExitCode,
   unlabelledPrReport,
   usageReport,
   waitingPrReport,
@@ -197,7 +198,7 @@ let ending: RunEnding = { kind: "crashed" };
 // gh, which reads git remotes: before it, a planted .git/commondir (the case
 // protectHostGit() guards against) could make gh read a config an agent
 // wrote. Set once startup has finished, not right after protectHostGit()
-// itself, so one failed later startup step (ensureLabels, cacheHostLogin)
+// itself, so one failed later startup step (ensureHostLabels, cacheHostLogin)
 // still leaves the report unlinked rather than guess which of them left git
 // safe to use.
 let startedUp = false;
@@ -226,10 +227,11 @@ try {
   protectHostGit();
   forgetGatedHead();
 
-  // The hand-backs and intake add sandcastle:* labels, which gh can't add until
-  // the repository has them. The host's login, which the failed-attempt count
+  // The hand-backs and intake add sandcastle:* labels, and openPullRequest and
+  // the follow-up sweep add review:claude, which gh can't add until the
+  // repository has them (#51). The host's login, which the failed-attempt count
   // filters by, is read now so a token that can't read it fails before any work.
-  ensureLabels();
+  ensureHostLabels();
   cacheHostLogin();
 
   // Release the labels this run holds however the process ends (see
@@ -526,12 +528,17 @@ try {
   console.log(`\nRun report: ${REPORT_DIR}/summary.md`);
 
   // Unlike a hand-back, an intake stop means the host couldn't run a role at
-  // all, so the run ends red once the report is written (#320). A crash still
-  // exits 1 on its uncaught error, whatever this sets.
+  // all, so the run ends red once the report is written (#320). So does a PR
+  // left without review:claude: the owner's PAT means GitHub notifies nobody,
+  // and a green run would hide it (#51). A crash still exits 1 on its uncaught
+  // error, whatever this sets.
   for (const { reason, firstError } of intakeStopReport.items()) {
     console.error(`\n✗ Intake stopped: ${reason}. First error: ${firstError}`);
   }
-  process.exitCode = intakeStopExitCode(intakeStopReport.items());
+  if (unlabelledPrs.length > 0) {
+    console.error(`\n✗ ${unlabelledPrs.length} pull request(s) left without ${REVIEW_LABEL}; see the run report.`);
+  }
+  process.exitCode = Math.max(intakeStopExitCode(intakeStopReport.items()), unlabelledPrExitCode(unlabelledPrs));
 }
 
 console.log("\nAll done.");

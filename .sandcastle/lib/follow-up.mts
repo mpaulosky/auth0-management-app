@@ -15,11 +15,12 @@
 // ---------------------------------------------------------------------------
 
 import { discardClosedWork, isIssueBranch, type BranchRefs } from "./branches.mts";
-import { COPILOT_REREQUEST_AFTER_MS, PR_MARKER } from "./config.mts";
+import { COPILOT_REREQUEST_AFTER_MS, PR_MARKER, REVIEW_LABEL } from "./config.mts";
 import {
   addPullRequestLabel,
   closedPullRequests,
   handBack,
+  hasCarriedReviewLabel,
   hasLabel,
   isCopilot,
   issueEvents,
@@ -70,6 +71,8 @@ export type SweepPullRequest = PullRequestIdentity & {
   // Set when any nested list (reviews, threads, checks, ...) was truncated by
   // GraphQL's page size, so the sweep can't decide safely from partial data.
   truncated: boolean;
+  // The PR's page, for the run report. Absent from a stub that doesn't need it.
+  url?: string;
 };
 
 // Whether a login is Copilot's code-review account (see
@@ -296,7 +299,9 @@ export type SweepResult = { needsPass: number[]; passes: PassTarget[] };
 // view. Once that's done, hands
 // back any in-scope issue, not labelled sandcastle:needs-human and with no
 // open PR, whose latest Sandcastle PR closed without merging
-// (closedWithoutMerging), each in its own try/catch too.
+// (closedWithoutMerging), each in its own try/catch too. Every swept PR
+// (sweepSkipReason applies isSandcastlePullRequest's tests) that has never
+// carried REVIEW_LABEL gets it first (labelForReview).
 export function sweepPullRequests(
   github: FollowUpGitHub = liveFollowUpGitHub,
   log: (line: string) => void = console.log,
@@ -333,6 +338,7 @@ export function sweepPullRequests(
         log(`  ✋ PR #${pr.number}: ${restore.reason}, so it isn't swept.`);
         continue;
       }
+      labelForReview(pr, github, log, unlabelled);
       // Not a bot's and not confirmed as the repository owner's: an owner
       // thread is the follow-up role's to answer (threadsForRole, and now
       // `decide` below), not left waiting on a person the way this count and
@@ -372,6 +378,30 @@ export function sweepPullRequests(
     }
   }
   return { needsPass, passes };
+}
+
+// Adds REVIEW_LABEL to a Sandcastle PR that has never carried it, so Claude
+// reviews one whose run stopped between `gh pr create` and the label, or one
+// opened before #45 labelled the PRs it opens (#51). A PR that carried it
+// before is left alone, as lib/github.mts#openPullRequest leaves one, so PR
+// Auto-Merge's review cap holds. A failed timeline read or label add warns and
+// goes in the run report rather than throw, so the PR is still followed up;
+// the next round's sweep tries again.
+function labelForReview(
+  pr: SweepPullRequest,
+  github: FollowUpGitHub,
+  log: (line: string) => void,
+  unlabelled: Pick<UnlabelledPrReport, "record">,
+): void {
+  if (hasLabel(pr, REVIEW_LABEL)) return;
+  try {
+    if (hasCarriedReviewLabel(github.labelTimeline(pr.number))) return;
+    github.addPullRequestLabel(pr.number, REVIEW_LABEL);
+    log(`  🏷 PR #${pr.number} had never carried ${REVIEW_LABEL}: added it, so Claude reviews it`);
+  } catch (error) {
+    log(`  ⚠ Couldn't add ${REVIEW_LABEL} to PR #${pr.number}, so add it by hand for Claude to review it: ${error}`);
+    unlabelled.record({ pr: pr.number, url: pr.url ?? `#${pr.number}` });
+  }
 }
 
 // One PR the sweep marked as needing a follow-up pass, with what
