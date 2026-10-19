@@ -123,3 +123,11 @@ Claude reviews a PR only when it has the `review:claude` label. Add the label to
 the PRs it opens itself. Add it by hand to a PR the run report lists under **Pull requests without `review:claude`**, and
 to any open Sandcastle PR that has never had it: one opened before Sandcastle labelled its PRs, or one whose run stopped
 between creating it and labelling it.
+
+Watch every PR you open until it merges: Sandcastle's follow-up sweep acts only on the PRs Sandcastle opened itself, so
+nothing else answers a hand-opened PR's review threads or fixes its red checks, and PR Auto-Merge holds it on every
+unresolved thread. After opening the PR, start a background watcher (`gh pr checks <n> --watch`, and a GraphQL query of
+its `reviewThreads` for unresolved ones) that wakes you when the checks finish or a new review lands. Then fix each red
+check, and answer each thread (fix it, or reply with why not) and resolve it. Push from the branch's worktree, update
+the description if the change moved, and watch again until the PR has merged or a check or thread needs the owner, then
+say which.
