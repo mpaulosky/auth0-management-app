@@ -70,6 +70,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.11](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.11) | 2026-10-19 | feat(UI): Add the Alert and the Management API error boundary | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-44-feat-ui-add-the-alert-and-the-management-api-error-boundary.md) |
 | [v0.0.10](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.10) | 2026-10-19 | docs: Specify User and Role management | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-30-docs-specify-user-and-role-management.md) |
 | [v0.0.9](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.9) | 2026-10-19 | chore(ui): Point the UI at the Auth0 user secrets store | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-25-chore-ui-point-the-ui-at-the-auth0-user-secrets-store.md) |
 | [v0.0.8](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.8) | 2026-10-19 | docs(research): Record Auth0 user search and rate limit findings | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-24-docs-research-record-auth0-user-search-and-rate-limit-findings.md) |
@@ -79,7 +80,6 @@ Blue, the default, renders no attribute.
 | [v0.0.4](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.4) | 2026-10-19 | docs: Capitalise Role and Tenant in the README | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-9-docs-capitalise-role-and-tenant-in-the-readme.md) |
 | [v0.0.3](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.3) | 2026-10-19 | docs: Describe the app as an Auth0 User and Role manager | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-7-docs-describe-the-app-as-an-auth0-user-and-role-manager.md) |
 | [v0.0.2](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.2) | 2026-10-19 | build(deps): Override smol-toml to a fixed version | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-5-build-deps-override-smol-toml-to-a-fixed-version.md) |
-| [v0.0.1](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.1) | 2026-10-19 | chore: Rename the project to Auth0 Management App | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-2-chore-rename-the-project-to-auth0-management-app.md) |
 
 <!-- RELEASES_END -->
 
