@@ -14,3 +14,8 @@ allowBuilds:
 # The pnpm version stays pinned by packageManager in package.json, which
 # corepack reads (locally and in the Sandcastle image).
 pmOnFail: ignore
+# markdownlint-cli2 pins smol-toml 1.8.0, which has a quadratic-time parse
+# (GHSA-r4xh-jqrq-34v2). Drop this once markdownlint-cli2 depends on a
+# fixed version.
+overrides:
+  smol-toml: ^1.9.0
