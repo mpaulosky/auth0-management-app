@@ -20,7 +20,7 @@
 ## About
 
 Auth0 Management App is a server-rendered Blazor Web App on .NET 10 for managing the **User**s and **Role**s of one Auth0
-**Tenant**, without opening the Auth0 dashboard. Only an **Admin** (a User with the `Admin` role) can manage anything.
+**Tenant**, without opening the Auth0 dashboard. Only an **Admin** (a User with the `Admin` Role) can manage anything.
 
 When finished, it will let an Admin:
 
@@ -45,12 +45,12 @@ See [CONTEXT.md](https://github.com/mpaulosky/auth0-management-app/blob/main/CON
 Early stage. Built so far:
 
 - The Blazor Web App (`src/UI`) with a Home page, a nav menu, NotFound and Error pages, and the Tailwind CSS v4 build.
-- Sign-in and sign-out through Auth0, with the `Admin` role mapped from the ID token.
+- Sign-in and sign-out through Auth0, with the `Admin` Role mapped from the ID token.
 - A Profile page that lists the signed-in User's own claims, and an Admin page only an Admin can open.
 - A light/dark **Theme** and a **Palette** that tints the accent and the surfaces, both kept in cookies.
 - The Aspire AppHost, the ServiceDefaults and the tests for all of the above.
 
-Planned next: the User list, the profile editor, role assignment and role creation, all through the Management API.
+Planned next: the User list, the Profile Fields editor, Role assignment and Role creation, all through the Management API.
 
 ### Look and feel
 
@@ -140,7 +140,7 @@ Blue, the default, renders no attribute.
 
 ## Auth0 setup
 
-The app uses two Auth0 applications in the same tenant: one to sign Admins in, and one to call the Management API.
+The app uses two Auth0 applications in the same Tenant: one to sign Admins in, and one to call the Management API.
 
 ### Sign-in application
 
@@ -156,9 +156,9 @@ startup and names any that's missing.
 
    Sign-in works on the `http` profile only on `localhost`, because the browser keeps Auth0's `Secure` sign-in cookies
    for `http://localhost` alone. The `https` profile is the safer choice anywhere else.
-3. Under **User Management → Roles**, create a role named `Admin` and assign it to yourself and anyone else who should
-   manage Users and roles.
-4. Under **Actions → Library**, create a **Post Login** Action that adds the user's roles to the ID token, and add it to
+3. Under **User Management → Roles**, create a Role named `Admin` and assign it to yourself and anyone else who should
+   manage Users and Roles.
+4. Under **Actions → Library**, create a **Post Login** Action that adds the User's Roles to the ID token, and add it to
    the Login flow:
 
    ```javascript
@@ -167,7 +167,7 @@ startup and names any that's missing.
    };
    ```
 
-5. Store the application's settings as user secrets. `Auth0:Domain` is the tenant's host only, with no `https://`
+5. Store the application's settings as user secrets. `Auth0:Domain` is the Tenant's host only, with no `https://`
    (for example `my-tenant.us.auth0.com`):
 
    ```bash
@@ -180,27 +180,27 @@ startup and names any that's missing.
    `Auth0__Domain`, `Auth0__ClientId` and `Auth0__ClientSecret`. When one is missing, the Aspire dashboard asks for it.
    Outside Development, set those environment variables instead.
 
-`Auth0:RoleClaimType` names the claim the roles arrive in. It defaults to `https://auth0-management-app/roles`, the
-claim the Action above sets; change both together. The app maps each role in that claim to a .NET role, so an `Admin`
+`Auth0:RoleClaimType` names the claim the Roles arrive in. It defaults to `https://auth0-management-app/roles`, the
+claim the Action above sets; change both together. The app maps each Role in that claim to a .NET role, so an `Admin`
 there satisfies the Admin policy.
 
-A role you add to or remove from yourself takes effect at your next sign-in, when Auth0 issues a new ID token.
+A Role you add to or remove from yourself takes effect at your next sign-in, when Auth0 issues a new ID token.
 
 ### Management API application
 
-User and role management isn't built yet; these are the settings it will need.
+User and Role management isn't built yet; these are the settings it will need.
 
 1. Create an application of type **Machine to Machine** and authorize it for the **Auth0 Management API**.
 2. Grant it only these permissions:
 
    | Permission | Used to |
    | ---------- | ------- |
-   | `read:users` | List Users and read one User's profile and roles |
+   | `read:users` | List Users and read one User's profile and Roles |
    | `update:users` | Change a User's name, email and the other profile fields |
-   | `read:roles` | List the tenant's roles |
-   | `create:roles` | Create a role |
-   | `create:role_members` | Assign a role to a User |
-   | `delete:role_members` | Remove a role from a User |
+   | `read:roles` | List the Tenant's Roles |
+   | `create:roles` | Create a Role |
+   | `create:role_members` | Assign a Role to a User |
+   | `delete:role_members` | Remove a Role from a User |
 
    Don't grant `delete:users`, `create:users` or any permission the app doesn't use: the client secret can do whatever
    the grant allows.
