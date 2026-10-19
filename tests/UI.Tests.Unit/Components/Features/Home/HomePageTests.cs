@@ -34,7 +34,7 @@ public class HomePageTests : BunitContext
 		IElement header = heading.Closest("header") ?? throw new InvalidOperationException("No <header> ancestor.");
 		string? leadText = header.QuerySelector("p")?.TextContent.Trim();
 		leadText.Should().Be(
-			"Manage your Auth0 Users and Roles: edit a User's profile, add and remove their Roles, and create new Roles.");
+			"Coming soon: manage the Users and Roles of your Auth0 Tenant, edit a User's Profile Fields, and create new Roles.");
 	}
 
 	[Fact]

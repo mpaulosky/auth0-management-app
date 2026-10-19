@@ -1,7 +1,7 @@
 ---
 name: code-review
 description: >-
-  Code review for pull requests in this Auth0 Management App template. Use when reviewing a pull request or diff for
+  Code review for pull requests in the Auth0 Management App. Use when reviewing a pull request or diff for
   correctness, repository standards, domain language, architecture boundaries, tests, docs, and workflows.
 ---
 

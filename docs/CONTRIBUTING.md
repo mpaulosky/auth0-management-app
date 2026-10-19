@@ -40,7 +40,8 @@ Please report unwanted behavior to [Project Maintainer](mailto:matthew.paulosky@
 
 ## What should I know before I get started
 
-This project is a server-rendered Blazor Web App, built with .NET 10, C# 14, Tailwind CSS v4 and Auth0, that lets an Admin manage the Users and Roles of an Auth0 Tenant. See [CONTEXT.md](../CONTEXT.md) for the domain language.
+This project is a server-rendered Blazor Web App, built with .NET 10, C# 14, Tailwind CSS v4 and Auth0, that lets an Admin
+manage the Users and Roles of an Auth0 Tenant. See [CONTEXT.md](../CONTEXT.md) for the domain language.
 
 ### Code Style & Commit Messages
 

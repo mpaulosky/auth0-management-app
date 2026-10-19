@@ -10,10 +10,10 @@
 namespace Domain.Constants;
 
 /// <summary>
-///   Names the app itself relies on, shared by every project in the solution.
+///   Names the app itself relies on across slices and projects: authorization policy, role, cookie and resource names.
 /// </summary>
 /// <remarks>
-///   Keep this list to names more than one project needs. A feature's own names stay in its slice.
+///   Keep this list to the names the app relies on, as the Shared Kernel entry in CONTEXT.md describes.
 ///   Split the class by concern if it grows past about a dozen members.
 /// </remarks>
 public static class ApplicationConstants

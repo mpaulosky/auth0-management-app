@@ -19,16 +19,16 @@
 
 ## About
 
-Auth0 Management App is a server-rendered Blazor Web App on .NET 10 for managing the **User**s and roles of one Auth0
-tenant, without opening the Auth0 dashboard. Only an **Admin** (a User with the `Admin` role) can manage anything.
+Auth0 Management App is a server-rendered Blazor Web App on .NET 10 for managing the **User**s and **Role**s of one Auth0
+**Tenant**, without opening the Auth0 dashboard. Only an **Admin** (a User with the `Admin` role) can manage anything.
 
-It lets an Admin:
+When finished, it will let an Admin:
 
-- **Browse Users**: list the tenant's Users with their email and current roles.
-- **Edit a User's profile**: change their name, given name, family name, nickname, picture URL and email.
+- **Browse Users**: list the Tenant's Users with their email and current Roles.
+- **Edit a User's Profile Fields**: change their name, given name, family name, nickname, picture URL and email.
   The app never changes a User's password or username, and doesn't create or delete Users.
-- **Add and remove roles**: assign any of the tenant's roles to a User, or take one away.
-- **Create roles**: add a new role, with a name and description, when the existing ones don't fit.
+- **Add and remove Roles**: assign any of the Tenant's Roles to a User, or take one away.
+- **Create Roles**: add a new Role, with a name and description, when the existing ones don't fit.
 
 The app talks to Auth0 in two ways:
 
