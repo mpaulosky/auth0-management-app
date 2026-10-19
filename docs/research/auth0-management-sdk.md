@@ -193,7 +193,7 @@ User on one and a missing Role on another), so each call maps its own codes:
 | Call | Status | Error code |
 | --- | --- | --- |
 | `Users.ListAsync` | 400 | `Validation`: a bad `q` or paging past 1,000 |
-| `Users.ListAsync` | 503 | `User.SearchTooBroad`: the search timed out, so the Admin narrows it |
+| `Users.ListAsync` | 503 | `User.SearchTooBroad` only when `ex.ErrorCode` or the message says the search timed out; any other 503 throws |
 | `Users.GetAsync`, `Users.Roles.*` | 404 | `User.NotFound` |
 | `Users.UpdateAsync` | 404 | `User.NotFound` |
 | `Users.UpdateAsync` | 400 | Split by `ex.ErrorCode` and the message (see below) |
@@ -224,12 +224,14 @@ catch (ManagementApiException ex) when (ex.StatusCode == 429) { return Result.Fa
 ```
 
 Use the `StatusCode` filter, not the subclass. It works the same for an endpoint whose spec leaves out a code, such as a
-400 from `Users.Roles.DeleteAsync`. Other codes (401, 403, and 5xx except the search's 503) are configuration or outage
+400 from `Users.Roles.DeleteAsync`. Other codes (401, 403, and 5xx except a search timeout) are configuration or outage
 failures, so let them throw, as the coding standards say.
 
-The search's 503 comes from the Admin's query, not from an outage. The SDK retries it like any 5xx before it throws, so
-each retry re-runs a query that already timed out. Keep `MaxRetries` low for the list call, or the Admin waits through
-every retry before seeing `User.SearchTooBroad`.
+`GET /users` returns 503 both when a search is too heavy and when Auth0 is down. Only the first comes from the Admin's
+query, so map a 503 to `User.SearchTooBroad` only when `ex.ErrorCode` or the message says the search timed out, and let
+any other 503 throw. Otherwise an outage tells the Admin to narrow a search that was fine. The SDK retries a 503 like any
+5xx before it throws, so each retry re-runs a query that already timed out. Keep `MaxRetries` low for the list call, or
+the Admin waits through every retry before seeing `User.SearchTooBroad`.
 
 ## Profile Fields refused by connection type
 
@@ -251,7 +253,8 @@ From the [PATCH /users/{id} reference][patch-user] and the [root attributes page
   - Changing `email` or `email_verified` on a linked secondary identity needs `Connection` set.
 - **Telling the 400s apart:** they differ only by message text. The SDK's `ErrorCode` is whatever Auth0 sends in
   `errorCode`, which these docs don't list. The safest plan is to work out which fields can be edited from `Identities`
-  before showing the form, and to treat a 400 from the update as `User.FieldNotEditable` with `ex.Description`.
+  before showing the form, so few refusals reach Auth0. Split a 400 from the update as [Errors](#errors) describes,
+  falling back to `User.UpdateRejected` with `ex.Description`.
 
 ## Permissions
 
@@ -309,6 +312,8 @@ From the [PATCH /users/{id} reference][patch-user] and the [root attributes page
   writing `MapUpdateRejection`.
 - Whether `read:role_members` is needed in practice: the reference contradicts itself, so check it against a Tenant.
 - The scope list for `DELETE /users/{id}/roles`: inferred from `POST`, not fetched.
+- The `errorCode` and message of a 503 from a search that timed out, as against one from an outage: check them against
+  a Tenant before mapping a 503 to `User.SearchTooBroad`.
 - Whether a duplicate email on `PATCH` returns 400 or 409, and with which `errorCode`: not documented. Check it against
   a Tenant. If it's 409, the SDK throws a plain `ManagementApiException`, and `UpdateAsync`'s own 409 mapping turns it
   into `User.EmailInUse`. If it's 400, `MapUpdateRejection` has to recognise it by `errorCode` or message.
