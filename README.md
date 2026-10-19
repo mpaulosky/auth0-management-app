@@ -70,6 +70,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.10](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.10) | 2026-10-19 | docs: Specify User and Role management | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-30-docs-specify-user-and-role-management.md) |
 | [v0.0.9](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.9) | 2026-10-19 | chore(ui): Point the UI at the Auth0 user secrets store | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-25-chore-ui-point-the-ui-at-the-auth0-user-secrets-store.md) |
 | [v0.0.8](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.8) | 2026-10-19 | docs(research): Record Auth0 user search and rate limit findings | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-24-docs-research-record-auth0-user-search-and-rate-limit-findings.md) |
 | [v0.0.7](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.7) | 2026-10-19 | docs(research): Record the Auth0 Management SDK findings | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-23-docs-research-record-the-auth0-management-sdk-findings.md) |
