@@ -103,21 +103,42 @@ public class ManagementApiErrorBoundaryTests : BunitContext
 	}
 
 	[Fact]
-	public void Render_ParametersSetAgainAfterAChildThrew_RecoversAndRendersTheChildAgain()
+	public void Render_UrlChangedAfterAChildThrew_RecoversAndRendersTheChildAgain()
 	{
 		// Arrange
 		Switch fault = new() { Throw = true };
 		SetRendererInfo(new RendererInfo("Server", true));
+		NavigationManager navigation = Services.GetRequiredService<NavigationManager>();
+		navigation.NavigateTo("http://localhost/admin/users?user=abc");
 		IRenderedComponent<ManagementApiErrorBoundary> cut = RenderBoundary(fault);
 		fault.Throw = false;
+		navigation.NavigateTo("http://localhost/admin/users?user=def");
 
 		// Act
-		cut.Render(parameters => parameters
-			.AddChildContent<FaultyChild>(child => child.Add(c => c.Fault, fault)));
+		RerenderBoundary(cut, fault);
 
 		// Assert
 		cut.Markup.Should().Contain("child ok");
 		cut.Markup.Should().NotContain("couldn't reach");
+	}
+
+	[Fact]
+	public void Render_SameUrlAfterAChildThrew_KeepsShowingTheManagementApiMessage()
+	{
+		// Arrange
+		Switch fault = new() { Throw = true };
+		SetRendererInfo(new RendererInfo("Server", true));
+		NavigationManager navigation = Services.GetRequiredService<NavigationManager>();
+		navigation.NavigateTo("http://localhost/admin/users?user=abc");
+		IRenderedComponent<ManagementApiErrorBoundary> cut = RenderBoundary(fault);
+		fault.Throw = false;
+
+		// Act
+		RerenderBoundary(cut, fault);
+
+		// Assert
+		cut.Markup.Should().Contain(Message);
+		cut.Markup.Should().NotContain("child ok");
 	}
 
 	[Fact]
@@ -140,6 +161,11 @@ public class ManagementApiErrorBoundaryTests : BunitContext
 
 	private IRenderedComponent<ManagementApiErrorBoundary> RenderBoundary(Switch fault) =>
 		Render<ManagementApiErrorBoundary>(parameters => parameters
+			.AddChildContent<FaultyChild>(child => child.Add(c => c.Fault, fault)));
+
+	// A new ChildContent fragment, as the boundary gets each time the page around it renders.
+	private static void RerenderBoundary(IRenderedComponent<ManagementApiErrorBoundary> cut, Switch fault) =>
+		cut.Render(parameters => parameters
 			.AddChildContent<FaultyChild>(child => child.Add(c => c.Fault, fault)));
 
 	private sealed class Switch

@@ -24,6 +24,8 @@
 
 	private ErrorBoundary? _boundary;
 
+	private string? _uri;
+
 	/// <summary>
 	///   The management content the boundary guards.
 	/// </summary>
@@ -31,10 +33,16 @@
 	public RenderFragment? ChildContent { get; set; }
 
 	// A routed page is reused when only its URL's parameters change, such as ?user=, so the boundary would keep showing the
-	// last error after the Admin moves on. Recovering on each new set of parameters renders the child again for the new URL.
+	// last error after the Admin moves on. ChildContent counts as changed on every render of the page, so recover only when
+	// the URL has changed: recovering on every render would call the Management API again each time the page renders.
 	protected override void OnParametersSet()
 	{
-		_boundary?.Recover();
+		if (_uri is not null && _uri != Navigation.Uri)
+		{
+			_boundary?.Recover();
+		}
+
+		_uri = Navigation.Uri;
 	}
 
 	private void Recover() => _boundary?.Recover();
