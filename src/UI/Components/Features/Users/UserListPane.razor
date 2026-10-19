@@ -1,0 +1,243 @@
+@implements IDisposable
+
+@using System.Globalization
+@using Domain.Abstractions
+@using UI.ManagementApi
+@inject SearchUsersHandler Handler
+@inject TimeProvider Time
+
+<section aria-label="Users" class="grid gap-4">
+	<div>
+		<label for="user-search" class="sr-only">Search Users</label>
+		<input id="user-search" type="search" autocomplete="off" placeholder="Search name or email" value="@_text"
+			   @oninput="OnInput" @onkeydown="OnKeyDown"
+			   class="w-full rounded-xl border border-accent-300 bg-white/80 px-4 py-2 text-sm placeholder:text-slate-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 dark:border-accent-700 dark:bg-accent-900/70 dark:placeholder:text-slate-300 dark:focus-visible:outline-accent-300" />
+	</div>
+
+	@if (_error is not null)
+	{
+		<Alert Tone="_errorTone">@_error</Alert>
+	}
+
+	@if (_list is not null)
+	{
+		<div class="flex items-center justify-between gap-2 text-sm text-slate-600 dark:text-slate-300">
+			<Button Kind="ButtonKind.Secondary" disabled="@(_list.Page <= 1)" @onclick="PreviousAsync">‹ Prev</Button>
+			<span>Page @_list.Page of @_list.PageCount · @Format(_list.Total) Users</span>
+			<Button Kind="ButtonKind.Secondary" disabled="@(_list.Page >= _list.PageCount)" @onclick="NextAsync">Next ›</Button>
+		</div>
+
+		@if (_list.ShowsCapNote)
+		{
+			<p class="text-sm text-amber-700 dark:text-amber-300">Auth0 shows only the first 1,000 of @Format(_list.Total) matches. Narrow the search.</p>
+		}
+
+		@if (_list.Users.Count == 0)
+		{
+			<p class="text-slate-600 dark:text-slate-300">No Users match.</p>
+		}
+		else
+		{
+			<ul class="divide-y divide-accent-200 rounded-2xl border border-accent-200 bg-white/80 dark:divide-accent-800 dark:border-accent-800 dark:bg-accent-900/70">
+				@foreach (UserSummary user in _list.Users)
+				{
+					<li @key="user.Id">
+						<button type="button" @onclick="() => PickAsync(user.Id)"
+								aria-current="@(user.Id == _userId ? "true" : null)"
+								class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-accent-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 dark:hover:bg-accent-800 dark:focus-visible:outline-accent-300 @(user.Id == _userId ? "bg-accent-100 dark:bg-accent-800" : null)">
+							@if (PictureOf(user) is string picture)
+							{
+								<img src="@picture" alt="" class="size-10 shrink-0 rounded-full object-cover" />
+							}
+							else
+							{
+								<span aria-hidden="true" class="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent-200 text-sm font-semibold text-accent-800 dark:bg-accent-500/15 dark:text-accent-300">@Initials(user)</span>
+							}
+							<span class="min-w-0 flex-1">
+								<span class="block truncate font-medium">@(user.Name ?? user.Email ?? user.Id)</span>
+								<span class="block truncate text-sm text-slate-600 dark:text-slate-300">@user.Email</span>
+							</span>
+							@if (_list.AdminIds.Contains(user.Id))
+							{
+								<Badge Tone="BadgeTone.Accent">Admin</Badge>
+							}
+						</button>
+					</li>
+				}
+			</ul>
+		}
+	}
+</section>
+
+@code {
+	private static readonly TimeSpan SearchDelay = TimeSpan.FromMilliseconds(400);
+
+	private CancellationTokenSource? _debounce;
+
+	private CancellationTokenSource? _search;
+
+	private string _text = string.Empty;
+
+	private string? _appliedQuery;
+
+	private string? _userId;
+
+	private UserListPage? _list;
+
+	private string? _error;
+
+	private AlertTone _errorTone = AlertTone.Error;
+
+	/// <summary>
+	///   The search, page and picked User the pane starts from. It is read once, when the pane initializes.
+	/// </summary>
+	[Parameter, EditorRequired]
+	public required UsersUrlState State { get; set; }
+
+	/// <summary>
+	///   Raised after the Admin searches, pages or picks a User, so the page can write the URL.
+	/// </summary>
+	[Parameter]
+	public EventCallback<UsersUrlState> OnStateChanged { get; set; }
+
+	// An exception here reaches the ManagementApiErrorBoundary, which a page's own lifecycle exception wouldn't.
+	protected override async Task OnInitializedAsync()
+	{
+		_appliedQuery = State.Query;
+		_text = State.Query ?? string.Empty;
+		_userId = State.UserId;
+
+		await SearchAsync(_appliedQuery, State.Page, notify: false);
+	}
+
+	private void OnInput(ChangeEventArgs e)
+	{
+		_text = e.Value?.ToString() ?? string.Empty;
+
+		CancelDebounce();
+		CancellationTokenSource source = new();
+		_debounce = source;
+		_ = SearchAfterDelayAsync(_text, source.Token);
+	}
+
+	private async Task OnKeyDown(KeyboardEventArgs e)
+	{
+		if (e.Key != "Enter")
+		{
+			return;
+		}
+
+		CancelDebounce();
+		await SearchAsync(_text, 1, notify: true);
+	}
+
+	private Task PreviousAsync() => SearchAsync(_appliedQuery, (_list?.Page ?? 1) - 1, notify: true);
+
+	private Task NextAsync() => SearchAsync(_appliedQuery, (_list?.Page ?? 1) + 1, notify: true);
+
+	private async Task PickAsync(string userId)
+	{
+		_userId = userId;
+		await OnStateChanged.InvokeAsync(CurrentState());
+	}
+
+	private async Task SearchAfterDelayAsync(string text, CancellationToken token)
+	{
+		try
+		{
+			await Task.Delay(SearchDelay, Time, token);
+			await InvokeAsync(() => SearchAsync(text, 1, notify: true));
+		}
+		catch (OperationCanceledException) when (token.IsCancellationRequested)
+		{
+			// A newer keystroke or Enter replaced this wait.
+		}
+#pragma warning disable CA1031
+		catch (Exception exception)
+		{
+			// Nothing awaits this task, so hand the exception to the renderer, which gives it to the error boundary.
+			await DispatchExceptionAsync(exception);
+		}
+#pragma warning restore CA1031
+	}
+
+	private async Task SearchAsync(string? text, int page, bool notify)
+	{
+		_search?.Cancel();
+		_search?.Dispose();
+		CancellationTokenSource source = new();
+		_search = source;
+		CancellationToken token = source.Token;
+
+		Result<UserListPage> result;
+		try
+		{
+			result = await Handler.HandleAsync(new SearchUsersQuery(text, page), token);
+		}
+		catch (OperationCanceledException) when (token.IsCancellationRequested)
+		{
+			return;
+		}
+
+		// A newer search has started, so this one's result is stale.
+		if (token.IsCancellationRequested)
+		{
+			return;
+		}
+
+		if (result.Failure)
+		{
+			_error = result.Error;
+			_errorTone = result.ErrorCode == ResultErrorCode.RateLimited ? AlertTone.Warning : AlertTone.Error;
+
+			// A rate limit says nothing about the search, so the last list stays. Any other failure leaves nothing to show.
+			if (result.ErrorCode != ResultErrorCode.RateLimited)
+			{
+				_list = null;
+			}
+
+			return;
+		}
+
+		_error = null;
+		_list = result.Value;
+		_appliedQuery = text;
+
+		if (notify)
+		{
+			await OnStateChanged.InvokeAsync(CurrentState());
+		}
+	}
+
+	private UsersUrlState CurrentState() => new(_appliedQuery, _list?.Page ?? 1, _userId);
+
+	private void CancelDebounce()
+	{
+		_debounce?.Cancel();
+		_debounce?.Dispose();
+		_debounce = null;
+	}
+
+	private static string Format(int count) => count.ToString("N0", CultureInfo.InvariantCulture);
+
+	// Auth0's picture is a URL it took from the identity provider, so only a web address becomes an <img src>.
+	private static string? PictureOf(UserSummary user) =>
+		Uri.TryCreate(user.Picture, UriKind.Absolute, out Uri? uri) && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+			? uri.AbsoluteUri
+			: null;
+
+	private static string Initials(UserSummary user)
+	{
+		string source = string.IsNullOrWhiteSpace(user.Name) ? user.Email ?? "?" : user.Name;
+		IEnumerable<string> words = source.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(2);
+
+		return string.Concat(words.Select(word => StringInfo.GetNextTextElement(word).ToUpperInvariant()));
+	}
+
+	public void Dispose()
+	{
+		CancelDebounce();
+		_search?.Cancel();
+		_search?.Dispose();
+	}
+}
