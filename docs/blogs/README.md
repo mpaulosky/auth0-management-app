@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-10-19 | [ci(sandcastle): Start a follow-up pass when Claude Review completes](2026-10-19-pr-46-ci-sandcastle-start-a-follow-up-pass-when-claude-review-completes.md) | release,automation |
 | 2026-10-19 | [feat(sandcastle): Label each PR Sandcastle opens review:claude](2026-10-19-pr-45-feat-sandcastle-label-each-pr-sandcastle-opens-review-claude.md) | release,automation |
 | 2026-10-19 | [feat(ManagementApi): Add the Management API seam](2026-10-19-pr-47-feat-managementapi-add-the-management-api-seam.md) | release,automation |
 | 2026-10-19 | [feat(UI): Add the Alert and the Management API error boundary](2026-10-19-pr-44-feat-ui-add-the-alert-and-the-management-api-error-boundary.md) | release,automation |
