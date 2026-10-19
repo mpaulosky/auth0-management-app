@@ -143,7 +143,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Every sandbox runs in this image, and a fresh runner has none: without
-      # it every intake and build fails with "Image 'sandcastle:blazor-server'
+      # it every intake and build fails with "Image 'sandcastle:auth0-management-app'
       # not found locally" while the job still ends green. Sandcastle names the
       # image after the checkout's folder and builds .sandcastle/Dockerfile, so
       # the defaults match what the host looks up.

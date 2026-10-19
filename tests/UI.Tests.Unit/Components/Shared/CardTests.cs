@@ -3,7 +3,7 @@
 // File Name :     CardTests.cs
 // Company :       mpaulosky
 // Author :        Teqslamer
-// Solution Name : Blazor-Server
+// Solution Name : Auth0ManagementApp
 // Project Name :  UI.Tests.Unit
 // =============================================
 

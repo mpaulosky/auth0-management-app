@@ -79,7 +79,7 @@ Opacity modifiers (`bg-accent-500/20`) compile to `color-mix()` and follow a swa
 
 ### The brand
 
-`ApplicationConstants.AppName` in `src/Domain/Constants/ApplicationConstants.cs` holds the app's name, `"Blazor Server"`. It's the one value a Generated App changes to rebrand.
+`ApplicationConstants.AppName` in `src/Domain/Constants/ApplicationConstants.cs` holds the app's name, `"Auth0 Management App"`. It's the one value a Generated App changes to rebrand.
 The nav and footer show it, Home's h1 is it, and the letter tile shows its first character. Nothing else hardcodes the name.
 
 ## Shared components
@@ -281,7 +281,7 @@ A **Template** showcase that a Generated App replaces. The copy stays inline in 
     *"A server-rendered Blazor Web App with Tailwind CSS theming and Auth0 sign-in, ready to become your app."*
   - **Primary button**, in `<AuthorizeView>`: a Visitor sees **Log in** and a User sees **Your profile**. Both link to `profile`, with `data-enhance-nav="false"`.
     Profile is `[Authorize]`, so a Visitor goes through the cookie challenge to Auth0 and lands on their Profile. Home doesn't reference the Authentication slice.
-  - **Secondary button:** **View on GitHub**, linking to `https://github.com/mpaulosky/Blazor-Server`.
+  - **Secondary button:** **View on GitHub**, linking to `https://github.com/mpaulosky/auth0-management-app`.
   - **Right:** the stat-tile grid with Stack `.NET 10`, UI `Tailwind` and Auth `Auth0`.
 - **Below**, in `grid gap-8 lg:grid-cols-[1.6fr_0.9fr]`:
   - **"What's inside"**, a Section card with a Neutral `Template` badge as its `Actions`, holding the list:

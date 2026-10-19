@@ -3,7 +3,7 @@
 // File Name :     HomePageTests.cs
 // Company :       mpaulosky
 // Author :        Teqslamer
-// Solution Name : Blazor-Server
+// Solution Name : Auth0ManagementApp
 // Project Name :  UI.Tests.Unit
 // =============================================
 
@@ -77,7 +77,7 @@ public class HomePageTests : BunitContext
 		IRenderedComponent<HomePage> cut = Render<HomePage>();
 
 		// Assert
-		IElement link = cut.Find("a[href='https://github.com/mpaulosky/Blazor-Server']");
+		IElement link = cut.Find("a[href='https://github.com/mpaulosky/auth0-management-app']");
 		link.TextContent.Trim().Should().Be("View on GitHub");
 	}
 

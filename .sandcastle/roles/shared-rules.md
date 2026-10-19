@@ -6,7 +6,7 @@ An issue changes one stack or both. Use the commands for each stack the issue to
 
 | Stack | Where | Build (every commit passes it) | Run tests |
 | --- | --- | --- | --- |
-| .NET | `src/`, `tests/` | `dotnet build Blazor-Server.slnx`, with no warnings (`TreatWarningsAsErrors` is on) | `dotnet test --project tests/<Project>/<Project>.csproj` |
+| .NET | `src/`, `tests/` | `dotnet build Auth0ManagementApp.slnx`, with no warnings (`TreatWarningsAsErrors` is on) | `dotnet test --project tests/<Project>/<Project>.csproj` |
 | Sandcastle's TypeScript | `.sandcastle/`, `package.json` | `pnpm exec tsc --noEmit -p .sandcastle`, with no errors | `pnpm exec tsx --test <file>.test.mts` |
 | pnpm workspace | `package.json`, `src/UI/package.json`, `pnpm-workspace.yaml` | run `pnpm install` after changing a `package.json`, and commit `pnpm-lock.yaml` in the same commit | the tests of the stack that uses the package |
 

@@ -60,7 +60,7 @@ Run `pnpm install` after changing any `package.json`, and commit `pnpm-lock.yaml
 ```bash
 pnpm install                                          # the pnpm workspace: root tooling and src/UI's Tailwind CLI
 scripts/gate.sh                                       # the full check; needs a fresh `git fetch origin main`
-dotnet build Blazor-Server.slnx                       # quick build while iterating
+dotnet build Auth0ManagementApp.slnx                  # quick build while iterating
 dotnet test --project tests/<Project>/<Project>.csproj  # one test project while iterating
 dotnet run --project src/UI                           # run the Blazor Web App
 aspire run                                            # run the AppHost over HTTPS: WebApp plus the Aspire dashboard
@@ -84,7 +84,7 @@ hooks off.
 Push from a checkout of the branch being pushed, with nothing uncommitted or untracked in it: the hook gates the
 checked-out commit, so it refuses `git push origin <other-branch>` from the `main` checkout. Push from the branch's
 worktree (see `docs/PROCESS.md`). To push a branch that has none, check it out in a temporary
-`git worktree add ../Blazor-Server-worktrees/<folder> <branch>` rather than stashing and switching in the main checkout.
+`git worktree add ../auth0-management-app-worktrees/<folder> <branch>` rather than stashing and switching in the main checkout.
 
 ## Git workflow
 

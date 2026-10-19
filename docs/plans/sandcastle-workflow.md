@@ -258,7 +258,7 @@ picked role runs again on the existing branch and builds on earlier work; the ar
 
 **Shared role rules** live in one file (`.sandcastle/roles/shared-rules.md`) that the host passes to every role prompt, instead of being copied into each prompt:
 
-- Every commit must pass `dotnet build Blazor-Server.slnx` (warnings as errors). Tests must pass by the end of the last developer run, not on every commit.
+- Every commit must pass `dotnet build Auth0ManagementApp.slnx` (warnings as errors). Tests must pass by the end of the last developer run, not on every commit.
 - Each committing role (backend, UI, scribe, gate-fixer) runs `scripts/gate.sh` once as its last step before `<promise>COMPLETE</promise>`. The tester is exempt, because its tests are
   red on purpose; it still builds and lints its own files. The architect is exempt too: it commits at most one ADR (Markdown only), lints that file, and checkpoint 1 gates it with
   the rest of the tree.
@@ -272,7 +272,7 @@ hook linting only the last commit on a branch with no upstream) and stops at the
 1. `yamllint -c .yamllint.yml` on changed `*.yml` / `*.yaml` files (failing with an "install yamllint" message when it's missing; no Docker fallback);
 2. `pnpm exec markdownlint-cli2` on changed `*.md` files;
 3. the Sandcastle TypeScript check (`pnpm run check:sandcastle`: type-check plus the host's unit tests) when `.sandcastle/**`, `package.json` or the pnpm lockfile changed;
-4. `dotnet build Blazor-Server.slnx -c Release` (warnings as errors);
+4. `dotnet build Auth0ManagementApp.slnx -c Release` (warnings as errors);
 5. `dotnet test --project` for each project under `tests/`, in Release.
 
 CodeQL, metrics and coverage stay in CI. `yamllint` is added to `.sandcastle/Dockerfile`, and `lint-yaml.yml` reads `config_file: .yamllint.yml` so there is one YAML config. The

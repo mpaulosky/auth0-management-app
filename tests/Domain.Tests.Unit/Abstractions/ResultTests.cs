@@ -3,7 +3,7 @@
 // File Name :     ResultTests.cs
 // Company :       mpaulosky
 // Author :        Teqslamer
-// Solution Name : Blazor-Server
+// Solution Name : Auth0ManagementApp
 // Project Name :  Domain.Tests.Unit
 // =============================================
 

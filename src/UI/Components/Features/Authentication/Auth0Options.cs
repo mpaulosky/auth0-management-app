@@ -3,7 +3,7 @@
 // File Name :     Auth0Options.cs
 // Company :       mpaulosky
 // Author :        Teqslamer
-// Solution Name : Blazor-Server
+// Solution Name : Auth0ManagementApp
 // Project Name :  UI
 // =============================================
 
@@ -24,7 +24,7 @@ public sealed class Auth0Options
 	/// <summary>
 	///   The claim type Auth0's Post-Login Action adds roles under when <see cref="RoleClaimType" /> isn't set.
 	/// </summary>
-	public const string DefaultRoleClaimType = "https://blazor-server-template/roles";
+	public const string DefaultRoleClaimType = "https://auth0-management-app/roles";
 
 	/// <summary>
 	///   The Auth0 tenant's domain, as a host only (for example <c>my-tenant.us.auth0.com</c>), with no scheme.

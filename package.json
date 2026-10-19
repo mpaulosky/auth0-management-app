@@ -1,5 +1,5 @@
 {
-  "name": "blazor-server",
+  "name": "auth0-management-app",
   "private": true,
   "scripts": {
     "check:sandcastle": "tsc --noEmit -p .sandcastle && tsx --test \".sandcastle/**/*.test.mts\"",

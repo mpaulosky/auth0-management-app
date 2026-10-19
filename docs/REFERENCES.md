@@ -1,4 +1,4 @@
-# References Used In Blazor-Server
+# References Used In Auth0 Management App
 
 ## Technologies & Frameworks
 

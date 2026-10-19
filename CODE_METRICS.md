@@ -47,21 +47,21 @@ The `Domain.Abstractions` namespace contains 3 named types.
 
 | Member kind | Line number | Maintainability index | Cyclomatic complexity | Depth of inheritance | Class coupling | Lines of source / executable code |
 | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L62' title='Result.Result(bool success, string? errorMessage = null, ResultErrorCode errorCode = default(ResultErrorCode), object? details = null)'>62</a> | 65 | 1 :heavy_check_mark: | 0 | 2 | 15 / 7 |
-| Property | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L94' title='object? Result.Details'>94</a> | 100 | 1 :heavy_check_mark: | 0 | 1 | 4 / 0 |
-| Property | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L84' title='string? Result.Error'>84</a> | 100 | 1 :heavy_check_mark: | 0 | 1 | 4 / 0 |
-| Property | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L89' title='ResultErrorCode Result.ErrorCode'>89</a> | 100 | 1 :heavy_check_mark: | 0 | 1 | 4 / 0 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L110' title='Result Result.Fail(string errorMessage)'>110</a> | 97 | 1 :heavy_check_mark: | 0 | 0 | 9 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L121' title='Result Result.Fail(string errorMessage, ResultErrorCode code)'>121</a> | 94 | 1 :heavy_check_mark: | 0 | 1 | 10 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L133' title='Result Result.Fail(string errorMessage, ResultErrorCode code, object? details)'>133</a> | 93 | 1 :heavy_check_mark: | 0 | 2 | 11 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L155' title='Result<T> Result.Fail<T>(string errorMessage)'>155</a> | 97 | 1 :heavy_check_mark: | 0 | 1 | 10 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L167' title='Result<T> Result.Fail<T>(string errorMessage, ResultErrorCode code)'>167</a> | 94 | 1 :heavy_check_mark: | 0 | 2 | 11 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L180' title='Result<T> Result.Fail<T>(string errorMessage, ResultErrorCode code, object? details)'>180</a> | 93 | 1 :heavy_check_mark: | 0 | 3 | 12 / 1 |
-| Property | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L79' title='bool Result.Failure'>79</a> | 100 | 2 :heavy_check_mark: | 0 | 1 | 4 / 2 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L191' title='Result<T> Result.FromValue<T>(T? value)'>191</a> | 96 | 1 :heavy_check_mark: | 0 | 1 | 10 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L100' title='Result Result.Ok()'>100</a> | 96 | 1 :heavy_check_mark: | 0 | 2 | 8 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L144' title='Result<T> Result.Ok<T>(T value)'>144</a> | 94 | 1 :heavy_check_mark: | 0 | 3 | 10 / 1 |
-| Property | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L74' title='bool Result.Success'>74</a> | 100 | 1 :heavy_check_mark: | 0 | 0 | 4 / 0 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L62' title='Result.Result(bool success, string? errorMessage = null, ResultErrorCode errorCode = default(ResultErrorCode), object? details = null)'>62</a> | 65 | 1 :heavy_check_mark: | 0 | 2 | 15 / 7 |
+| Property | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L94' title='object? Result.Details'>94</a> | 100 | 1 :heavy_check_mark: | 0 | 1 | 4 / 0 |
+| Property | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L84' title='string? Result.Error'>84</a> | 100 | 1 :heavy_check_mark: | 0 | 1 | 4 / 0 |
+| Property | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L89' title='ResultErrorCode Result.ErrorCode'>89</a> | 100 | 1 :heavy_check_mark: | 0 | 1 | 4 / 0 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L110' title='Result Result.Fail(string errorMessage)'>110</a> | 97 | 1 :heavy_check_mark: | 0 | 0 | 9 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L121' title='Result Result.Fail(string errorMessage, ResultErrorCode code)'>121</a> | 94 | 1 :heavy_check_mark: | 0 | 1 | 10 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L133' title='Result Result.Fail(string errorMessage, ResultErrorCode code, object? details)'>133</a> | 93 | 1 :heavy_check_mark: | 0 | 2 | 11 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L155' title='Result<T> Result.Fail<T>(string errorMessage)'>155</a> | 97 | 1 :heavy_check_mark: | 0 | 1 | 10 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L167' title='Result<T> Result.Fail<T>(string errorMessage, ResultErrorCode code)'>167</a> | 94 | 1 :heavy_check_mark: | 0 | 2 | 11 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L180' title='Result<T> Result.Fail<T>(string errorMessage, ResultErrorCode code, object? details)'>180</a> | 93 | 1 :heavy_check_mark: | 0 | 3 | 12 / 1 |
+| Property | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L79' title='bool Result.Failure'>79</a> | 100 | 2 :heavy_check_mark: | 0 | 1 | 4 / 2 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L191' title='Result<T> Result.FromValue<T>(T? value)'>191</a> | 96 | 1 :heavy_check_mark: | 0 | 1 | 10 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L100' title='Result Result.Ok()'>100</a> | 96 | 1 :heavy_check_mark: | 0 | 2 | 8 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L144' title='Result<T> Result.Ok<T>(T value)'>144</a> | 94 | 1 :heavy_check_mark: | 0 | 3 | 10 / 1 |
+| Property | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L74' title='bool Result.Success'>74</a> | 100 | 1 :heavy_check_mark: | 0 | 0 | 4 / 0 |
 
 <a href="#Result-class-diagram">:link: to `Result` class diagram</a>
 
@@ -84,16 +84,16 @@ The `Domain.Abstractions` namespace contains 3 named types.
 
 | Member kind | Line number | Maintainability index | Cyclomatic complexity | Depth of inheritance | Class coupling | Lines of source / executable code |
 | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L211' title='Result<T>.Result(T? value, bool success, string? errorMessage = null, ResultErrorCode errorCode = default(ResultErrorCode), object? details = null)'>211</a> | 70 | 1 :heavy_check_mark: | 0 | 3 | 14 / 4 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L254' title='Result<T> Result<T>.Fail(string errorMessage)'>254</a> | 97 | 1 :heavy_check_mark: | 0 | 0 | 9 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L265' title='Result<T> Result<T>.Fail(string errorMessage, ResultErrorCode code)'>265</a> | 94 | 1 :heavy_check_mark: | 0 | 1 | 10 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L277' title='Result<T> Result<T>.Fail(string errorMessage, ResultErrorCode code, object? details)'>277</a> | 93 | 1 :heavy_check_mark: | 0 | 2 | 11 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L244' title='Result<T> Result<T>.FromValue(T? value)'>244</a> | 89 | 2 :heavy_check_mark: | 0 | 1 | 12 / 1 |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L218' title='string Result<T>.NullValueError'>218</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L231' title='Result<T> Result<T>.Ok(T? value)'>231</a> | 94 | 1 :heavy_check_mark: | 0 | 2 | 4 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L292' title='Result<T>.implicit operator Result<T>(T? value)'>292</a> | 84 | 1 :heavy_check_mark: | 0 | 2 | 15 / 2 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L229' title='T? Result<T>.ToValue()'>229</a> | 100 | 1 :heavy_check_mark: | 0 | 0 | 5 / 1 |
-| Property | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L223' title='T? Result<T>.Value'>223</a> | 100 | 1 :heavy_check_mark: | 0 | 0 | 4 / 0 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L211' title='Result<T>.Result(T? value, bool success, string? errorMessage = null, ResultErrorCode errorCode = default(ResultErrorCode), object? details = null)'>211</a> | 70 | 1 :heavy_check_mark: | 0 | 3 | 14 / 4 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L254' title='Result<T> Result<T>.Fail(string errorMessage)'>254</a> | 97 | 1 :heavy_check_mark: | 0 | 0 | 9 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L265' title='Result<T> Result<T>.Fail(string errorMessage, ResultErrorCode code)'>265</a> | 94 | 1 :heavy_check_mark: | 0 | 1 | 10 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L277' title='Result<T> Result<T>.Fail(string errorMessage, ResultErrorCode code, object? details)'>277</a> | 93 | 1 :heavy_check_mark: | 0 | 2 | 11 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L244' title='Result<T> Result<T>.FromValue(T? value)'>244</a> | 89 | 2 :heavy_check_mark: | 0 | 1 | 12 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L218' title='string Result<T>.NullValueError'>218</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L231' title='Result<T> Result<T>.Ok(T? value)'>231</a> | 94 | 1 :heavy_check_mark: | 0 | 2 | 4 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L292' title='Result<T>.implicit operator Result<T>(T? value)'>292</a> | 84 | 1 :heavy_check_mark: | 0 | 2 | 15 / 2 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L229' title='T? Result<T>.ToValue()'>229</a> | 100 | 1 :heavy_check_mark: | 0 | 0 | 5 / 1 |
+| Property | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L223' title='T? Result<T>.Value'>223</a> | 100 | 1 :heavy_check_mark: | 0 | 0 | 4 / 0 |
 
 <a href="#Result&lt;T&gt;-class-diagram">:link: to `Result&lt;T&gt;` class diagram</a>
 
@@ -116,12 +116,12 @@ The `Domain.Abstractions` namespace contains 3 named types.
 
 | Member kind | Line number | Maintainability index | Cyclomatic complexity | Depth of inheritance | Class coupling | Lines of source / executable code |
 | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L27' title='ResultErrorCode.Concurrency'>27</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 4 / 1 |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L42' title='ResultErrorCode.Conflict'>42</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 4 / 1 |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L22' title='ResultErrorCode.None'>22</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 3 / 1 |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L32' title='ResultErrorCode.NotFound'>32</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 4 / 1 |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L47' title='ResultErrorCode.Unauthorized'>47</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 4 / 1 |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Abstractions/Result.cs#L37' title='ResultErrorCode.Validation'>37</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 4 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L27' title='ResultErrorCode.Concurrency'>27</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 4 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L42' title='ResultErrorCode.Conflict'>42</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 4 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L22' title='ResultErrorCode.None'>22</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 3 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L32' title='ResultErrorCode.NotFound'>32</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 4 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L47' title='ResultErrorCode.Unauthorized'>47</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 4 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Abstractions/Result.cs#L37' title='ResultErrorCode.Validation'>37</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 4 / 1 |
 
 <a href="#ResultErrorCode-class-diagram">:link: to `ResultErrorCode` class diagram</a>
 
@@ -161,11 +161,11 @@ The `Domain.Constants` namespace contains 1 named types.
 
 | Member kind | Line number | Maintainability index | Cyclomatic complexity | Depth of inheritance | Class coupling | Lines of source / executable code |
 | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Constants/ApplicationConstants.cs#L24' title='string ApplicationConstants.AdminPolicy'>24</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Constants/ApplicationConstants.cs#L29' title='string ApplicationConstants.AdminRole'>29</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Constants/ApplicationConstants.cs#L39' title='string ApplicationConstants.PaletteCookie'>39</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Constants/ApplicationConstants.cs#L34' title='string ApplicationConstants.ThemeCookie'>34</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/src/Domain/Constants/ApplicationConstants.cs#L44' title='string ApplicationConstants.Website'>44</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Constants/ApplicationConstants.cs#L24' title='string ApplicationConstants.AdminPolicy'>24</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Constants/ApplicationConstants.cs#L29' title='string ApplicationConstants.AdminRole'>29</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Constants/ApplicationConstants.cs#L39' title='string ApplicationConstants.PaletteCookie'>39</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Constants/ApplicationConstants.cs#L34' title='string ApplicationConstants.ThemeCookie'>34</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/src/Domain/Constants/ApplicationConstants.cs#L44' title='string ApplicationConstants.Website'>44</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
 
 <a href="#ApplicationConstants-class-diagram">:link: to `ApplicationConstants` class diagram</a>
 
@@ -258,7 +258,7 @@ The `Architecture.Tests` namespace contains 1 named types.
 
 | Member kind | Line number | Maintainability index | Cyclomatic complexity | Depth of inheritance | Class coupling | Lines of source / executable code |
 | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Architecture.Tests/DomainTests.cs#L21' title='void DomainTests.DomainTypes_ForbiddenDependency_HaveNoDependencyOnIt(string forbiddenNamespace)'>21</a> | 70 | 1 :heavy_check_mark: | 0 | 6 | 20 / 7 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Architecture.Tests/DomainTests.cs#L21' title='void DomainTests.DomainTypes_ForbiddenDependency_HaveNoDependencyOnIt(string forbiddenNamespace)'>21</a> | 70 | 1 :heavy_check_mark: | 0 | 6 | 20 / 7 |
 
 <a href="#DomainTests-class-diagram">:link: to `DomainTests` class diagram</a>
 
@@ -312,26 +312,26 @@ The `Domain.Tests.Unit.Abstractions` namespace contains 1 named types.
 
 | Member kind | Line number | Maintainability index | Cyclomatic complexity | Depth of inheritance | Class coupling | Lines of source / executable code |
 | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L18' title='string ResultTests.ErrorMessage'>18</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L55' title='void ResultTests.Fail_Message_ReturnsFailureWithMessageAndNoCode()'>55</a> | 76 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L76' title='void ResultTests.Fail_MessageAndCode_ReturnsFailureWithCode(ResultErrorCode code)'>76</a> | 69 | 1 :heavy_check_mark: | 0 | 5 | 19 / 10 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L91' title='void ResultTests.Fail_MessageCodeAndDetails_ReturnsFailureWithDetails()'>91</a> | 75 | 1 :heavy_check_mark: | 0 | 3 | 14 / 5 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L106' title='void ResultTests.FailOfT_Message_ReturnsFailureWithDefaultValue()'>106</a> | 76 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L122' title='void ResultTests.FailOfT_MessageAndCode_ReturnsFailureWithCode()'>122</a> | 76 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L138' title='void ResultTests.FailOfT_MessageCodeAndDetails_ReturnsFailureWithDetails()'>138</a> | 73 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L200' title='void ResultTests.FromValue_NonNullValue_ReturnsSuccessWithValue()'>200</a> | 84 | 1 :heavy_check_mark: | 0 | 3 | 12 / 3 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L254' title='void ResultTests.FromValue_NullValue_ReturnsSameFailureMessageAsTypedFromValue()'>254</a> | 75 | 1 :heavy_check_mark: | 0 | 4 | 14 / 5 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L272' title='void ResultTests.FromValue_NullValue_ReturnsValidationFailure(string factory)'>272</a> | 68 | 1 :heavy_check_mark: | 0 | 5 | 22 / 8 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L226' title='void ResultTests.ImplicitConversion_NonNullValue_ReturnsSuccessWithValue()'>226</a> | 79 | 1 :heavy_check_mark: | 0 | 3 | 13 / 4 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L240' title='void ResultTests.ImplicitConversion_NullValue_ReturnsFailure()'>240</a> | 79 | 1 :heavy_check_mark: | 0 | 4 | 13 / 4 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L23' title='void ResultTests.Ok_NoValue_ReturnsSuccessWithoutError()'>23</a> | 83 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L39' title='void ResultTests.OkOfT_Value_ReturnsSuccessWithValue()'>39</a> | 76 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L292' title='void ResultTests.ResultOfT_PublicSurface_HasNoImplicitConversionToValue()'>292</a> | 75 | 2 :heavy_check_mark: | 0 | 6 | 15 / 4 |
-| Field | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L20' title='object ResultTests.s_details'>20</a> | 89 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L154' title='void ResultTests.TypedFail_Message_ReturnsFailureWithMessageAndNoCode()'>154</a> | 76 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L170' title='void ResultTests.TypedFail_MessageAndCode_ReturnsFailureWithCode()'>170</a> | 78 | 1 :heavy_check_mark: | 0 | 3 | 14 / 5 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L185' title='void ResultTests.TypedFail_MessageCodeAndDetails_ReturnsFailureWithDetails()'>185</a> | 75 | 1 :heavy_check_mark: | 0 | 3 | 14 / 5 |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L213' title='void ResultTests.TypedFromValue_NonNullValue_ReturnsSuccessWithValue()'>213</a> | 84 | 1 :heavy_check_mark: | 0 | 3 | 12 / 3 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L18' title='string ResultTests.ErrorMessage'>18</a> | 93 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L55' title='void ResultTests.Fail_Message_ReturnsFailureWithMessageAndNoCode()'>55</a> | 76 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L76' title='void ResultTests.Fail_MessageAndCode_ReturnsFailureWithCode(ResultErrorCode code)'>76</a> | 69 | 1 :heavy_check_mark: | 0 | 5 | 19 / 10 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L91' title='void ResultTests.Fail_MessageCodeAndDetails_ReturnsFailureWithDetails()'>91</a> | 75 | 1 :heavy_check_mark: | 0 | 3 | 14 / 5 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L106' title='void ResultTests.FailOfT_Message_ReturnsFailureWithDefaultValue()'>106</a> | 76 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L122' title='void ResultTests.FailOfT_MessageAndCode_ReturnsFailureWithCode()'>122</a> | 76 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L138' title='void ResultTests.FailOfT_MessageCodeAndDetails_ReturnsFailureWithDetails()'>138</a> | 73 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L200' title='void ResultTests.FromValue_NonNullValue_ReturnsSuccessWithValue()'>200</a> | 84 | 1 :heavy_check_mark: | 0 | 3 | 12 / 3 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L254' title='void ResultTests.FromValue_NullValue_ReturnsSameFailureMessageAsTypedFromValue()'>254</a> | 75 | 1 :heavy_check_mark: | 0 | 4 | 14 / 5 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L272' title='void ResultTests.FromValue_NullValue_ReturnsValidationFailure(string factory)'>272</a> | 68 | 1 :heavy_check_mark: | 0 | 5 | 22 / 8 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L226' title='void ResultTests.ImplicitConversion_NonNullValue_ReturnsSuccessWithValue()'>226</a> | 79 | 1 :heavy_check_mark: | 0 | 3 | 13 / 4 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L240' title='void ResultTests.ImplicitConversion_NullValue_ReturnsFailure()'>240</a> | 79 | 1 :heavy_check_mark: | 0 | 4 | 13 / 4 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L23' title='void ResultTests.Ok_NoValue_ReturnsSuccessWithoutError()'>23</a> | 83 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L39' title='void ResultTests.OkOfT_Value_ReturnsSuccessWithValue()'>39</a> | 76 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L292' title='void ResultTests.ResultOfT_PublicSurface_HasNoImplicitConversionToValue()'>292</a> | 75 | 2 :heavy_check_mark: | 0 | 6 | 15 / 4 |
+| Field | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L20' title='object ResultTests.s_details'>20</a> | 89 | 0 :heavy_check_mark: | 0 | 0 | 1 / 1 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L154' title='void ResultTests.TypedFail_Message_ReturnsFailureWithMessageAndNoCode()'>154</a> | 76 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L170' title='void ResultTests.TypedFail_MessageAndCode_ReturnsFailureWithCode()'>170</a> | 78 | 1 :heavy_check_mark: | 0 | 3 | 14 / 5 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L185' title='void ResultTests.TypedFail_MessageCodeAndDetails_ReturnsFailureWithDetails()'>185</a> | 75 | 1 :heavy_check_mark: | 0 | 3 | 14 / 5 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Abstractions/ResultTests.cs#L213' title='void ResultTests.TypedFromValue_NonNullValue_ReturnsSuccessWithValue()'>213</a> | 84 | 1 :heavy_check_mark: | 0 | 3 | 12 / 3 |
 
 <a href="#ResultTests-class-diagram">:link: to `ResultTests` class diagram</a>
 
@@ -371,7 +371,7 @@ The `Domain.Tests.Unit.Constants` namespace contains 1 named types.
 
 | Member kind | Line number | Maintainability index | Cyclomatic complexity | Depth of inheritance | Class coupling | Lines of source / executable code |
 | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
-| Method | <a href='https://github.com/mpaulosky/Blazor-Server/blob/main/tests/Domain.Tests.Unit/Constants/ApplicationConstantsTests.cs#L22' title='void ApplicationConstantsTests.ApplicationConstants_Member_HasExpectedValue(string actual, string expected)'>22</a> | 74 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
+| Method | <a href='https://github.com/mpaulosky/auth0-management-app/blob/main/tests/Domain.Tests.Unit/Constants/ApplicationConstantsTests.cs#L22' title='void ApplicationConstantsTests.ApplicationConstants_Member_HasExpectedValue(string actual, string expected)'>22</a> | 74 | 1 :heavy_check_mark: | 0 | 3 | 15 / 6 |
 
 <a href="#ApplicationConstantsTests-class-diagram">:link: to `ApplicationConstantsTests` class diagram</a>
 

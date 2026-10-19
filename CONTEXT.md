@@ -1,4 +1,4 @@
-# Blazor Server Template
+# Auth0 Management App
 
 A GitHub template repository that scaffolds a Blazor Web App (server-rendered) with Tailwind CSS theming and Auth0 authentication/authorization baked in.
 

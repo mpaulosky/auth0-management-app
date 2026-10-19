@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Blazor-Server is pre-1.0 and releases a new `v0.0.x` version for every merged pull request.
+Auth0 Management App is pre-1.0 and releases a new `v0.0.x` version for every merged pull request.
 Only the latest release is supported: security fixes land on `main` and ship in the next release, with no backports.
 
 | Version            | Supported          |
@@ -12,7 +12,7 @@ Only the latest release is supported: security fixes land on `main` and ship in 
 
 ## Security Measures
 
-Blazor-Server is a template for a server-rendered Blazor Web App; so far it holds the shared domain types (`src/Domain`).
+Auth0 Management App is a template for a server-rendered Blazor Web App; so far it holds the shared domain types (`src/Domain`).
 The repository itself is protected as follows:
 
 - **Secrets stay out of source control.** `.env` files are git-ignored at any depth. Local secrets belong in user
@@ -44,12 +44,12 @@ The repository itself is protected as follows:
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in Blazor-Server, please report it responsibly:
+If you discover a security vulnerability in Auth0 Management App, please report it responsibly:
 
 ### How to Report
 
 **Email:** <matthew.paulosky@outlook.com>  
-**Subject:** [SECURITY] Blazor-Server Vulnerability Report
+**Subject:** [SECURITY] Auth0 Management App Vulnerability Report
 
 **Please do NOT open a public GitHub issue for security vulnerabilities.**
 
@@ -84,13 +84,13 @@ When reporting a security vulnerability, please include:
 
 Security updates will be published:
 
-- In the [GitHub Security Advisories](https://github.com/mpaulosky/Blazor-Server/security/advisories)
+- In the [GitHub Security Advisories](https://github.com/mpaulosky/auth0-management-app/security/advisories)
 - In the project [CHANGELOG.md](../CHANGELOG.md) (if one exists)
 - In release notes for security-related releases
 
 ## Security Best Practices for Contributors
 
-When contributing to Blazor-Server, please follow these security guidelines:
+When contributing to Auth0 Management App, please follow these security guidelines:
 
 ### Code Review
 
@@ -151,4 +151,4 @@ When contributing to Blazor-Server, please follow these security guidelines:
 
 ---
 
-Thank you for helping keep Blazor-Server secure!
+Thank you for helping keep Auth0 Management App secure!

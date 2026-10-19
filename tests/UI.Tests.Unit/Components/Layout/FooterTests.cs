@@ -3,7 +3,7 @@
 // File Name :     FooterTests.cs
 // Company :       mpaulosky
 // Author :        Teqslamer
-// Solution Name : Blazor-Server
+// Solution Name : Auth0ManagementApp
 // Project Name :  UI.Tests.Unit
 // =============================================
 
@@ -19,7 +19,7 @@ namespace UI.Tests.Unit.Components.Layout;
 
 public class FooterTests : BunitContext
 {
-	private const string RepositoryUrl = "https://github.com/mpaulosky/Blazor-Server";
+	private const string RepositoryUrl = "https://github.com/mpaulosky/auth0-management-app";
 
 	private const string Commit = "5cc1da2cdeecf595f8861398986c1adf86977759";
 
@@ -133,8 +133,8 @@ public class FooterTests : BunitContext
 
 	// Refs #349: a non-"https://" repository URL (an SSH remote, for example) must not produce links either.
 	[Theory]
-	[InlineData("http://github.com/mpaulosky/Blazor-Server")]
-	[InlineData("git@github.com:mpaulosky/Blazor-Server.git")]
+	[InlineData("http://github.com/mpaulosky/auth0-management-app")]
+	[InlineData("git@github.com:mpaulosky/auth0-management-app.git")]
 	public void Render_NonHttpsRepositoryUrl_RendersValuesWithNoLinks(string repositoryUrl)
 	{
 		// Arrange
