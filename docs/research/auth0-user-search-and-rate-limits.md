@@ -71,12 +71,14 @@ The Admin can already read every User, so this is a correctness problem, not a p
 Recommendation (ours, not Auth0's; not verified against a live Tenant):
 
 - Escape every special character in the list above, and `/` too, which later Lucene versions treat as a regular expression delimiter.
+- Lowercase the text first. Auth0 says values on the normalized fields match case-insensitively, but Lucene-based engines often skip
+  normalizing prefix and wildcard terms, so `name:Jane*` may match nothing where `name:jane*` matches.
 - Keep the whole text as one prefix term per field, with its spaces escaped too: `Jane Smith` becomes
   `name:jane\ smith* OR email:jane\ smith*`. Splitting it into words joined with `AND` doesn't work, because v3 fields aren't tokenized
   ([Search query syntax](#search-query-syntax)): `name:smith*` doesn't match the value `jane smith`.
 - To find a surname typed alone, also search `family_name:<text>*`. Leading-wildcard terms (`name:*smith*`) would find it too, but they need
   3 or more characters and are the costly kind the best-practices page warns about.
-- Check both against a live Tenant before the spec relies on them.
+- Check these against a live Tenant before the spec relies on them.
 - Map a 400 to a failed `Result`, so the page tells the Admin the search couldn't run instead of failing.
 
 ## Paging and totals
@@ -180,12 +182,23 @@ For the app, the limits bite on a page's first load, before any cache helps:
 
 Recommendation (ours, not Auth0's):
 
-- Throttle on the client with a token bucket that matches Auth0's, such as .NET's `System.Threading.RateLimiting.TokenBucketRateLimiter`,
-  sized from settings per tier (2 tokens refilled at 2 a second on Free). Capping how many calls run at once isn't enough: two quick calls
-  free their slots long before the bucket refills, so the next two get a 429.
+- Throttle on the client with a token bucket per Auth0 limit, such as .NET's `System.Threading.RateLimiting.TokenBucketRateLimiter`, held as a
+  singleton and sized from settings a little below Auth0's numbers. Capping how many calls run at once isn't enough: two quick calls free their
+  slots long before the bucket refills, so the next two get a 429.
+  - Free has one bucket for the whole Management API, so one limiter covers it. ADR 0009 does this, with defaults of 2 a second and a burst of 2.
+  - Essentials and Professional have three buckets (Read Users, Write Users, all other endpoints), so key the limiters by endpoint. One limiter
+    sized for Read Users lets the Role calls overrun the "other" bucket's burst of 10; one sized for "other" slows User reads for nothing.
+  - Auth0's buckets belong to the Tenant, not to the app. A local bucket assumes the app is the Tenant's only Management API client, running as
+    one instance. Another instance, another Machine to Machine application, or an Action calling the Management API draws from the same budget,
+    so the 429 handling stays the backstop.
 - Cache the Tenant's Roles and their members for a short, absolute time, and clear them on a Role change, so most loads skip the cost. A
   check that must be current, such as ADR 0009's last-Admin guard, reads uncached.
-- On a 429, wait until `x-ratelimit-reset`, retry once, then return a failed `Result` the page can show, not an exception.
+- On a 429, don't stack a retry on top of the SDK's. The `Auth0.ManagementApi` client has its own `MaxRetries` (see [Not verified](#not-verified)),
+  and ADR 0009 lets its retries be the only ones: a 429 still refused after them comes back as a failed `Result` with
+  `ManagementApi.RateLimited`, not an exception, and one partway through a fan-out fails the whole listing.
+- If the SDK turns out not to retry 429s, retry once in the app. `x-ratelimit-reset` is an absolute UNIX time, so a clock skewed from Auth0's
+  makes the computed wait wrong: keep it between 0 and a few seconds, and fall back to a fixed backoff when the header is missing or can't be
+  parsed.
 - Debounce the search input, so typing doesn't fire a search per keystroke.
 
 ## Not verified
@@ -193,6 +206,8 @@ Recommendation (ours, not Auth0's):
 - Whether Public Cloud really caps `per_page` at 50 for `GET /api/v2/users` (the overview) or at 100 (the endpoint reference). Use 50 or less.
 - Whether 429 responses carry `Retry-After`. Auth0's docs name only the `x-ratelimit-*` headers.
 - How long search lags behind a write. Auth0 gives no figure.
+- Whether a prefix term matches case-insensitively on the normalized fields (`name:Jane*` against `jane smith`). Lowercase the text either way.
+- Whether an escaped space inside a prefix term (`name:jane\ smith*`) matches a value with a space in it.
 - Whether the `Auth0.ManagementApi` SDK retries 429s itself: its README shows a `MaxRetries` option in `ManagementClientOptions` but doesn't say which
   failures it retries ([auth0.net README](https://github.com/auth0/auth0.net/blob/master/README.md)). Check when the client is built.
 
