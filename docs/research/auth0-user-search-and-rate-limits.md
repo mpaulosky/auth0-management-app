@@ -10,8 +10,8 @@ searchable, paged User list. Sources are Auth0's own docs and the Management API
 - The endpoint references say `per_page` goes up to 100 on this endpoint (and on `GET /api/v2/roles/{id}/users`), but the API overview says 50
   on Public Cloud ([Paging and totals](#paging-and-totals)): use 50 or less. `include_totals=true` wraps the page in
   `{ start, limit, length, total, users }`.
-- The Admin's search text can't go into `q` as typed: Lucene reserves characters such as `+`, `:` and `*`, and a space splits terms. Escape it
-  and build the query from it ([Building `q` from the search box](#building-q-from-the-search-box)).
+- The Admin's search text can't go into `q` as typed: Lucene reserves characters such as `:`, `(` and `*`, a leading `-` excludes, and a
+  space splits terms. Escape it and build the query from it ([Building `q` from the search box](#building-q-from-the-search-box)).
 - Search can reach only the first 1000 matches. Past that, Auth0 says narrow the query, and use a bulk export job (not search) to
   enumerate Users. `GET /api/v2/roles/{id}/users` has checkpoint paging (`from`/`take`) to go past 1000.
 - Search is eventually consistent: a just-updated User may show stale data in results. Lookups by ID or email are immediately consistent.
@@ -59,7 +59,9 @@ That reference lists the special characters `+ - && || ! ( ) { } [ ] ^ " ~ * ? :
 
 Pasting the Admin's text into a prefix term breaks on ordinary input:
 
-- `jane.doe+test@` becomes `email:jane.doe+test@*`, and the `+` is read as an operator.
+- `-smith` becomes `name:-smith*`, and a leading `-` (or `+`) is read as an operator. Inside a word they are ordinary characters, so
+  `jane.doe+test@` is safe.
+- `a:b`, `(`, `"` or a trailing `\` breaks the parse, and Auth0 returns 400.
 - `Jane Smith` becomes `name:Jane Smith*`: `name:Jane`, plus a bare `Smith*` on the default field.
 - A quoted phrase doesn't help, because a phrase takes no wildcard.
 - `x OR _exists_:email` changes what the query means.
@@ -69,8 +71,12 @@ The Admin can already read every User, so this is a correctness problem, not a p
 Recommendation (ours, not Auth0's; not verified against a live Tenant):
 
 - Escape every special character in the list above, and `/` too, which later Lucene versions treat as a regular expression delimiter.
-- Split the text on whitespace and turn each word into an escaped prefix term over the searched fields, joined with `AND`. For example,
-  `Jane Smith` becomes `(name:jane* OR email:jane*) AND (name:smith* OR email:smith*)`.
+- Keep the whole text as one prefix term per field, with its spaces escaped too: `Jane Smith` becomes
+  `name:jane\ smith* OR email:jane\ smith*`. Splitting it into words joined with `AND` doesn't work, because v3 fields aren't tokenized
+  ([Search query syntax](#search-query-syntax)): `name:smith*` doesn't match the value `jane smith`.
+- To find a surname typed alone, also search `family_name:<text>*`. Leading-wildcard terms (`name:*smith*`) would find it too, but they need
+  3 or more characters and are the costly kind the best-practices page warns about.
+- Check both against a live Tenant before the spec relies on them.
 - Map a 400 to a failed `Result`, so the page tells the Admin the search couldn't run instead of failing.
 
 ## Paging and totals
@@ -163,17 +169,22 @@ For the app, the limits bite on a page's first load, before any cache helps:
 
 - **The User detail page exceeds the Free burst.** It loads the User, their Roles and the Tenant's Roles: three calls. With a burst of 2, firing
   all three at once gets the third a 429.
-- **Who holds which Role costs one request per Role.** The map ([#11](https://github.com/mpaulosky/auth0-management-app/issues/11)) and ADR 0009
-  ([#22](https://github.com/mpaulosky/auth0-management-app/pull/22)) find the Users who hold each Role by calling `GET /api/v2/roles/{id}/users` once per Role
-  (once per page of up to 100 members), not once per User. That costs one call to list the Roles plus one for each Role. For a Tenant with 10 Roles:
+- **Who holds which Role costs a request per page of each Role's members.** The map ([#11](https://github.com/mpaulosky/auth0-management-app/issues/11))
+  and ADR 0009 ([#22](https://github.com/mpaulosky/auth0-management-app/pull/22)) find the Users who hold each Role by calling
+  `GET /api/v2/roles/{id}/users` with checkpoint paging (`take` up to 100), not by fetching each User's Roles. That costs one call to list the Roles,
+  plus one for every page of up to 100 members of each Role. For a Tenant with 10 Roles of fewer than 100 members each:
   - On Free, 11 calls take about 5 seconds at 2 a second.
   - On Essentials and Professional, those calls all fall under "All other endpoints combined": a burst of 10, then 150 a minute (2.5 a second).
-    The eleventh call waits for the bucket to refill, and so does every call the Admin makes while it's still empty.
+    Auth0 doesn't queue a call over the limit: the eleventh gets a 429 at once, and so does every call the Admin makes while the bucket is
+    empty, unless the app throttles itself first.
 
 Recommendation (ours, not Auth0's):
 
-- Run calls a burst's worth at a time: 2 at once on Free, as ADR 0009's default does.
-- Cache the Tenant's Roles and their members until a Role change clears them, so only the first load pays the cost.
+- Throttle on the client with a token bucket that matches Auth0's, such as .NET's `System.Threading.RateLimiting.TokenBucketRateLimiter`,
+  sized from settings per tier (2 tokens refilled at 2 a second on Free). Capping how many calls run at once isn't enough: two quick calls
+  free their slots long before the bucket refills, so the next two get a 429.
+- Cache the Tenant's Roles and their members for a short, absolute time, and clear them on a Role change, so most loads skip the cost. A
+  check that must be current, such as ADR 0009's last-Admin guard, reads uncached.
 - On a 429, wait until `x-ratelimit-reset`, retry once, then return a failed `Result` the page can show, not an exception.
 - Debounce the search input, so typing doesn't fire a search per keystroke.
 
