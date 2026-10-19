@@ -70,6 +70,9 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.7](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.7) | 2026-10-19 | docs(research): Record the Auth0 Management SDK findings | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-23-docs-research-record-the-auth0-management-sdk-findings.md) |
+| [v0.0.6](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.6) | 2026-10-19 | docs: Grant the Management API application read:role_members | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-26-docs-grant-the-management-api-application-read-role-members.md) |
+| [v0.0.5](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.5) | 2026-10-19 | docs(adr): Put one deep seam in front of the Management API | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-22-docs-adr-put-one-deep-seam-in-front-of-the-management-api.md) |
 | [v0.0.4](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.4) | 2026-10-19 | docs: Capitalise Role and Tenant in the README | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-9-docs-capitalise-role-and-tenant-in-the-readme.md) |
 | [v0.0.3](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.3) | 2026-10-19 | docs: Describe the app as an Auth0 User and Role manager | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-7-docs-describe-the-app-as-an-auth0-user-and-role-manager.md) |
 | [v0.0.2](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.2) | 2026-10-19 | build(deps): Override smol-toml to a fixed version | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-5-build-deps-override-smol-toml-to-a-fixed-version.md) |
@@ -196,10 +199,11 @@ User and Role management isn't built yet; these are the settings it will need.
 
    | Permission | Used to |
    | ---------- | ------- |
-   | `read:users` | List Users and read one User's profile and Roles |
+   | `read:users` | List Users and read one User's profile |
    | `update:users` | Change a User's name, email and the other Profile Fields |
    | `read:roles` | List the Tenant's Roles |
    | `create:roles` | Create a Role |
+   | `read:role_members` | List a User's Roles and a Role's Users |
    | `create:role_members` | Assign a Role to a User |
    | `delete:role_members` | Remove a Role from a User |
 
