@@ -310,9 +310,11 @@ marker is written: `.git/config` is read-only in the sandbox, and no hook runs o
 but answered with an error, which `publish` retries. No later run reuses the PR of a run that stopped between the create and the label, since the gate holds back an issue
 with an open PR, so the [follow-up sweep](#phase-1-follow-up-sweep) labels it instead. Each round, it adds `review:claude` to every PR it sweeps that doesn't carry the label and
 whose label events have no `labeled` event for it, a PR opened before the host labelled its PRs included. Both use the same check, `hasCarriedReviewLabel` in `lib/github.mts`, so
-a PR that has had the label is never labelled again. A failure to add the label, or to read the PR's label events, only warns, so the PR is still published or followed up.
-The run report lists the PR under **Pull requests without `review:claude`**, the run ends red once the report is written, and the owner adds the label by hand.
-A failed label add isn't retried within the round; the next round's sweep tries again.
+a PR that has had the label is never labelled again. A failure to add the label, on publish or in the sweep, or to read the label events of a PR `openPullRequest` reuses,
+only warns, so the PR is still published or followed up. The run report lists the PR under **Pull requests without `review:claude`**, the run ends red once the report is
+written, and the owner adds the label by hand. A failed read in the sweep only warns and lists nothing, since the sweep reads every PR the review cap unlabelled each round, and
+telling the owner to label one by hand would get round that cap. Neither failure is retried within the round; the next round's sweep tries again, and a PR it labels, or finds
+has carried the label, leaves the report, so the run ends red only for the PRs still unlabelled.
 
 A push or `gh pr create` that fails with a GitHub server error (a `5xx` or `Internal Server Error` in git's or gh's output) is retried with backoff, up to
 `PUBLISH_RETRY_ATTEMPTS` attempts in all. Any other failure, such as a push that doesn't fast-forward, isn't retried. When publishing still fails, the issue gets a comment with
