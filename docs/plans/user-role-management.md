@@ -224,9 +224,10 @@ Decided in [How do the User list's search, paging and cache work?](https://githu
 - **What it matches:** a prefix of the email, name, given name or family name:
   `q=email:<t>* OR name:<t>* OR given_name:<t>* OR family_name:<t>*` with `search_engine=v3`. These are normalized fields, so case doesn't matter.
 - **The input:**
-  - It's trimmed.
+  - It's trimmed and lowercased with `ToLowerInvariant()`. Auth0 says the normalized fields match regardless of case, but Lucene-based engines often skip
+    normalizing prefix terms, so `name:Jane*` may match nothing where `name:jane*` matches ([rate limit findings](../research/auth0-user-search-and-rate-limits.md)).
   - Lucene's special characters are escaped with `\`: `+ - && || ! ( ) { } [ ] ^ " ~ * ? : \ /`.
-  - Each run of whitespace inside it becomes one space escaped with `\`, so "Jane Doe" stays one prefix term per field: `name:Jane\ Doe*`. Splitting it into words joined
+  - Each run of whitespace inside it becomes one space escaped with `\`, so "Jane Doe" stays one prefix term per field: `name:jane\ doe*`. Splitting it into words joined
     with `AND` doesn't work, because v3 doesn't split a field's value into words, so `name:Doe*` never matches "Jane Doe"
     ([rate limit findings](../research/auth0-user-search-and-rate-limits.md)).
   - An empty box sends no `q` and lists every User. There's no minimum length: a prefix term needs none.
@@ -524,7 +525,7 @@ These tests run everywhere, the Sandcastle sandbox included.
   - What they cover:
     - every status-code mapping in [the catalogue](#the-catalogue)
     - clearing an optional Profile Field sends it as `null` in the request body, and a field left alone isn't sent
-    - the Lucene query and its escaping, as sent, whitespace included
+    - the Lucene query, its lowercasing and its escaping, as sent, whitespace included
     - checkpoint paging, the member cap with `Truncated`, and a 429 partway through
     - `CountRoleMembersAsync` stopping at `atMost`, and `UserHoldsRoleAsync`
     - each cache lifetime and invalidation rule, a cache hit showing as no second request
