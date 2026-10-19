@@ -121,7 +121,7 @@ that human resolves them. That is deliberate: a human who comments has joined th
    posts one pass-summary PR comment carrying `<!-- sandcastle:follow-up -->`. GitHub's `resolveReviewThread` takes only the thread id, so the resolution is named in the reply's first
    line and in the pass summary, not on the thread. A `declined` verdict with `"invalid": true` resolves as `INVALID`, any other as `WONT_FIX`.
 
-Only a conflict with `main` (`DIRTY`), an unresolved bot thread or a red check starts a pass; an owner thread is answered only alongside one of them. A pass merges `main` in
+Only a conflict with `main` (`DIRTY`), an unresolved bot or owner thread or a red check starts a pass; a human's thread never does. A pass merges `main` in
 for a conflict, and also for a PR that's merely behind main when it has a settled red check (see **Red CI** below, which the gate needs the merge for); a behind PR with no
 red check is left to the sweep's update-branch once it's settled. When `main` merges in cleanly and nothing is left for the role, the follow-up role doesn't run: the host
 gates and pushes the merge itself.
