@@ -1,0 +1,23 @@
+{
+  "name": "blazor-server",
+  "private": true,
+  "scripts": {
+    "check:sandcastle": "tsc --noEmit -p .sandcastle && tsx --test \".sandcastle/**/*.test.mts\"",
+    "sandcastle": "tsx .sandcastle/main.mts"
+  },
+  "devDependencies": {
+    "@ai-hero/sandcastle": "^0.12.0",
+    "@standard-schema/spec": "^1.1.0",
+    "@types/node": "^26.6.5",
+    "markdownlint-cli2": "^0.23.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "zod": "^4.6.6"
+  },
+  "engines": {
+    "npm": "please-use-pnpm"
+  },
+  "packageManager": "pnpm@12.6.0"
+}

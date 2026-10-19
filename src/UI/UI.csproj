@@ -1,0 +1,171 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<PropertyGroup>
+		<BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+		<UserSecretsId>94491f6e-auth0-values-3ff40da38702</UserSecretsId>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="../Domain/Domain.csproj" />
+		<ProjectReference Include="../ServiceDefaults/ServiceDefaults.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Auth0.AspNetCore.Authentication" />
+		<PackageReference Include="FluentValidation" />
+	</ItemGroup>
+
+	<!-- Tailwind CSS v4: the CLI (from src/UI/package.json) builds wwwroot/css/app.css from
+	     Styles/app.tailwind.css on every build, so there is no separate CSS step to remember. -->
+	<PropertyGroup>
+		<TailwindOutput>wwwroot/css/app.css</TailwindOutput>
+		<TailwindMinify Condition="'$(Configuration)' == 'Release'"> --minify</TailwindMinify>
+	</PropertyGroup>
+
+	<!-- `@import "tailwindcss" source("..")` makes the CLI scan every non-gitignored, non-binary, non-CSS file
+	     under src/UI, so this input mirrors that scan with a single broad Include rather than an extension list
+	     that drifts out of sync: excluding wwwroot/css and *.css keeps the CLI's own output out of its inputs.
+	     That exclusion also drops the stylesheet the CLI compiles, so it's added back on its own, or an edit to
+	     it alone would leave the CSS stale. -->
+	<ItemGroup>
+		<TailwindInput
+			Include="**/*"
+			Exclude="node_modules/**;bin/**;obj/**;wwwroot/css/**;**/*.css" />
+		<TailwindInput Include="Styles/app.tailwind.css" />
+	</ItemGroup>
+
+	<!-- A fresh clone or worktree has no node_modules, so a local build installs the workspace's packages from the
+	     root lockfile before the CLI runs (mpaulosky/Blazor-Server#409). CI installs them in .github/ci/prepare.sh,
+	     and design-time builds have no pnpm, so both skip this. -->
+	<Target
+		Name="EnsurePnpmPackages"
+		BeforeTargets="BuildTailwindCss"
+		Condition="'$(DesignTimeBuild)' != 'true' AND '$(CI)' != 'true' AND '$(CI)' != '1' AND !Exists('$(MSBuildProjectDirectory)/node_modules/@tailwindcss/cli/package.json')">
+		<Exec
+			Command="pnpm --version"
+			IgnoreExitCode="true"
+			IgnoreStandardErrorWarningFormat="true"
+			StandardOutputImportance="low"
+			StandardErrorImportance="low">
+			<Output TaskParameter="ExitCode" PropertyName="PnpmExitCode" />
+		</Exec>
+		<Error
+			Condition="'$(PnpmExitCode)' != '0'"
+			Text="The Tailwind CSS CLI isn't installed, and 'pnpm --version' failed, so pnpm can't install it. Run 'corepack enable pnpm' (or install pnpm), then 'pnpm install' at the repository root, and build again." />
+		<Message Importance="high" Text="The Tailwind CSS CLI isn't installed: running pnpm install --frozen-lockfile at the repository root." />
+		<!-- As for the CLI below: pnpm's output is never parsed as MSBuild warnings, so only its exit code decides. -->
+		<Exec
+			Command="pnpm install --frozen-lockfile"
+			WorkingDirectory="$(MSBuildThisFileDirectory)../.."
+			IgnoreStandardErrorWarningFormat="true" />
+	</Target>
+
+	<!-- The CLI writes into obj/<Configuration>/, so Debug and Release each keep their own up-to-date check and
+	     never skip a rebuild because the other configuration already touched wwwroot/css/app.css.
+	     Skipped in design-time builds (IDEs, the code-metrics workflow), which have no pnpm. -->
+	<Target
+		Name="BuildTailwindCss"
+		BeforeTargets="BeforeBuild"
+		Condition="'$(DesignTimeBuild)' != 'true'"
+		Inputs="@(TailwindInput);$(MSBuildThisFileDirectory)../../pnpm-lock.yaml"
+		Outputs="$(IntermediateOutputPath)tailwind/app.css">
+		<Error
+			Condition="!Exists('$(MSBuildProjectDirectory)/node_modules/@tailwindcss/cli/package.json')"
+			Text="The Tailwind CSS CLI isn't installed in src/UI/node_modules. Run 'pnpm install' at the repository root, then build again." />
+		<MakeDir Directories="$(IntermediateOutputPath)tailwind" />
+		<!-- The CLI writes progress to stderr; IgnoreStandardErrorWarningFormat keeps it from becoming a warning under -warnaserror. -->
+		<Exec
+			Command="pnpm exec tailwindcss --input Styles/app.tailwind.css --output $(IntermediateOutputPath)tailwind/app.css$(TailwindMinify)"
+			WorkingDirectory="$(MSBuildProjectDirectory)"
+			IgnoreStandardErrorWarningFormat="true" />
+	</Target>
+
+	<!-- Unconditional (no Inputs/Outputs): copies whichever configuration's CSS BuildTailwindCss last produced into
+	     wwwroot, even on a build where BuildTailwindCss itself was skipped as up to date. Without this, building
+	     Debug then Release could leave wwwroot/css/app.css holding the other configuration's CSS, because both
+	     configurations share that one output path. -->
+	<Target Name="CopyTailwindCss" AfterTargets="BuildTailwindCss" BeforeTargets="BeforeBuild" Condition="'$(DesignTimeBuild)' != 'true'">
+		<Copy SourceFiles="$(IntermediateOutputPath)tailwind/app.css" DestinationFiles="$(TailwindOutput)" SkipUnchangedFiles="true" />
+		<!-- Static web assets read Content at evaluation time, before this target writes the file, so a clean
+		     build would leave app.css out of its endpoints. Re-adding it here puts it in the first build too. -->
+		<ItemGroup>
+			<Content Remove="$(TailwindOutput)" />
+			<Content Include="$(TailwindOutput)" />
+		</ItemGroup>
+	</Target>
+
+	<!-- BuildInfo: stamps the Release and commit into the assembly as constants, so the app never runs git or calls
+	     GitHub at runtime. After InitializeSourceControlInformation, Source Link has set SourceRevisionId (the full
+	     SHA) and PrivateRepositoryUrl (the remote, normalized to https; RepositoryUrl is empty in this repo).
+	     The describe Exec ignores its exit code, so a missing git, a missing .git or a repo with no v* tags leaves
+	     the Release empty instead of failing the build; its stderr stays at low importance so -warnaserror can't
+	     promote it. No Inputs/Outputs: a new tag or commit changes no file the build could compare against.
+	     Skipped in design-time builds, which instead compile the file the last real build wrote, when there is one
+	     (an item, because items evaluate after the SDK's targets set IntermediateOutputPath and properties don't). -->
+	<ItemGroup Condition="'$(DesignTimeBuild)' == 'true' And Exists('$(IntermediateOutputPath)BuildInfo.g.cs')">
+		<Compile Include="$(IntermediateOutputPath)BuildInfo.g.cs" />
+	</ItemGroup>
+
+	<Target
+		Name="GenerateBuildInfo"
+		DependsOnTargets="InitializeSourceControlInformation"
+		BeforeTargets="CoreCompile"
+		Condition="'$(DesignTimeBuild)' != 'true'">
+		<!-- cmd.exe (Windows) and /bin/sh (everywhere else) spell the null device differently; redirecting stderr
+		     there, rather than merely giving it low importance, keeps a git warning ("tag 'v1.2.3' is externally
+		     known as 'v1.2'") out of ConsoleOutput. Without this, a warning before the real output would land in
+		     the same property (Exec joins multi-line ConsoleOutput with ';'), splitting the Include below (line
+		     ~124) into two items and leaving BuildInfo.g.cs with an unterminated string literal. -->
+		<PropertyGroup>
+			<_BuildInfoNullDevice Condition="'$(OS)' == 'Windows_NT'">nul</_BuildInfoNullDevice>
+			<_BuildInfoNullDevice Condition="'$(OS)' != 'Windows_NT'">/dev/null</_BuildInfoNullDevice>
+		</PropertyGroup>
+		<Exec
+			Command="git describe --tags --long --match &quot;v[0-9]*&quot; 2&gt;$(_BuildInfoNullDevice)"
+			WorkingDirectory="$(MSBuildProjectDirectory)"
+			ConsoleToMSBuild="true"
+			IgnoreExitCode="true"
+			IgnoreStandardErrorWarningFormat="true"
+			StandardOutputImportance="low"
+			EchoOff="true">
+			<Output TaskParameter="ExitCode" PropertyName="_BuildInfoDescribeExitCode" />
+			<Output TaskParameter="ConsoleOutput" PropertyName="_BuildInfoDescribeOutput" />
+		</Exec>
+
+		<!-- A failed describe ("fatal: No names found", "git: not found") counts as no Release. Each value is
+		     escaped for a C# string literal, then through MSBuild::Escape so a character the Include below treats
+		     as special (;%$@'?) can't split the item list or trigger a property/item expansion; WriteLinesToFile
+		     unescapes it back on the way out. %09 keeps the indent MSBuild would trim. -->
+		<PropertyGroup>
+			<BuildInfoFile>$(IntermediateOutputPath)BuildInfo.g.cs</BuildInfoFile>
+			<_BuildInfoRelease Condition="'$(_BuildInfoDescribeExitCode)' == '0'">$(_BuildInfoDescribeOutput.Trim())</_BuildInfoRelease>
+			<_BuildInfoRelease>$([MSBuild]::Escape($([System.String]::Copy('$(_BuildInfoRelease)').Replace('\', '\\').Replace('&quot;', '\&quot;'))))</_BuildInfoRelease>
+			<_BuildInfoCommit>$([MSBuild]::Escape($([System.String]::Copy('$(SourceRevisionId)').Replace('\', '\\').Replace('&quot;', '\&quot;'))))</_BuildInfoCommit>
+			<_BuildInfoRepositoryUrl>$([MSBuild]::Escape($([System.String]::Copy('$(PrivateRepositoryUrl)').Replace('\', '\\').Replace('&quot;', '\&quot;'))))</_BuildInfoRepositoryUrl>
+		</PropertyGroup>
+
+		<ItemGroup>
+			<_BuildInfoLine Include="// &lt;auto-generated /&gt;" />
+			<_BuildInfoLine Include="namespace UI.Components.Layout%3B" />
+			<_BuildInfoLine Include="internal static class BuildInfoConstants" />
+			<_BuildInfoLine Include="{" />
+			<_BuildInfoLine Include="%09internal const string Release = &quot;$(_BuildInfoRelease)&quot;%3B" />
+			<_BuildInfoLine Include="%09internal const string Commit = &quot;$(_BuildInfoCommit)&quot;%3B" />
+			<_BuildInfoLine Include="%09internal const string RepositoryUrl = &quot;$(_BuildInfoRepositoryUrl)&quot;%3B" />
+			<_BuildInfoLine Include="}" />
+		</ItemGroup>
+
+		<WriteLinesToFile
+			File="$(BuildInfoFile)"
+			Lines="@(_BuildInfoLine)"
+			Overwrite="true"
+			WriteOnlyWhenDifferent="true" />
+
+		<ItemGroup>
+			<Compile Remove="$(BuildInfoFile)" />
+			<Compile Include="$(BuildInfoFile)" />
+			<FileWrites Include="$(BuildInfoFile)" />
+		</ItemGroup>
+	</Target>
+
+</Project>

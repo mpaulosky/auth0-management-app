@@ -1,0 +1,39 @@
+@inject NavigationManager Navigation
+
+<div class="flex items-center gap-3">
+	<AuthorizeView>
+		<NotAuthorized>
+			<a href="@LoginHref" data-enhance-nav="false" class="@PillClass">Log in</a>
+		</NotAuthorized>
+		<Authorized>
+			@if (GreetingName.For(context.User) is string greetingName)
+			{
+				@* The name comes from the User's Auth0 profile and can be any length, so it's capped and truncated, with the
+				   full value in the tooltip. It can also be written right to left, so <bdi> keeps its direction from
+				   reordering the "Welcome!" around it. *@
+				<span class="max-w-48 truncate text-sm text-slate-600 dark:text-slate-300" title="@greetingName">Welcome! <bdi>@greetingName</bdi></span>
+			}
+			<form method="post" action="@LogoutAction">
+				<AntiforgeryToken/>
+				<button type="submit" class="@PillClass">Log out</button>
+			</form>
+		</Authorized>
+	</AuthorizeView>
+</div>
+
+@code {
+	private const string PillClass =
+		"rounded-full border border-accent-200 px-3 py-1.5 text-sm font-medium hover:border-accent-400 hover:text-accent-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 dark:focus-visible:outline-accent-300 dark:border-accent-700 dark:hover:border-accent-400 dark:hover:text-accent-300";
+
+	// The links are base-relative, like the rest of NavMenu, so they still reach the app under a non-root base path.
+	// The return URL keeps that base path, because the login endpoint redirects to it as given.
+	private string LoginHref => $"{AuthenticationEndpoints.LoginPath[1..]}?returnUrl={Uri.EscapeDataString(ReturnUrl)}";
+
+	private static string LogoutAction => AuthenticationEndpoints.LogoutPath[1..];
+
+	// Signing in again from the access-denied page would land the User back on it, so it returns home instead.
+	private string ReturnUrl => new Uri(IsOnAccessDeniedPage ? Navigation.BaseUri : Navigation.Uri).PathAndQuery;
+
+	private bool IsOnAccessDeniedPage => Navigation.ToBaseRelativePath(Navigation.Uri)
+		.StartsWith(AuthenticationEndpoints.AccessDeniedPath[1..], StringComparison.OrdinalIgnoreCase);
+}

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<ItemGroup>
+		<PackageReference Include="bunit" />
+		<PackageReference Include="FluentAssertions" />
+		<PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
+		<PackageReference Include="NSubstitute" />
+		<PackageReference Include="xunit.v3.mtp-v2" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Using Include="Bunit" />
+		<Using Include="FluentAssertions" />
+		<Using Include="NSubstitute" />
+		<Using Include="Xunit" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="../../src/UI/UI.csproj" />
+	</ItemGroup>
+
+</Project>

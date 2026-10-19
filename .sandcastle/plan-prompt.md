@@ -1,0 +1,65 @@
+# ISSUES
+
+Here are the open issues in the repo:
+
+<issues-json>
+
+{{ISSUES_JSON}}
+
+</issues-json>
+
+The list above has already been filtered to issues ready for work.
+Issues with an explicit blocker (a GitHub "blocked by" link, or a "Blocked by #N" or "Depends on #N" line) whose work hasn't landed on main were removed before you saw the list.
+So don't hold an issue back only because its body mentions an issue that isn't in the list: that issue is either finished or outside this backlog.
+
+# TASK
+
+Analyze the open issues and build a dependency graph. For each issue, determine whether it **blocks** or **is blocked by** any other open issue.
+
+An issue B is **blocked by** issue A if:
+
+- B requires code or infrastructure that A introduces
+- B and A modify overlapping files or modules, making concurrent work likely to produce merge conflicts
+- B's requirements depend on a decision or API shape that A will establish
+
+An issue is **unblocked** if it has zero blocking dependencies on other open issues.
+
+# ROLES
+
+The tester, the backend developer and the reviewer build every issue. For each issue you pick, also choose which optional roles it needs, in a `roles` list. Pick a role only
+when the issue needs it: each one costs a run.
+
+- `architect`: the issue needs a design before the tests are written. Pick it when the issue adds a new type, module or public API whose shape the issue leaves open, touches
+  several modules or slices that must agree, or makes a decision that would be hard to reverse. Leave it out for a fix or a change whose shape the issue already spells out.
+- `ui`: the issue adds or changes Blazor components or pages (`.razor` files, their code-behind, layout or Tailwind styling).
+- `scribe`: the issue adds or changes a domain term in `CONTEXT.md`, or changes how the Template is set up or used (`README.md` prose, `docs/CONTRIBUTING.md` or another
+  hand-written guide).
+
+An empty list, `[]`, means the issue needs none of them. If you leave `roles` out, every optional role runs.
+
+# FILES
+
+For each issue you pick, list in `files` the paths, relative to the repository root, that you expect the issue to change: the files it edits, adds or deletes, its tests
+included. Read the repository to find them. The host builds no two issues at once that name the same path, nor an issue that names a path an open pull request changes. An
+issue with no `files`, or an empty list, is treated as touching anything, and is built only on its own, so name every path you can.
+
+# OUTPUT
+
+Output your plan as a JSON object wrapped in `<plan>` tags:
+
+<plan>
+{"issues": [
+{"id": "42", "title": "Fix auth bug", "roles": [], "files": ["src/UI/Program.cs", "tests/UI.Tests.Integration/ProgramTests.cs"]},
+{"id": "43", "title": "Add a Palette picker", "roles": ["architect", "ui", "scribe"], "files": ["src/UI/Components/Features/Palettes/PaletteMenu.razor", "CONTEXT.md"]}
+]}
+</plan>
+
+Include only unblocked issues. If every issue is blocked, include the single highest-priority candidate (the one with the fewest or weakest dependencies).
+
+Always emit the `<plan>` tags, even when there is nothing to do. If there are no issues to work on at all, output `<plan>{"issues": []}</plan>` so the run can exit cleanly.
+
+# RULES
+
+You only read and plan: you commit nothing. These rules apply to every role:
+
+{{SHARED_RULES}}

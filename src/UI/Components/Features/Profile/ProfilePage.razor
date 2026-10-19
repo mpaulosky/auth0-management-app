@@ -1,0 +1,52 @@
+@page "/profile"
+@attribute [Authorize]
+
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+
+<PageTitle>Profile</PageTitle>
+
+<PageHeader Title="Profile" Lead="The claims Auth0 sent for your sign-in.">
+	<Eyebrow>User</Eyebrow>
+</PageHeader>
+
+<Card>
+	<Title>Your claims</Title>
+	<ChildContent>
+		<div class="overflow-x-auto rounded-2xl border border-accent-200 dark:border-accent-800">
+			<table class="min-w-full text-left text-sm">
+				<thead class="bg-accent-200 text-xs uppercase tracking-wider text-accent-800 dark:bg-accent-800 dark:text-accent-200">
+					<tr>
+						<th class="px-4 py-3 font-medium">Claim type</th>
+						<th class="px-4 py-3 font-medium">Value</th>
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-accent-200 dark:divide-accent-800">
+					@foreach (Claim claim in _claims)
+					{
+						<tr class="even:bg-accent-50 dark:even:bg-accent-950/30">
+							<td class="px-4 py-2.5 font-mono text-xs break-all">@claim.Type</td>
+							<td class="px-4 py-2.5 wrap-anywhere">@claim.Value</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	</ChildContent>
+</Card>
+
+@code {
+	[CascadingParameter]
+	private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+	private IReadOnlyList<Claim> _claims = [];
+
+	protected override async Task OnInitializedAsync()
+	{
+		if (AuthenticationStateTask is not null)
+		{
+			AuthenticationState authenticationState = await AuthenticationStateTask;
+			_claims = [.. authenticationState.User.Claims];
+		}
+	}
+}
