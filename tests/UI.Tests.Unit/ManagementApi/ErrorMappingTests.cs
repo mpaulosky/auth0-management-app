@@ -33,6 +33,7 @@ public class ErrorMappingTests
 		{ "AssignRole", 404, "The following roles do not exist: rol_admin.", "Role.NotFound", ResultErrorCode.NotFound },
 		{ "RemoveRole", 404, UserMissing, "User.NotFound", ResultErrorCode.NotFound },
 		{ "RemoveRole", 404, RoleMissing, "Role.NotFound", ResultErrorCode.NotFound },
+		{ "CreateRole", 400, "Payload validation error: 'Too long: name'.", "Role.Invalid", ResultErrorCode.Validation },
 		{ "CreateRole", 409, "The role already exists.", "Role.AlreadyExists", ResultErrorCode.Conflict },
 		{ "ListRoleMembers", 404, RoleMissing, "Role.NotFound", ResultErrorCode.NotFound },
 		{ "CountRoleMembers", 404, RoleMissing, "Role.NotFound", ResultErrorCode.NotFound },

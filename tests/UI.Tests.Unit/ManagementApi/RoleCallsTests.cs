@@ -151,4 +151,21 @@ public class RoleCallsTests
 		await act.Should().ThrowAsync<Exception>();
 		harness.Handler.ManagementRequests.Should().ContainSingle("a resent POST could meet a 409 for the role it just made");
 	}
+
+	[Theory]
+	[InlineData("")]
+	[InlineData("  ")]
+	public async Task CreateRoleAsync_BlankName_ThrowsWithoutCallingAuth0(string name)
+	{
+		// Arrange
+		using ManagementApiHarness harness = ManagementApiHarness.Create();
+
+		// Act
+		Func<Task> act = () => harness.Api.CreateRoleAsync(
+			new NewRole(name, null), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		await act.Should().ThrowAsync<ArgumentException>();
+		harness.Handler.ManagementRequests.Should().BeEmpty();
+	}
 }

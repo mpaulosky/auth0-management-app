@@ -47,7 +47,10 @@ public class ManagementApiRegistrationTests
 		// Assert
 		services.Count.Should().Be(afterFirstCall, "AddManagementApi() uses TryAdd*, so a second call adds nothing");
 		services.Count(descriptor => descriptor.ServiceType == typeof(IManagementApi)).Should().Be(1);
-		services.Count(descriptor => descriptor.ServiceType == typeof(RateLimiter)).Should().Be(1);
+		services.Count(descriptor => descriptor.ServiceType == typeof(RateLimiter) && descriptor.ServiceKey is "Auth0Management")
+			.Should().Be(1);
+		services.Should().NotContain(descriptor => descriptor.ServiceType == typeof(RateLimiter) && descriptor.ServiceKey == null,
+			"the bucket is keyed, so it can't be resolved or displaced as a bare RateLimiter");
 	}
 
 	[Fact]
@@ -189,7 +192,7 @@ public class ManagementApiRegistrationTests
 
 		// Act
 		await host.StartAsync(Xunit.TestContext.Current.CancellationToken);
-		RateLimiter limiter = host.Services.GetRequiredService<RateLimiter>();
+		RateLimiter limiter = host.Services.GetRequiredKeyedService<RateLimiter>("Auth0Management");
 
 		// Assert
 		limiter.GetStatistics()!.CurrentAvailablePermits.Should().Be(2, "Burst defaults to 2, the Free tier's bucket");
@@ -205,7 +208,7 @@ public class ManagementApiRegistrationTests
 
 		// Act
 		await host.StartAsync(Xunit.TestContext.Current.CancellationToken);
-		RateLimiter limiter = host.Services.GetRequiredService<RateLimiter>();
+		RateLimiter limiter = host.Services.GetRequiredKeyedService<RateLimiter>("Auth0Management");
 
 		// Assert
 		limiter.GetStatistics()!.CurrentAvailablePermits.Should().Be(7);

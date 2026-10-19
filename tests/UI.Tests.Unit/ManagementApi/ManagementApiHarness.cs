@@ -114,8 +114,8 @@ internal sealed class ManagementApiHarness : IDisposable
 
 		if (options.Limiter is not null)
 		{
-			services.RemoveAll<RateLimiter>();
-			services.AddSingleton(options.Limiter);
+			services.RemoveAllKeyed<RateLimiter>("Auth0Management");
+			services.AddKeyedSingleton<RateLimiter>("Auth0Management", options.Limiter);
 		}
 
 		return new ManagementApiHarness(services.BuildServiceProvider(), handler, time);

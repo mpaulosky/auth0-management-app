@@ -111,15 +111,18 @@ public class UpdateProfileFieldsTests
 		body.GetProperty(wireName).ValueKind.Should().Be(JsonValueKind.Null);
 	}
 
-	[Fact]
-	public async Task UpdateProfileFieldsAsync_EmptyEmail_ThrowsWithoutCallingAuth0()
+	[Theory]
+	[InlineData("")]
+	[InlineData(" ")]
+	[InlineData("\t\n")]
+	public async Task UpdateProfileFieldsAsync_EmptyEmail_ThrowsWithoutCallingAuth0(string email)
 	{
 		// Arrange
 		using ManagementApiHarness harness = HarnessThatAccepts();
 
 		// Act
 		Func<Task> act = () => harness.Api.UpdateProfileFieldsAsync(
-			ApiCalls.UserId, new ProfileFieldsChange(Email: string.Empty), Xunit.TestContext.Current.CancellationToken);
+			ApiCalls.UserId, new ProfileFieldsChange(Email: email), Xunit.TestContext.Current.CancellationToken);
 
 		// Assert
 		await act.Should().ThrowAsync<ArgumentException>();

@@ -7,9 +7,12 @@
 // Project Name :  UI.Tests.Unit
 // =============================================
 
+using System.Net;
 using System.Threading.RateLimiting;
 
 using Domain.Abstractions;
+
+using Microsoft.Extensions.Logging;
 
 using UI.ManagementApi;
 
@@ -156,6 +159,33 @@ public class RateLimiterTests
 		result.ErrorCode.Should().Be(ResultErrorCode.RateLimited);
 		result.Details.Should().Be("ManagementApi.RateLimited");
 		harness.Handler.ManagementRequests.Should().BeEmpty();
+	}
+
+	[Fact]
+	public async Task Call_LocalRefusalThenAuth0Returns5xx_ThrowsAndLogsAnError()
+	{
+		// Arrange
+		// The first attempt waits out the queue timeout and gets the limiter's own 429. The token arrives before the SDK's
+		// retry, which reaches Auth0 and meets a real 500: that is an outage, not Auth0 shedding load.
+		using TokenBucketRateLimiter limiter = ManagementApiHarness.ManualLimiter(tokenLimit: 1);
+		using RateLimitLease drained = limiter.AttemptAcquire();
+		using ManagementApiHarness harness = ManagementApiHarness.Create(
+			new HarnessOptions { Limiter = limiter, QueueTimeout = TimeSpan.FromSeconds(1) });
+		harness.Handler.RespondWithError(HttpStatusCode.InternalServerError, "Internal server error");
+		Task replenish = Task.Run(async () =>
+		{
+			await Task.Delay(TimeSpan.FromMilliseconds(1500), Xunit.TestContext.Current.CancellationToken);
+			await ManagementApiHarness.ReplenishAsync(limiter);
+		}, Xunit.TestContext.Current.CancellationToken);
+
+		// Act
+		Func<Task> act = () => harness.Api.AssignRoleAsync(ApiCalls.UserId, ApiCalls.RoleId, Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		await act.Should().ThrowAsync<Exception>("a limiter refusal doesn't excuse a real 5xx from Auth0");
+		await replenish;
+		harness.Handler.ManagementRequests.Should().ContainSingle("only the retry reached Auth0");
+		harness.Logs.GetSnapshot().Should().Contain(record => record.Level == LogLevel.Error);
 	}
 
 	[Fact]

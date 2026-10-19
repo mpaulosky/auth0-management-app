@@ -39,7 +39,8 @@ internal sealed class RateLimitingHandler : DelegatingHandler
 	/// </summary>
 	/// <param name="limiter">The app's one token bucket for the Management API.</param>
 	/// <param name="options">The Management API settings, read for the queue timeout.</param>
-	public RateLimitingHandler(RateLimiter limiter, IOptions<ManagementApiOptions> options)
+	public RateLimitingHandler([FromKeyedServices(ManagementApiAdapter.HttpClientName)] RateLimiter limiter,
+		IOptions<ManagementApiOptions> options)
 	{
 		ArgumentNullException.ThrowIfNull(limiter);
 		ArgumentNullException.ThrowIfNull(options);
@@ -64,7 +65,7 @@ internal sealed class RateLimitingHandler : DelegatingHandler
 
 		if (lease is not { IsAcquired: true })
 		{
-			RateLimitMark.Current?.Mark();
+			RateLimitMark.Current?.MarkLocalRefusal();
 
 			return OwnRateLimitResponse(request);
 		}
@@ -73,7 +74,7 @@ internal sealed class RateLimitingHandler : DelegatingHandler
 
 		if (response.StatusCode == HttpStatusCode.TooManyRequests)
 		{
-			RateLimitMark.Current?.Mark();
+			RateLimitMark.Current?.MarkAuth0RateLimit();
 		}
 		else if (response.IsSuccessStatusCode)
 		{

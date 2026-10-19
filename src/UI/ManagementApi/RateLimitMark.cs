@@ -11,17 +11,19 @@ namespace UI.ManagementApi;
 
 /// <summary>
 ///   Records, for one <see cref="IManagementApi" /> call, whether the request now in flight, or an earlier one that
-///   hasn't since succeeded, met a 429, from Auth0 or from the client-side limiter. A success clears it, so a later
-///   page's outage isn't taken for rate limiting. The SDK's timeout covers both attempts, so it can cancel a call that
-///   was only rate limited; the adapter reads this mark to report that as <c>ManagementApi.RateLimited</c> rather than
-///   as an outage.
+///   hasn't since succeeded, met a 429, and whose it was: Auth0's, or the client-side limiter's own refusal, which never
+///   reached Auth0. A success clears both, so a later page's outage isn't taken for rate limiting. The SDK's timeout
+///   covers both attempts, so it can cancel a call that was only rate limited; the adapter reads this mark to report
+///   that as <c>ManagementApi.RateLimited</c> rather than as an outage. A 5xx is read as Auth0 shedding load only after
+///   a 429 from Auth0 itself: a local refusal says nothing about Auth0's health.
 /// </summary>
 internal sealed class RateLimitMark : IDisposable
 {
 	private static readonly AsyncLocal<RateLimitMark?> CurrentMark = new();
 
 	private readonly RateLimitMark? _previous;
-	private int _metRateLimit;
+	private int _metAuth0RateLimit;
+	private int _metLocalRefusal;
 
 	private RateLimitMark(RateLimitMark? previous)
 	{
@@ -34,9 +36,15 @@ internal sealed class RateLimitMark : IDisposable
 	public static RateLimitMark? Current => CurrentMark.Value;
 
 	/// <summary>
-	///   Gets a value indicating whether the current request, or a failed one before it, met a 429.
+	///   Gets a value indicating whether the current request, or a failed one before it, met a 429 from Auth0.
 	/// </summary>
-	public bool MetRateLimit => Volatile.Read(ref _metRateLimit) == 1;
+	public bool MetAuth0RateLimit => Volatile.Read(ref _metAuth0RateLimit) == 1;
+
+	/// <summary>
+	///   Gets a value indicating whether the current request, or a failed one before it, met a 429, from Auth0 or from
+	///   the client-side limiter.
+	/// </summary>
+	public bool MetRateLimit => MetAuth0RateLimit || Volatile.Read(ref _metLocalRefusal) == 1;
 
 	/// <summary>
 	///   Starts a mark for the call running on the current async flow. The HTTP requests the call sends flow from it, so
@@ -52,11 +60,19 @@ internal sealed class RateLimitMark : IDisposable
 	}
 
 	/// <summary>
-	///   Records that a request of this call met a 429.
+	///   Records that a request of this call met a 429 from Auth0.
 	/// </summary>
-	public void Mark()
+	public void MarkAuth0RateLimit()
 	{
-		Volatile.Write(ref _metRateLimit, 1);
+		Volatile.Write(ref _metAuth0RateLimit, 1);
+	}
+
+	/// <summary>
+	///   Records that the client-side limiter refused a request of this call, which never reached Auth0.
+	/// </summary>
+	public void MarkLocalRefusal()
+	{
+		Volatile.Write(ref _metLocalRefusal, 1);
 	}
 
 	/// <summary>
@@ -64,7 +80,8 @@ internal sealed class RateLimitMark : IDisposable
 	/// </summary>
 	public void Clear()
 	{
-		Volatile.Write(ref _metRateLimit, 0);
+		Volatile.Write(ref _metAuth0RateLimit, 0);
+		Volatile.Write(ref _metLocalRefusal, 0);
 	}
 
 	/// <inheritdoc />

@@ -53,9 +53,11 @@ public static class ManagementApiServiceCollectionExtensions
 		services.TryAddTransient<RateLimitingHandler>();
 		services.TryAddSingleton(TimeProvider.System);
 
-		// A singleton RateLimiter, so a test can swap in one it replenishes by hand. It adds one token every
-		// 1/PermitsPerSecond seconds, which spreads the refill evenly instead of in one lump each second.
-		services.TryAddSingleton<RateLimiter>(provider =>
+		// Keyed, because RateLimiter is a framework type: a bare registration would let other code's limiter displace
+		// this bucket, or take its tokens. A test swaps in a limiter it replenishes by hand under the same key. The bucket
+		// adds one token every 1/PermitsPerSecond seconds, which spreads the refill evenly instead of in one lump each
+		// second.
+		services.TryAddKeyedSingleton<RateLimiter>(ManagementApiAdapter.HttpClientName, (provider, _) =>
 		{
 			ManagementApiOptions options = provider.GetRequiredService<IOptions<ManagementApiOptions>>().Value;
 

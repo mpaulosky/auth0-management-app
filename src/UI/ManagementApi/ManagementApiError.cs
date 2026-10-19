@@ -50,6 +50,19 @@ internal sealed record ManagementApiError(string Code, ResultErrorCode Category,
 		new("Role.AlreadyExists", ResultErrorCode.Conflict, "A Role with that name already exists.");
 
 	/// <summary>
+	///   Auth0 refused to create a Role, carrying Auth0's own reason.
+	/// </summary>
+	/// <param name="auth0Message">Auth0's message.</param>
+	/// <returns>A <c>Role.Invalid</c> error.</returns>
+	public static ManagementApiError RoleInvalid(string? auth0Message)
+	{
+		return new ManagementApiError("Role.Invalid", ResultErrorCode.Validation,
+			string.IsNullOrWhiteSpace(auth0Message)
+				? "Auth0 won't create a Role with that name or description."
+				: $"Auth0 won't create a Role with that name or description: {auth0Message}");
+	}
+
+	/// <summary>
 	///   Auth0 refused to change a Profile Field, carrying Auth0's own reason.
 	/// </summary>
 	/// <param name="auth0Message">Auth0's message.</param>

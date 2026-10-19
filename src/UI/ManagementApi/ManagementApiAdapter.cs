@@ -162,9 +162,9 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 		ArgumentNullException.ThrowIfNull(change);
 
 		// Auth0 would answer these with a 400 that reads as a locked field, after the request had spent a token.
-		if (change.Email is "")
+		if (change.Email is not null && string.IsNullOrWhiteSpace(change.Email))
 		{
-			throw new ArgumentException("An email address can't be cleared.", nameof(change));
+			throw new ArgumentException("An email address can't be cleared or blank.", nameof(change));
 		}
 
 		if (change is { Name: null, GivenName: null, FamilyName: null, Nickname: null, Picture: null, Email: null })
@@ -239,6 +239,7 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 	public Task<Result<RoleSummary>> CreateRoleAsync(NewRole role, CancellationToken cancellationToken)
 	{
 		ArgumentNullException.ThrowIfNull(role);
+		ArgumentException.ThrowIfNullOrWhiteSpace(role.Name);
 
 		return CallAsync(nameof(CreateRoleAsync), async (client, token) =>
 		{
@@ -247,8 +248,12 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 				cancellationToken: token).ConfigureAwait(false);
 
 			return new RoleSummary(created.Id ?? string.Empty, created.Name ?? role.Name, created.Description);
-		}, static exception => exception.StatusCode == 409 ? ManagementApiError.RoleAlreadyExists : null,
-			cancellationToken, maxRetries: 0);
+		}, static exception => exception.StatusCode switch
+		{
+			409 => ManagementApiError.RoleAlreadyExists,
+			400 => ManagementApiError.RoleInvalid(exception.Description ?? exception.Message),
+			_ => null,
+		}, cancellationToken, maxRetries: 0);
 	}
 
 	/// <inheritdoc />
@@ -340,10 +345,11 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 
 			return ManagementApiError.RateLimited(exception.RateLimit?.Reset, _timeProvider.GetUtcNow()).ToResult<T>();
 		}
-		catch (ManagementApiException exception) when (exception.StatusCode >= 500 && mark.MetRateLimit)
+		catch (ManagementApiException exception) when (exception.StatusCode >= 500 && mark.MetAuth0RateLimit)
 		{
-			// The request's retry met a 429 first, so the 5xx is most likely Auth0 shedding load, not an outage. This
-			// precedes mapExpected, which maps a 503 on the search to "too broad". The exception stays in the log.
+			// Auth0 itself answered 429 first, so the 5xx is most likely Auth0 shedding load, not an outage. The limiter's
+			// own refusals don't count: they say nothing about Auth0's health. This precedes mapExpected, which maps a
+			// 503 on the search to "too broad". The exception stays in the log.
 			LogRateLimitedByFailure(exception, operation, exception.StatusCode);
 
 			return ManagementApiError.RateLimited(null, _timeProvider.GetUtcNow()).ToResult<T>();
