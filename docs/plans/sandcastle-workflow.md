@@ -298,6 +298,10 @@ hooks off. It never runs git or `gh` in the agent's worktree: git there would ru
 host. The gate already ran in the sandbox, and CI stays the independent check ([model and budget decision](https://github.com/mpaulosky/Blazor-Server/issues/64)). No gate-pass
 marker is written: `.git/config` is read-only in the sandbox, and no hook runs on the host's push. See `.sandcastle/lib/host-safety.mts`.
 
+**Labelling the PR.** A PR the host opens gets `review:claude` straight after it's created, so Claude reviews it without anyone adding the label (`openPullRequest` in
+`lib/github.mts`). A PR the host finds already open for the branch keeps its labels: PR Auto-Merge removes `review:claude` once the review cap is reached, and adding it back on
+every publish would get round that cap. A failure to add the label only warns, so the PR is still published, and the owner adds the label by hand.
+
 A push or `gh pr create` that fails with a GitHub server error (a `5xx` or `Internal Server Error` in git's or gh's output) is retried with backoff, up to
 `PUBLISH_RETRY_ATTEMPTS` attempts in all. Any other failure, such as a push that doesn't fast-forward, isn't retried. When publishing still fails, the issue gets a comment with
 the error, the branch keeps its commits, and the run summary lists the branch as stranded rather than reporting a round that built nothing.
