@@ -41,7 +41,13 @@ public static class ManagementApiServiceCollectionExtensions
 				.ValidateOnStart();
 
 			services.AddHttpClient(ManagementApiAdapter.HttpClientName)
-				.AddHttpMessageHandler<RateLimitingHandler>();
+				.AddHttpMessageHandler<RateLimitingHandler>()
+				// The token provider holds one client for the app's lifetime, and the factory never recycles that
+				// client's handlers, so the connection itself expires to pick up a changed DNS record.
+				.ConfigurePrimaryHttpMessageHandler(static () => new SocketsHttpHandler
+				{
+					PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+				});
 		}
 
 		services.TryAddTransient<RateLimitingHandler>();

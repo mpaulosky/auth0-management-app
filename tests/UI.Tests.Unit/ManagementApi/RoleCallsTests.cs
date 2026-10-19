@@ -7,6 +7,7 @@
 // Project Name :  UI.Tests.Unit
 // =============================================
 
+using System.Net;
 using System.Text.Json;
 
 using Domain.Abstractions;
@@ -133,5 +134,21 @@ public class RoleCallsTests
 		JsonElement body = JsonDocument.Parse(request.Body).RootElement;
 		body.GetProperty("name").GetString().Should().Be("Editor");
 		body.GetProperty("description").GetString().Should().Be("Edits things");
+	}
+
+	[Fact]
+	public async Task CreateRoleAsync_Auth0Returns5xx_ThrowsWithoutResendingThePost()
+	{
+		// Arrange
+		using ManagementApiHarness harness = ManagementApiHarness.Create();
+		harness.Handler.RespondWithError(HttpStatusCode.InternalServerError, "Internal server error");
+
+		// Act
+		Func<Task> act = () => harness.Api.CreateRoleAsync(
+			new NewRole("Editor", "Edits things"), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		await act.Should().ThrowAsync<Exception>();
+		harness.Handler.ManagementRequests.Should().ContainSingle("a resent POST could meet a 409 for the role it just made");
 	}
 }

@@ -66,7 +66,8 @@ public sealed record UserDetails(
 	IReadOnlyList<RoleSummary> Roles);
 
 /// <summary>
-///   A change to a User's Profile Fields: <see langword="null" /> leaves a field alone, and an empty string clears it.
+///   A change to a User's Profile Fields: <see langword="null" /> leaves a field alone, and an empty string clears it,
+///   except for <paramref name="Email" />, which can't be cleared. At least one field must be set.
 /// </summary>
 /// <param name="Name">The new name.</param>
 /// <param name="GivenName">The new given name.</param>

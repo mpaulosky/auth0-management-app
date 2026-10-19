@@ -112,6 +112,36 @@ public class UpdateProfileFieldsTests
 	}
 
 	[Fact]
+	public async Task UpdateProfileFieldsAsync_EmptyEmail_ThrowsWithoutCallingAuth0()
+	{
+		// Arrange
+		using ManagementApiHarness harness = HarnessThatAccepts();
+
+		// Act
+		Func<Task> act = () => harness.Api.UpdateProfileFieldsAsync(
+			ApiCalls.UserId, new ProfileFieldsChange(Email: string.Empty), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		await act.Should().ThrowAsync<ArgumentException>();
+		harness.Handler.ManagementRequests.Should().BeEmpty();
+	}
+
+	[Fact]
+	public async Task UpdateProfileFieldsAsync_NoFieldSet_ThrowsWithoutCallingAuth0()
+	{
+		// Arrange
+		using ManagementApiHarness harness = HarnessThatAccepts();
+
+		// Act
+		Func<Task> act = () => harness.Api.UpdateProfileFieldsAsync(
+			ApiCalls.UserId, new ProfileFieldsChange(), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		await act.Should().ThrowAsync<ArgumentException>();
+		harness.Handler.ManagementRequests.Should().BeEmpty();
+	}
+
+	[Fact]
 	public async Task UpdateProfileFieldsAsync_EmailChange_SendsEmailUnverifiedWithoutAVerificationEmail()
 	{
 		// Arrange

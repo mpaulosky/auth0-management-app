@@ -161,6 +161,17 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 		ArgumentException.ThrowIfNullOrWhiteSpace(userId);
 		ArgumentNullException.ThrowIfNull(change);
 
+		// Auth0 would answer these with a 400 that reads as a locked field, after the request had spent a token.
+		if (change.Email is "")
+		{
+			throw new ArgumentException("An email address can't be cleared.", nameof(change));
+		}
+
+		if (change is { Name: null, GivenName: null, FamilyName: null, Nickname: null, Picture: null, Email: null })
+		{
+			throw new ArgumentException("The change names no Profile Field.", nameof(change));
+		}
+
 		return await CallAsync(nameof(UpdateProfileFieldsAsync), async (client, token) =>
 		{
 			await client.Users.UpdateAsync(userId, ToRequest(change), cancellationToken: token).ConfigureAwait(false);
@@ -237,7 +248,7 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 
 			return new RoleSummary(created.Id ?? string.Empty, created.Name ?? role.Name, created.Description);
 		}, static exception => exception.StatusCode == 409 ? ManagementApiError.RoleAlreadyExists : null,
-			cancellationToken);
+			cancellationToken, maxRetries: 0);
 	}
 
 	/// <inheritdoc />
@@ -313,10 +324,11 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 	private async Task<Result<T>> CallAsync<T>(string operation,
 		Func<ManagementClient, CancellationToken, Task<T>> call,
 		Func<ManagementApiException, ManagementApiError?> mapExpected,
-		CancellationToken cancellationToken)
+		CancellationToken cancellationToken,
+		int maxRetries = 1)
 	{
 		using RateLimitMark mark = RateLimitMark.Begin();
-		using ManagementClient client = CreateClient();
+		using ManagementClient client = CreateClient(maxRetries);
 
 		try
 		{
@@ -380,14 +392,16 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 		}
 	}
 
-	private ManagementClient CreateClient()
+	// A create call passes 0: the SDK would resend a POST whose first response was lost, and the resend's 409 would
+	// read as a Role that already existed when this very call had made it.
+	private ManagementClient CreateClient(int maxRetries)
 	{
 		return new ManagementClient(new ManagementClientOptions
 		{
 			Domain = _options.Domain,
 			TokenProvider = _tokenProvider,
 			HttpClient = _httpClientFactory.CreateClient(HttpClientName),
-			MaxRetries = 1,
+			MaxRetries = maxRetries,
 			Timeout = ClientTimeout,
 		});
 	}

@@ -12,6 +12,7 @@ using System.Threading.RateLimiting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Options;
 
 using UI.ManagementApi;
@@ -47,6 +48,27 @@ public class ManagementApiRegistrationTests
 		services.Count.Should().Be(afterFirstCall, "AddManagementApi() uses TryAdd*, so a second call adds nothing");
 		services.Count(descriptor => descriptor.ServiceType == typeof(IManagementApi)).Should().Be(1);
 		services.Count(descriptor => descriptor.ServiceType == typeof(RateLimiter)).Should().Be(1);
+	}
+
+	[Fact]
+	public void AddManagementApi_Client_RecyclesItsPooledConnections()
+	{
+		// Arrange
+		using IHost host = BuildHost(ValidSettings());
+		HttpClientFactoryOptions options = host.Services.GetRequiredService<IOptionsMonitor<HttpClientFactoryOptions>>()
+			.Get("Auth0Management");
+		RecordingHandlerBuilder builder = new(host.Services) { Name = "Auth0Management" };
+
+		// Act
+		foreach (Action<HttpMessageHandlerBuilder> action in options.HttpMessageHandlerBuilderActions)
+		{
+			action(builder);
+		}
+
+		// Assert
+		builder.PrimaryHandler.Should().BeOfType<SocketsHttpHandler>()
+			.Which.PooledConnectionLifetime.Should().BeLessThanOrEqualTo(TimeSpan.FromMinutes(5),
+				"the token provider's one long-lived client must still pick up a changed DNS record");
 	}
 
 	[Fact]
@@ -201,5 +223,21 @@ public class ManagementApiRegistrationTests
 
 		// Assert
 		resolved.Should().HaveCount(1);
+	}
+
+	private sealed class RecordingHandlerBuilder(IServiceProvider services) : HttpMessageHandlerBuilder
+	{
+		public override string? Name { get; set; }
+
+		public override HttpMessageHandler PrimaryHandler { get; set; } = new HttpClientHandler();
+
+		public override IList<DelegatingHandler> AdditionalHandlers { get; } = [];
+
+		public override IServiceProvider Services { get; } = services;
+
+		public override HttpMessageHandler Build()
+		{
+			return PrimaryHandler;
+		}
 	}
 }

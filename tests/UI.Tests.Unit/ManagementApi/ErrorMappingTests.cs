@@ -91,7 +91,8 @@ public class ErrorMappingTests
 		result.Success.Should().BeFalse();
 		result.ErrorCode.Should().Be(ResultErrorCode.RateLimited);
 		result.Details.Should().Be("ManagementApi.RateLimited");
-		harness.Handler.ManagementRequests.Should().HaveCount(2, "the SDK retries a 429 once before the call gives up");
+		harness.Handler.ManagementRequests.Should().HaveCount(call == "CreateRole" ? 1 : 2,
+			"the SDK retries a 429 once before the call gives up, except on the POST that creates a Role");
 	}
 
 	[Fact]
