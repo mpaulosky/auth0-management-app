@@ -196,7 +196,7 @@ User and Role management isn't built yet; these are the settings it will need.
    | Permission | Used to |
    | ---------- | ------- |
    | `read:users` | List Users and read one User's profile and Roles |
-   | `update:users` | Change a User's name, email and the other profile fields |
+   | `update:users` | Change a User's name, email and the other Profile Fields |
    | `read:roles` | List the Tenant's Roles |
    | `create:roles` | Create a Role |
    | `create:role_members` | Assign a Role to a User |
@@ -215,7 +215,7 @@ User and Role management isn't built yet; these are the settings it will need.
    Outside Development, set `Auth0__Management__Domain`, `Auth0__Management__ClientId` and
    `Auth0__Management__ClientSecret` instead.
 
-Auth0 lets the app change a User's profile fields only where Auth0 owns them: Users in a database connection, or Users
+Auth0 lets the app change a User's Profile Fields only where Auth0 owns them: Users in a database connection, or Users
 from a social or enterprise connection whose profile isn't synced at each login. Otherwise the identity provider
 overwrites the change at that User's next sign-in.
 
