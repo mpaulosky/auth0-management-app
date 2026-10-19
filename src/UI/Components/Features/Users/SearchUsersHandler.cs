@@ -68,6 +68,7 @@ public sealed class SearchUsersHandler
 			return FailedWith<UserListPage>(search);
 		}
 
+		// A successful Result carries its value, so each Value! here and in FindAdminIdsAsync follows a Failure check.
 		int pageCount = UserPaging.ReachablePageCount(search.Value!.Total);
 		if (page > pageCount)
 		{
@@ -87,7 +88,7 @@ public sealed class SearchUsersHandler
 			return FailedWith<UserListPage>(adminIds);
 		}
 
-		UserPage users = search.Value;
+		UserPage users = search.Value!;
 
 		return Result.Ok(new UserListPage(users.Users, users.Total, page, pageCount, users.Total > UserPaging.SearchCap,
 			adminIds.Value!));

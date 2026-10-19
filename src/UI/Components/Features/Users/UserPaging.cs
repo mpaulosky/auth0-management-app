@@ -20,14 +20,14 @@ public static class UserPaging
 	public const int PageSize = 25;
 
 	/// <summary>
-	///   The last page Auth0 will return: it searches only the first 1000 Users.
-	/// </summary>
-	public const int MaxPage = 1000 / PageSize;
-
-	/// <summary>
 	///   The most Users Auth0 will search, past which the list shows a note to narrow the search.
 	/// </summary>
 	public const int SearchCap = 1000;
+
+	/// <summary>
+	///   The last page Auth0 will return: it searches only the first <see cref="SearchCap" /> Users.
+	/// </summary>
+	public const int MaxPage = SearchCap / PageSize;
 
 	/// <summary>
 	///   Counts the pages the Admin can reach for a search that matched <paramref name="total" /> Users.

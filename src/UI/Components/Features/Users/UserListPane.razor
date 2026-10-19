@@ -10,7 +10,7 @@
 	<div>
 		<label for="user-search" class="sr-only">Search Users</label>
 		<input id="user-search" type="search" autocomplete="off" placeholder="Search name or email" value="@_text"
-			   @oninput="OnInput" @onkeydown="OnKeyDown"
+			   @oninput="OnInput" @onkeydown="OnKeyDownAsync"
 			   class="w-full rounded-xl border border-accent-300 bg-white/80 px-4 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 dark:border-accent-700 dark:bg-accent-900/70 dark:placeholder:text-slate-300 dark:focus-visible:outline-accent-300" />
 	</div>
 
@@ -120,7 +120,7 @@
 		_ = SearchAfterDelayAsync(_text, source.Token);
 	}
 
-	private async Task OnKeyDown(KeyboardEventArgs e)
+	private async Task OnKeyDownAsync(KeyboardEventArgs e)
 	{
 		if (e.Key != "Enter")
 		{
@@ -187,11 +187,12 @@
 
 		if (result.Failure)
 		{
+			bool rateLimited = result.ErrorCode == ResultErrorCode.RateLimited;
 			_error = result.Error;
-			_errorTone = result.ErrorCode == ResultErrorCode.RateLimited ? AlertTone.Warning : AlertTone.Error;
+			_errorTone = rateLimited ? AlertTone.Warning : AlertTone.Error;
 
 			// A rate limit says nothing about the search, so the last list stays. Any other failure leaves nothing to show.
-			if (result.ErrorCode != ResultErrorCode.RateLimited)
+			if (!rateLimited)
 			{
 				_list = null;
 			}
@@ -222,7 +223,8 @@
 
 	// Auth0's picture is a URL it took from the identity provider, so only a web address becomes an <img src>.
 	private static string? PictureOf(UserSummary user) =>
-		Uri.TryCreate(user.Picture, UriKind.Absolute, out Uri? uri) && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+		Uri.TryCreate(user.Picture, UriKind.Absolute, out Uri? uri) &&
+		(uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
 			? uri.AbsoluteUri
 			: null;
 
