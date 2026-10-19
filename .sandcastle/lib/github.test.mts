@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { execFileSync } from "node:child_process";
-import { COPILOT_REVIEWER, REVIEW_LABEL, SANDCASTLE_LABELS } from "./config.mts";
+import { COPILOT_REVIEWER, REVIEW_LABEL, REVIEW_LABEL_DEFINITION, SANDCASTLE_LABELS } from "./config.mts";
 import {
   addIssueLabel,
   addPullRequestLabel,
@@ -15,6 +15,7 @@ import {
   commentOnPullRequest,
   type ContentEdit,
   createIssue,
+  ensureHostLabels,
   ensureLabels,
   failedCheckLogs,
   type GhIssue,
@@ -32,6 +33,7 @@ import {
   markerComments,
   markerCommentsSince,
   openIssuesWithComment,
+  hasCarriedReviewLabel,
   openPullRequest,
   openPullRequestsForSweep,
   pullRequestFiles,
@@ -577,6 +579,79 @@ describe("listSandcastleIssues", () => {
     const { run } = recordingGh([JSON.stringify(viewed)]);
 
     assert.throws(() => listSandcastleIssues(run, "o/r", new Map(), quiet, { kind: "issue", number: 146 }), /pull request/);
+  });
+});
+
+// #51: the check openPullRequest and the follow-up sweep share.
+describe("hasCarriedReviewLabel", () => {
+  const event = (kind: "labeled" | "unlabeled", label: string): TimelineLabelEvent => ({ event: kind, label, createdAt: "2026-10-19T21:55:00Z" });
+
+  it("is false for an empty timeline", () => {
+    assert.equal(hasCarriedReviewLabel([]), false);
+  });
+
+  it("is false when only other labels were ever added", () => {
+    assert.equal(hasCarriedReviewLabel([event("labeled", "docs-only"), event("unlabeled", "docs-only")]), false);
+  });
+
+  it("is false when the only review:claude event is an unlabeled one", () => {
+    assert.equal(hasCarriedReviewLabel([event("unlabeled", REVIEW_LABEL)]), false);
+  });
+
+  it("is true once review:claude was added", () => {
+    assert.equal(hasCarriedReviewLabel([event("labeled", REVIEW_LABEL)]), true);
+  });
+
+  it("is still true after review:claude was taken off", () => {
+    assert.equal(hasCarriedReviewLabel([event("labeled", REVIEW_LABEL), event("unlabeled", REVIEW_LABEL)]), true);
+  });
+
+  it("matches the label name case-insensitively, as GitHub does", () => {
+    assert.equal(hasCarriedReviewLabel([event("labeled", "Review:Claude")]), true);
+  });
+});
+
+// #51: review:claude is created at startup, but outside SANDCASTLE_LABELS.
+describe("ensureHostLabels", () => {
+  it("creates review:claude with its colour and description when the repository doesn't have it", () => {
+    const { calls, run } = recordingGh([JSON.stringify(SANDCASTLE_LABELS.map((label) => label.name))]);
+
+    ensureHostLabels(run, "o/r");
+
+    const created = calls.filter((call) => call.args[1] === "create");
+    assert.deepEqual(
+      created.map((call) => call.args),
+      [["label", "create", "review:claude", "--repo", "o/r", "--color", "8957e5", "--description", "Ask Claude to review this PR"]],
+    );
+  });
+
+  it("doesn't recreate review:claude when the repository already has it, whatever its case", () => {
+    const { calls, run } = recordingGh([JSON.stringify([...SANDCASTLE_LABELS.map((label) => label.name), "Review:Claude"])]);
+
+    ensureHostLabels(run, "o/r");
+
+    assert.deepEqual(calls.filter((call) => call.args[1] === "create"), []);
+  });
+
+  it("still creates the sandcastle:* labels the repository lacks", () => {
+    const { calls, run } = recordingGh(["[]"]);
+
+    ensureHostLabels(run, "o/r");
+
+    const created = calls.filter((call) => call.args[1] === "create").map((call) => call.args[2]);
+    assert.deepEqual(created, [...SANDCASTLE_LABELS.map((label) => label.name), REVIEW_LABEL]);
+  });
+
+  it("reads the repository's labels once", () => {
+    const { calls, run } = recordingGh(["[]"]);
+
+    ensureHostLabels(run, "o/r");
+
+    assert.equal(calls.filter((call) => call.args[1] === "list").length, 1);
+  });
+
+  it("creates the label with REVIEW_LABEL_DEFINITION's values", () => {
+    assert.deepEqual(REVIEW_LABEL_DEFINITION, { name: "review:claude", color: "8957e5", description: "Ask Claude to review this PR" });
   });
 });
 

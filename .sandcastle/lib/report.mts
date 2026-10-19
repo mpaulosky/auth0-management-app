@@ -175,6 +175,12 @@ export class UnlabelledPrReport {
 // The one report every failed review-label add records into.
 export const unlabelledPrReport = new UnlabelledPrReport();
 
+// Whether main.mts must exit non-zero for the PRs it left without REVIEW_LABEL:
+// a failed label add ends the run green otherwise, and nobody is notified.
+export function unlabelledPrExitCode(entries: readonly UnlabelledPrEntry[]): number {
+  throw new Error("Not implemented");
+}
+
 // One round where intake (lib/intake.mts#intakeRound) stopped rather than
 // judge every issue: it hit INTAKE_FAILED_RUNS_LIMIT failed runs or
 // INTAKE_REFUSED_BATCHES_LIMIT refused batches in a row, so the issues it

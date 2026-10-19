@@ -287,6 +287,14 @@ export function openPullRequest(
   return url;
 }
 
+// Whether `timeline` has a "labeled" event for REVIEW_LABEL: the PR carried it
+// at some point, even if PR Auto-Merge or a person has since removed it. Both
+// openPullRequest and the follow-up sweep (lib/follow-up.mts) use it, so a PR
+// that has had the label is never labelled again and the review cap holds.
+export function hasCarriedReviewLabel(timeline: readonly TimelineLabelEvent[]): boolean {
+  throw new Error("Not implemented");
+}
+
 // GitHub matches label names case-insensitively.
 function isReviewLabel(name: string): boolean {
   return name.toLowerCase() === REVIEW_LABEL.toLowerCase();
@@ -1053,6 +1061,12 @@ export function ensureLabels(
       if (!String(error).includes("already exists")) throw error;
     }
   }
+}
+
+// Creates every label the host needs at startup: SANDCASTLE_LABELS and
+// REVIEW_LABEL_DEFINITION, through ensureLabels.
+export function ensureHostLabels(run: typeof execFileSync = execFileSync, repo: string = repoName()): void {
+  throw new Error("Not implemented");
 }
 
 // Adds `label` to the issue `number`, or every label in it, in one edit so

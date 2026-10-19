@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   handBacksJson,
   intakeStopExitCode,
+  unlabelledPrExitCode,
   IntakeStopReport,
   OutcomeReport,
   REPORT_DIR,
@@ -127,6 +128,18 @@ describe("intakeStopExitCode", () => {
 
   it("is 1 when intake recorded any stop this run, whatever else happened", () => {
     assert.equal(intakeStopExitCode([{ reason: "8 intake runs in a row failed", unjudged: [1], firstError: "boom" }]), 1);
+  });
+});
+
+// #51: a PR left without review:claude must end the run red, since the owner's
+// PAT means GitHub notifies nobody and the run would otherwise end green.
+describe("unlabelledPrExitCode", () => {
+  it("is 0 when no PR was left without review:claude", () => {
+    assert.equal(unlabelledPrExitCode([]), 0);
+  });
+
+  it("is 1 when any PR was left without review:claude", () => {
+    assert.equal(unlabelledPrExitCode([{ pr: 9, url: "https://github.com/o/r/pull/9" }]), 1);
   });
 });
 
