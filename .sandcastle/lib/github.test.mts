@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { execFileSync } from "node:child_process";
-import { COPILOT_REVIEWER, SANDCASTLE_LABELS } from "./config.mts";
+import { COPILOT_REVIEWER, REVIEW_LABEL, SANDCASTLE_LABELS } from "./config.mts";
 import {
   addIssueLabel,
   addPullRequestLabel,
@@ -51,7 +51,7 @@ import {
   type TimestampedComment,
   updatePullRequestBranch,
 } from "./github.mts";
-import { HandBackReport, targetUrl } from "./report.mts";
+import { HandBackReport, targetUrl, UnlabelledPrReport } from "./report.mts";
 
 describe("ownerApproved", () => {
   // An issue carrying `comments`, each an [author, body] pair.
@@ -337,22 +337,54 @@ describe("sameRepository", () => {
 
 describe("openPullRequest", () => {
   const branch = "feature/4-add-search";
-  // A gh stub that lists `listed` and creates a PR at /pull/9.
-  const gh = (listed: object[]) => {
+  // A gh stub that lists `listed`, answers a timeline read with one line of
+  // JSON per event in `timeline`, creates a PR at /pull/9, and throws on
+  // `pr edit` when `editFails`.
+  const gh = (listed: object[], timeline: TimelineLabelEvent[] = [], editFails = false) => {
     const calls: { args: readonly string[]; input: unknown }[] = [];
     const run = ((_cmd: string, args: readonly string[], options: { input?: unknown }) => {
       calls.push({ args, input: options.input });
-      return args[1] === "list" ? JSON.stringify(listed) : "https://github.com/o/r/pull/9\n";
+      if (args[0] === "api") return timeline.map((event) => JSON.stringify(event)).join("\n");
+      if (args[1] === "list") return JSON.stringify(listed);
+      if (args[1] === "edit" && editFails) {
+        throw Object.assign(new Error("gh failed"), { stderr: "could not add label: 'review:claude' not found" });
+      }
+      return "https://github.com/o/r/pull/9\n";
     }) as unknown as typeof execFileSync;
     return { calls, run };
   };
+  const reused = (labels: string[]) => [
+    { number: 3, headRefName: branch, isCrossRepository: false, url: "https://github.com/o/r/pull/3", labels: labels.map((name) => ({ name })) },
+  ];
+  const labelEvent = (event: "labeled" | "unlabeled", label: string): TimelineLabelEvent => ({
+    event,
+    label,
+    createdAt: "2026-10-19T21:55:00Z",
+  });
+  const quiet = () => undefined;
 
-  it("reuses this repository's open PR for the branch", () => {
-    const { calls, run } = gh([{ number: 3, headRefName: branch, isCrossRepository: false, url: "https://github.com/o/r/pull/3" }]);
+  it("reuses this repository's open PR for the branch, leaving a PR that has the label as it is", () => {
+    const { calls, run } = gh(reused([REVIEW_LABEL]));
 
     assert.equal(openPullRequest(branch, "Add search", "Closes #4", run, "o/r"), "https://github.com/o/r/pull/3");
     assert.equal(calls.length, 1);
     assert.deepEqual(calls[0]!.args.slice(0, 6), ["pr", "list", "--repo", "o/r", "--head", branch]);
+  });
+
+  it("leaves a reused PR unlabelled once the label has been taken off it, so the review cap holds", () => {
+    const { calls, run } = gh(reused([]), [labelEvent("labeled", REVIEW_LABEL), labelEvent("unlabeled", REVIEW_LABEL)]);
+
+    openPullRequest(branch, "Add search", "Closes #4", run, "o/r");
+
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[1]!.args.slice(0, 3), ["api", "--paginate", "repos/o/r/issues/3/timeline"]);
+  });
+
+  it("labels a reused PR that has never carried the label, as when a create GitHub carried out is retried", () => {
+    const { calls, run } = gh(reused([]), [labelEvent("labeled", "docs-only")]);
+
+    assert.equal(openPullRequest(branch, "Add search", "Closes #4", run, "o/r"), "https://github.com/o/r/pull/3");
+    assert.deepEqual(calls[2]!.args, ["pr", "edit", "3", "--repo", "o/r", "--add-label", REVIEW_LABEL]);
   });
 
   it("opens a PR when only a fork has one from a branch of that name", () => {
@@ -363,6 +395,49 @@ describe("openPullRequest", () => {
       "pr", "create", "--repo", "o/r", "--base", "main", "--head", branch, "--title", "Add search", "--body-file", "-",
     ]);
     assert.equal(calls[1]!.input, "Closes #4");
+  });
+
+  it("labels a PR it opens review:claude, so Claude reviews it", () => {
+    const { calls, run } = gh([]);
+
+    openPullRequest(branch, "Add search", "Closes #4", run, "o/r");
+
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls[2]!.args, ["pr", "edit", "9", "--repo", "o/r", "--add-label", REVIEW_LABEL]);
+  });
+
+  it("still returns a PR it opened, with a warning, when labelling it fails", () => {
+    const { run } = gh([], [], true);
+    const warnings: string[] = [];
+
+    const url = openPullRequest(branch, "Add search", "Closes #4", run, "o/r", (message) => void warnings.push(message), new UnlabelledPrReport());
+
+    assert.equal(url, "https://github.com/o/r/pull/9");
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /review:claude/);
+    assert.match(warnings[0]!, /pull\/9/);
+  });
+
+  it("records a PR it couldn't label in the run report, so the job summary names it", () => {
+    const { run } = gh([], [], true);
+    const report = new UnlabelledPrReport();
+
+    openPullRequest(branch, "Add search", "Closes #4", run, "o/r", quiet, report);
+
+    assert.deepEqual(report.items(), [{ pr: 9, url: "https://github.com/o/r/pull/9" }]);
+  });
+
+  it("records a reused PR whose label history it couldn't read, rather than fail the publish", () => {
+    const run = ((_cmd: string, args: readonly string[]) => {
+      if (args[1] === "list") return JSON.stringify(reused([]));
+      throw Object.assign(new Error("gh failed"), { stderr: "HTTP 502: Bad Gateway" });
+    }) as unknown as typeof execFileSync;
+    const report = new UnlabelledPrReport();
+
+    const url = openPullRequest(branch, "Add search", "Closes #4", run, "o/r", quiet, report);
+
+    assert.equal(url, "https://github.com/o/r/pull/3");
+    assert.deepEqual(report.items(), [{ pr: 3, url: "https://github.com/o/r/pull/3" }]);
   });
 });
 

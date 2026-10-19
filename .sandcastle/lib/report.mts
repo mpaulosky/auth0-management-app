@@ -5,6 +5,7 @@
 
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import type { IterationUsage } from "@ai-hero/sandcastle";
+import { REVIEW_LABEL } from "./config.mts";
 
 type Usage = { -readonly [K in keyof IterationUsage]: number };
 
@@ -152,6 +153,28 @@ export class HumanThreadReport {
 // The one report every follow-up pass this run makes records into.
 export const humanThreadReport = new HumanThreadReport();
 
+// A PR the host opened or reused without REVIEW_LABEL because adding it failed
+// (lib/github.mts#openPullRequest): Claude never reviews it until a person
+// adds the label, and the run log alone is a line nobody reads in an
+// unattended run.
+export type UnlabelledPrEntry = { pr: number; url: string };
+
+// Every such PR this run left, so the run report names them.
+export class UnlabelledPrReport {
+  private readonly entries: UnlabelledPrEntry[] = [];
+
+  record(entry: UnlabelledPrEntry): void {
+    this.entries.push(entry);
+  }
+
+  items(): readonly UnlabelledPrEntry[] {
+    return this.entries;
+  }
+}
+
+// The one report every failed review-label add records into.
+export const unlabelledPrReport = new UnlabelledPrReport();
+
 // One round where intake (lib/intake.mts#intakeRound) stopped rather than
 // judge every issue: it hit INTAKE_FAILED_RUNS_LIMIT failed runs or
 // INTAKE_REFUSED_BATCHES_LIMIT refused batches in a row, so the issues it
@@ -201,14 +224,16 @@ export type SummaryInput = {
   humanThreads: readonly HumanThreadEntry[];
   usage: ReadonlyMap<string, IterationUsage>;
   stops: readonly IntakeStopEntry[];
+  unlabelledPrs: readonly UnlabelledPrEntry[];
 };
 
 // The run's report as Markdown, for .sandcastle/logs/summary.md and (when set)
 // $GITHUB_STEP_SUMMARY. See the design note at .sandcastle/work/81/design.md
 // for the exact shape: queue and ending sentence, a table of every touched
 // issue and PR with its outcome (plus one row per hand-back), the hand-backs
-// themselves with links, the PRs waiting on a person, any round where intake
-// stopped (#320), and a token-usage table by role with a total row.
+// themselves with links, the PRs waiting on a person, any PR left without
+// REVIEW_LABEL, any round where intake stopped (#320), and a token-usage
+// table by role with a total row.
 export function renderSummary(input: SummaryInput): string {
   const { repo } = input;
   const link = (target: ReportTarget): string =>
@@ -230,6 +255,7 @@ export function renderSummary(input: SummaryInput): string {
     "",
     ...waitingLines(input.waitingPrs, input.humanThreads, link),
     "",
+    ...unlabelledLines(input.unlabelledPrs),
     ...intakeStopLines(input.stops, link),
     "### Token usage by role",
     "",
@@ -305,6 +331,21 @@ function waitingLines(
         .map((thread) => `  - [thread by ${cell(thread.author ?? "a deleted account")}](${thread.url})`),
     ];
   });
+}
+
+// Only a run that left a PR without REVIEW_LABEL gets the section. Each
+// entry carries its PR's URL, so it stays linked when the repository name
+// couldn't be read.
+function unlabelledLines(unlabelledPrs: readonly UnlabelledPrEntry[]): string[] {
+  if (unlabelledPrs.length === 0) return [];
+  return [
+    `### Pull requests without \`${REVIEW_LABEL}\``,
+    "",
+    ...unlabelledPrs.map(
+      ({ pr, url }) => `- [PR #${pr}](${url}): couldn't add \`${REVIEW_LABEL}\`, so add it by hand for Claude to review it`,
+    ),
+    "",
+  ];
 }
 
 // Only a run whose intake stopped gets the section, since it's the reason the

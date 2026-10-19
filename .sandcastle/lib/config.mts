@@ -281,6 +281,11 @@ export const copyToWorktree = ["node_modules"];
 // a matching branch (#77).
 export const PR_MARKER = "<!-- sandcastle:pr -->";
 
+// The label that asks Claude to review a PR (.github/workflows/claude-review.yml).
+// The host adds it to each PR it opens (lib/github.mts#openPullRequest), so a
+// Sandcastle PR is reviewed without anyone adding it by hand.
+export const REVIEW_LABEL = "review:claude";
+
 // The login requestReviewsByLogin takes for Copilot's code review
 // (lib/follow-up.mts#sweepPullRequests).
 export const COPILOT_REVIEWER = "copilot-pull-request-reviewer[bot]";
