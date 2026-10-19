@@ -166,6 +166,7 @@ describe("renderSummary", () => {
       ["backend", usage(5, 6, 7, 8)],
     ]),
     stops: [],
+    unlabelledPrs: [],
   };
 
   it("names the queue and says the run finished", () => {
@@ -234,6 +235,21 @@ describe("renderSummary", () => {
     assert.ok(section.includes("a deleted account"));
   });
 
+  it("lists each PR left without review:claude, linked, so the owner adds it by hand", () => {
+    const summary = renderSummary({ ...fullInput, unlabelledPrs: [{ pr: 9, url: "https://github.com/o/r/pull/9" }] });
+
+    assert.match(summary, /### Pull requests without `review:claude`/);
+    const section = summary.slice(summary.indexOf("### Pull requests without"));
+    assert.ok(section.includes("[PR #9](https://github.com/o/r/pull/9)"));
+    assert.match(section, /add it by hand/);
+  });
+
+  it("leaves out the review-label section when every PR got the label", () => {
+    const summary = renderSummary(fullInput);
+
+    assert.doesNotMatch(summary, /### Pull requests without/);
+  });
+
   it("lists each role's token usage with a total row", () => {
     const summary = renderSummary(fullInput);
 
@@ -277,12 +293,14 @@ describe("renderSummary", () => {
       humanThreads: [],
       usage: new Map(),
       stops: [],
+      unlabelledPrs: [],
     });
 
     assert.match(summary, /Nothing was touched\./);
     assert.match(summary, /No role ran\./);
     assert.equal((summary.match(/None\./g) ?? []).length, 2);
     assert.ok(!summary.includes("### Intake stops"));
+    assert.ok(!summary.includes("### Pull requests without"));
   });
 
   it("leaves a target unlinked when the repository isn't known", () => {
