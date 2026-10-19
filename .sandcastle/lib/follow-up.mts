@@ -287,6 +287,9 @@ export const liveFollowUpGitHub: FollowUpGitHub = {
 // (see followUpPhase) returns both empty, never treated as work found.
 export type SweepResult = { needsPass: number[]; passes: PassTarget[] };
 
+// The PRs this run's sweeps found have carried REVIEW_LABEL (labelForReview).
+const carriedReviewLabel = new Set<number>();
+
 // Reads the host's login, the in-scope issues and the open PRs once, then
 // for each PR either skips it (sweepSkipReason) or applies `decide`, logging
 // what happened. A PR whose sandcastle:needs-human someone other than the
@@ -309,6 +312,7 @@ export function sweepPullRequests(
   outcomes: OutcomeReport = outcomeReport,
   waiting: WaitingPrReport = waitingPrReport,
   unlabelled: Pick<UnlabelledPrReport, "record" | "resolve"> = unlabelledPrReport,
+  carried: Set<number> = carriedReviewLabel,
 ): SweepResult {
   const host = github.hostLogin();
   const issues = github.inScopeIssues();
@@ -338,7 +342,7 @@ export function sweepPullRequests(
         log(`  ✋ PR #${pr.number}: ${restore.reason}, so it isn't swept.`);
         continue;
       }
-      labelForReview(pr, github, log, unlabelled);
+      labelForReview(pr, github, log, unlabelled, carried);
       // Not a bot's and not confirmed as the repository owner's: an owner
       // thread is the follow-up role's to answer (threadsForRole, and now
       // `decide` below), not left waiting on a person the way this count and
@@ -389,24 +393,29 @@ export function sweepPullRequests(
 // to add the label by hand and bypass the cap. A failed add warns and goes in
 // the run report. Neither throws, so the PR is still followed up, and the next
 // round's sweep tries again; any outcome but a failure resolves the PR's entry.
+// A PR found to have carried the label goes in `carried`, since a labeled
+// event never leaves the timeline, so the cap's PRs are read once a run rather
+// than every round.
 function labelForReview(
   pr: SweepPullRequest,
   github: FollowUpGitHub,
   log: (line: string) => void,
   unlabelled: Pick<UnlabelledPrReport, "record" | "resolve">,
+  carried: Set<number>,
 ): void {
-  if (hasLabel(pr, REVIEW_LABEL)) {
+  if (hasLabel(pr, REVIEW_LABEL) || carried.has(pr.number)) {
     unlabelled.resolve(pr.number);
     return;
   }
-  let carried: boolean;
+  let everLabelled: boolean;
   try {
-    carried = hasCarriedReviewLabel(github.labelTimeline(pr.number));
+    everLabelled = hasCarriedReviewLabel(github.labelTimeline(pr.number));
   } catch (error) {
     log(`  ⚠ Couldn't check whether PR #${pr.number} ever carried ${REVIEW_LABEL}; the next round's sweep checks again: ${error}`);
     return;
   }
-  if (carried) {
+  if (everLabelled) {
+    carried.add(pr.number);
     unlabelled.resolve(pr.number);
     return;
   }

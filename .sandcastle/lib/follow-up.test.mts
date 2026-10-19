@@ -1196,10 +1196,49 @@ describe("sweepPullRequests' review label", () => {
     label,
     createdAt: "2026-10-10T08:00:00Z",
   });
-  const run = (github: FollowUpGitHub, unlabelled = new UnlabelledPrReport()) => {
-    sweepPullRequests(github, () => {}, NOW, new OutcomeReport(), new WaitingPrReport(), unlabelled);
+  const run = (github: FollowUpGitHub, unlabelled = new UnlabelledPrReport(), carried = new Set<number>()) => {
+    sweepPullRequests(github, () => {}, NOW, new OutcomeReport(), new WaitingPrReport(), unlabelled, carried);
     return unlabelled;
   };
+  // Counts the label-event reads of each PR, so a test can pin how often the
+  // sweep reads one across rounds.
+  const countingReads = (github: FollowUpGitHub) => {
+    const reads: number[] = [];
+    const read = github.labelTimeline;
+    github.labelTimeline = (number) => {
+      reads.push(number);
+      return read(number);
+    };
+    return reads;
+  };
+
+  // A labeled event never leaves the timeline, so the cap's PRs, swept every
+  // round without the label, are read once per run rather than once per round.
+  it("reads a PR's label events once a run once it finds the PR has carried review:claude", () => {
+    const { github, addedPrLabels } = stubGithub({
+      prs: [pr({ labels: [] })],
+      timelines: { 101: [labeled(REVIEW_LABEL), labeled(REVIEW_LABEL, "unlabeled")] },
+    });
+    const reads = countingReads(github);
+    const carried = new Set<number>();
+
+    run(github, new UnlabelledPrReport(), carried);
+    run(github, new UnlabelledPrReport(), carried);
+
+    assert.deepEqual(reads, [101]);
+    assert.deepEqual(addedPrLabels, []);
+  });
+
+  it("reads a PR's label events again the next round when the read failed", () => {
+    const { github } = stubGithub({ prs: [pr({ labels: [] })], failTimelineFor: [101] });
+    const reads = countingReads(github);
+    const carried = new Set<number>();
+
+    run(github, new UnlabelledPrReport(), carried);
+    run(github, new UnlabelledPrReport(), carried);
+
+    assert.deepEqual(reads, [101, 101]);
+  });
 
   it("adds review:claude to a host PR that has never carried it", () => {
     const { github, addedPrLabels } = stubGithub({ prs: [pr({ labels: [] })], timelines: { 101: [labeled("docs-only")] } });
