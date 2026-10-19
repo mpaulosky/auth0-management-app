@@ -298,6 +298,13 @@ hooks off. It never runs git or `gh` in the agent's worktree: git there would ru
 host. The gate already ran in the sandbox, and CI stays the independent check ([model and budget decision](https://github.com/mpaulosky/Blazor-Server/issues/64)). No gate-pass
 marker is written: `.git/config` is read-only in the sandbox, and no hook runs on the host's push. See `.sandcastle/lib/host-safety.mts`.
 
+**Labelling the PR.** A PR the host opens gets `review:claude` straight after it's created, so Claude reviews it without anyone adding the label (`openPullRequest` in
+`lib/github.mts`). A PR the host finds already open for the branch gets the label only if it has never carried it, going by its label events: PR Auto-Merge removes
+`review:claude` once the review cap is reached, and adding it back on every publish would get round that cap. A reused PR that never had it is one whose create GitHub carried out
+but answered with an error, which `publish` retries. A run that stops between the create and the label isn't covered: no later run reuses that PR, since the gate holds back
+an issue with an open PR, so its PR stays unlabelled and no report lists it. A failure to add the label, or to read the PR's label events, only warns, so the PR is still published.
+The run report lists the PR under **Pull requests without `review:claude`**, and the owner adds the label by hand.
+
 A push or `gh pr create` that fails with a GitHub server error (a `5xx` or `Internal Server Error` in git's or gh's output) is retried with backoff, up to
 `PUBLISH_RETRY_ATTEMPTS` attempts in all. Any other failure, such as a push that doesn't fast-forward, isn't retried. When publishing still fails, the issue gets a comment with
 the error, the branch keeps its commits, and the run summary lists the branch as stranded rather than reporting a round that built nothing.
@@ -422,10 +429,10 @@ transcripts in `.sandcastle/logs/` are not: any signed-in user can download a pu
 printed the sandbox's Claude credential would publish it. At the end of every run, including one that ended on an
 error, `lib/report.mts` writes the run report to `.sandcastle/logs/summary.md` and appends it to the job summary (`$GITHUB_STEP_SUMMARY`). It says how the run ended (finished,
 stopped on the time budget or usage limit, or crashed) and lists each issue or PR touched and its outcome (published, deferred, handed back, role failed, gate failed, timed
-out, stopped, not published, updated, follow-up pass), each hand-back with a link, the open Sandcastle PRs waiting on unresolved review threads a person opened, and each role's
-token usage. `.sandcastle/logs/handbacks.json` holds the run's hand-backs as an array of `{ kind, number, label, reason, url }`, empty when there were none, for the workflow
-step that ends the run red. There is no run-summary comment on issues or PRs; the only comments are the ones the phases above post (intake verdicts, critique deferrals,
-architect design notes, follow-up pass summaries, build-failure markers and hand-backs).
+out, stopped, not published, updated, follow-up pass), each hand-back with a link, the open Sandcastle PRs waiting on unresolved review threads a person opened, each PR it
+couldn't label `review:claude`, and each role's token usage. `.sandcastle/logs/handbacks.json` holds the run's hand-backs as an array of
+`{ kind, number, label, reason, url }`, empty when there were none, for the workflow step that ends the run red. There is no run-summary comment on issues or PRs; the only
+comments are the ones the phases above post (intake verdicts, critique deferrals, architect design notes, follow-up pass summaries, build-failure markers and hand-backs).
 
 ## Proposed module layout
 

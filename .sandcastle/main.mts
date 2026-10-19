@@ -127,6 +127,7 @@ import {
   MAX_ITERATIONS,
   QueueScopeError,
   queueScopeFrom,
+  REVIEW_LABEL,
   type QueueScope,
 } from "./lib/config.mts";
 import { critiqueRound } from "./lib/critique.mts";
@@ -149,6 +150,7 @@ import {
   outcomeReport,
   renderSummary,
   REPORT_DIR,
+  unlabelledPrReport,
   usageReport,
   waitingPrReport,
   writeRunReport,
@@ -498,6 +500,14 @@ try {
     }
   }
 
+  const unlabelledPrs = unlabelledPrReport.items();
+  if (unlabelledPrs.length > 0) {
+    console.log(`\nPull requests without ${REVIEW_LABEL}, to label by hand:`);
+    for (const { pr, url } of unlabelledPrs) {
+      console.log(`  PR #${pr} (${url})`);
+    }
+  }
+
   // writeRunReport never throws, so the run's own error, if any, still
   // reaches the process.
   const summary = renderSummary({
@@ -510,6 +520,7 @@ try {
     humanThreads,
     usage: usageReport.totals(),
     stops: intakeStopReport.items(),
+    unlabelledPrs,
   });
   writeRunReport(summary, handBacks);
   console.log(`\nRun report: ${REPORT_DIR}/summary.md`);

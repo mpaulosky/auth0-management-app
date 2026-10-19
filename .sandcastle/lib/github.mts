@@ -6,9 +6,9 @@
 
 import { execFileSync } from "node:child_process";
 import { endOf } from "./checkpoint.mts";
-import { COPILOT_REVIEWER, QUEUE_LABEL, SANDCASTLE_LABELS, type QueueScope, type SandcastleLabel } from "./config.mts";
+import { COPILOT_REVIEWER, QUEUE_LABEL, REVIEW_LABEL, SANDCASTLE_LABELS, type QueueScope, type SandcastleLabel } from "./config.mts";
 import type { CheckState, SweepPullRequest } from "./follow-up.mts";
-import { handBackReport, targetUrl, type HandBackReport } from "./report.mts";
+import { handBackReport, targetUrl, unlabelledPrReport, type HandBackReport, type UnlabelledPrReport } from "./report.mts";
 import { sh } from "./shell.mts";
 
 let repo: string | undefined;
@@ -242,25 +242,75 @@ function ghWithStderr(run: typeof execFileSync, args: string[], input?: string, 
   }
 }
 
+// A PR this opens gets REVIEW_LABEL, so Claude reviews it. A PR it reuses
+// gets it only if it has never carried it: PR Auto-Merge removes the label
+// once the review cap is reached, and adding it back on every publish would
+// get round that cap. A reused PR can still be one this never labelled: a
+// create GitHub carried out but answered with an error, retried by
+// lib/build.mts#publish. A run that stops between the create and the label
+// isn't covered: no later run calls this for that branch, since the gate holds
+// back an issue with an open PR, so its PR stays unlabelled and unreported.
+// Labelling comes after the create, and a failure only warns and goes in the
+// run report, so a missing label never costs a finished build its PR and the
+// owner still sees it.
 export function openPullRequest(
   branch: string,
   title: string,
   body: string,
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
+  warn: (message: string) => void = console.error,
+  report: Pick<UnlabelledPrReport, "record"> = unlabelledPrReport,
 ): string {
   const listed = JSON.parse(
     ghWithStderr(run, [
-      "pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,headRefName,isCrossRepository,url",
+      "pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,headRefName,isCrossRepository,labels,url",
     ]),
-  ) as ListedPullRequest[];
-  const existing = sameRepository(listed).find((pr) => pr.headRefName === branch)?.url;
-  if (existing) return existing;
-  return ghWithStderr(
+  ) as (ListedPullRequest & { labels?: { name: string }[] })[];
+  const existing = sameRepository(listed).find((pr) => pr.headRefName === branch);
+  if (existing?.url) {
+    const { number, url } = existing;
+    const carriesLabel = (existing.labels ?? []).some(({ name }) => isReviewLabel(name));
+    if (!carriesLabel) {
+      addReviewLabel(number, url, run, repo, warn, report, () =>
+        labelTimeline(number, run, repo).some((event) => event.event === "labeled" && isReviewLabel(event.label)),
+      );
+    }
+    return url;
+  }
+  const url = ghWithStderr(
     run,
     ["pr", "create", "--repo", repo, "--base", "main", "--head", branch, "--title", title, "--body-file", "-"],
     body,
   ).trim();
+  addReviewLabel(Number(url.slice(url.lastIndexOf("/") + 1)), url, run, repo, warn, report, () => false);
+  return url;
+}
+
+// GitHub matches label names case-insensitively.
+function isReviewLabel(name: string): boolean {
+  return name.toLowerCase() === REVIEW_LABEL.toLowerCase();
+}
+
+// Adds REVIEW_LABEL to the PR `number` unless `everLabelled` says it has
+// carried it before. A failure, reading the history included, warns and
+// records the PR rather than throw.
+function addReviewLabel(
+  number: number,
+  url: string,
+  run: typeof execFileSync,
+  repo: string,
+  warn: (message: string) => void,
+  report: Pick<UnlabelledPrReport, "record">,
+  everLabelled: () => boolean,
+): void {
+  try {
+    if (everLabelled()) return;
+    ghWithStderr(run, ["pr", "edit", String(number), "--repo", repo, "--add-label", REVIEW_LABEL]);
+  } catch (error) {
+    warn(`  ⚠ Couldn't add ${REVIEW_LABEL} to ${url}, so add it by hand for Claude to review it: ${error}`);
+    report.record({ pr: number, url });
+  }
 }
 
 // The fields the follow-up sweep (lib/follow-up.mts) checks on every PR it
