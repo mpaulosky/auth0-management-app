@@ -1,7 +1,8 @@
 # One deep seam in front of the Management API
 
 The Users and Roles slices reach the Management API through one interface of our own, `IManagementApi`, in `src/UI/ManagementApi/` (`UI.ManagementApi`). It has one method
-per use case (search Users, get a User, update their Profile Fields, assign or remove a Role, list Roles, create a Role, list the Users who hold a Role, and count them uncached). Each method returns a
+per use case (search Users, get a User, update their Profile Fields, assign or remove a Role, list Roles, create a Role, list the Users who hold a Role, count them
+uncached, and check uncached whether a User holds a Role). Each method returns a
 `Result` or `Result<T>` and carries records of our own, never the `Auth0.ManagementApi` SDK's types. Expected failures (not found, a Role that already exists, a field Auth0 won't
 change, and a 429 still refused after the SDK's retries, as `ManagementApi.RateLimited`) come back as a failed `Result` with a stable code in `Details`; failures that shouldn't
 happen, such as a failed token exchange or a 5xx after the retries, throw.
@@ -37,13 +38,18 @@ This departs from `mpaulosky/Articles`, the reference `CLAUDE.md` points to, who
   at 1000 members and says so with `RoleMembers.Truncated`, so the `User` Role, which every User who signs up holds, costs at most 10 requests. Adapter tests
   cover a Role with more than one page of members, and a page that returns 429 partway through, which fails the whole listing with `ManagementApi.RateLimited` rather
   than returning part of the membership.
-- The adapter throttles every Management API call through a client-side token bucket (`TokenBucketRateLimiter`) that matches Auth0's, sized from `ManagementApiOptions`,
-  with defaults that match the Free tier: 2 a second, burst 2. Capping how many calls run at once isn't enough, because Auth0 refills its bucket by rate and answers a call
-  over the limit with a 429 at once rather than queueing it ([rate limit findings](../research/auth0-user-search-and-rate-limits.md)). The limiter queues calls in order,
-  and one still waiting after `ManagementApiOptions.QueueTimeout` (5 s by default) fails with `ManagementApi.RateLimited`.
+- Every HTTP request to the Management API, each page and the SDK's retry included, takes a token from a client-side token bucket (`TokenBucketRateLimiter`) in a
+  `DelegatingHandler` on the Management API's `HttpClient`. The bucket matches Auth0's, sized from `ManagementApiOptions`, with defaults that match the Free tier: 2 a
+  second, burst 2. It counts requests rather than `IManagementApi` calls, because one call can send several. Capping how many calls run at once isn't enough,
+  because Auth0 refills its bucket by rate and answers a call over the limit with a 429 at once rather than queueing it
+  ([rate limit findings](../research/auth0-user-search-and-rate-limits.md)). The limiter queues requests in order, and the handler answers one still waiting after
+  `ManagementApiOptions.QueueTimeout` (5 s by default) with a 429 of its own, so the call fails with `ManagementApi.RateLimited` through the same mapping as Auth0's
+  429.
 - The cache is in memory, in one process, with a short absolute expiry, and the app's own writes clear what they make stale. A change made elsewhere, such as in the Auth0
   Dashboard or by another instance of the app, shows only once the entry expires. So the last-Admin guard counts the `Admin` Role's members with
   `CountRoleMembersAsync(roleId, atMost)`, which the decorator never caches and which stops paging once it has seen `atMost` members, and never trusts a stale count.
+- The guard first checks, with `UserHoldsRoleAsync`, uncached, that the User holds `Admin` at all: removing it from someone who doesn't is a no-op that succeeds,
+  never a refusal.
 - The guard's read and the removal are two calls, and Auth0 has no conditional removal, so two Admins removing each other at once could both pass the guard. After removing
   `Admin`, the handler counts the `Admin` Role's members again, and if none remain it assigns the Role back and returns a failed `Result` with `User.LastAdmin`, the same
   code the guard refuses with before the removal. This

@@ -35,4 +35,9 @@ The rest of the app has no such need. The Theme and Palette controls, sign-in an
 - The management pages read the signed-in User through the cascading `Task<AuthenticationState>`, never `HttpContext`, as the coding standards require.
 - `[Authorize]` with the Admin policy on the page is enforced on the HTTP request that prerenders it, so a non-Admin never opens a circuit on a management page.
 - A Role change doesn't change an open circuit's claims. It takes effect at the User's next sign-in, as `CONTEXT.md` says.
+- The `Router` stays static, so a `NavigationManager.NavigateTo` from a management page is an enhanced navigation: a request that renders the page again on the
+  server. The pages therefore keep their search, page and selection in the URL with `history.replaceState`, from `OnAfterRenderAsync`, and use real navigation
+  only to move to another page.
+- The `ManagementApiErrorBoundary` that also wraps the static `/admin` page's counts can't run an `@onclick` there, so on a static page its Try again is a link that
+  reloads the page.
 - bUnit tests the interactive behaviour, because `WebApplicationFactory` tests only see the prerendered HTML.

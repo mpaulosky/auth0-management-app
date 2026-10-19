@@ -30,8 +30,8 @@ The work is split into the issues in [Implementation issues](#implementation-iss
 
 ## Pages and routes
 
-Decided in [What do the Users, User detail and Roles pages look like?](https://github.com/mpaulosky/auth0-management-app/issues/17). The throwaway prototype is on the branch
-[`prototype/management-pages`](https://github.com/mpaulosky/auth0-management-app/tree/prototype/management-pages): run `pnpm prototype` there, then open
+Decided in [What do the Users, User detail and Roles pages look like?](https://github.com/mpaulosky/auth0-management-app/issues/17). The throwaway prototype is at commit
+[`8fbd602`](https://github.com/mpaulosky/auth0-management-app/tree/8fbd602); its branch is deleted. Check it out in a worktree, run `pnpm prototype` there, then open
 `http://localhost:5112/admin/prototype?variant=A|B|C`.
 
 Every page below uses the existing `Card`, `Badge`, `Button` and `PageHeader` components and follows the Theme and Palette rules in
@@ -50,7 +50,8 @@ This is variant A's landing page. It is **open to everyone** and stays staticall
   - Admins: `CountRoleMembersAsync(Admin, atMost: 1000)`, shown as "1,000+" at the cap.
   - Roles: the `ListRolesAsync` count.
 
-  They sit inside the [Management API error boundary](#where-each-failure-shows).
+  They sit inside the [Management API error boundary](#where-each-failure-shows). The page is static, so there the boundary's **Try again** is a link that reloads
+  `/admin`, not a button.
 
 ### The Users page, `/admin/users?q=&page=&user={id}`
 
@@ -74,6 +75,9 @@ This is variant C's console without its User drawer, behind the Admin policy.
 - **The User table.**
   - Picking a tile filters it to the Users who hold that Role, and sets `role={id}` in the URL. With no Role picked, it lists the first page of Users from the search.
   - It has a column per Role, with a check where the User holds that Role.
+  - **A Role at the [member cap](#the-member-cap)** (`Truncated`) can't say who doesn't hold it. Its column marks a User outside the fetched members with "?" (titled
+    "Unknown: more than 1,000 Users hold this Role") instead of leaving the cell blank. Picking its tile lists the 1,000 fetched members, under the note
+    "Showing the first 1,000 Users who hold {Role}."
   - Each row links to that User on the Users page (`/admin/users?user={id}`).
 
 ### Moving between pages
@@ -106,7 +110,8 @@ All of it is in `src/UI/ManagementApi/`, in the namespace `UI.ManagementApi`. On
 - **The client:** a `ManagementClient` built for each call, with `Domain`, that `TokenProvider`, a client from the `"Auth0Management"` `HttpClient`, `MaxRetries = 1` and
   `Timeout = 10 s`. All are fixed in code.
 - **The adapter:** it translates our calls into the SDK's, pages, maps exceptions and builds our records.
-- **The client-side rate limiter:** a singleton `TokenBucketRateLimiter` that every call acquires a token from before it reaches Auth0 ([The rate limiter](#the-rate-limiter)).
+- **The client-side rate limiter:** a singleton `TokenBucketRateLimiter` that every HTTP request to `/api/v2/*` acquires a token from before it reaches Auth0
+  ([The rate limiter](#the-rate-limiter)).
 - **`CachedManagementApi`:** the decorator in front of the adapter ([The cache](#the-cache)).
 - **What tests use:** `IManagementApi` is the only seam. There's no factory interface.
 
@@ -124,6 +129,7 @@ public interface IManagementApi
 	Task<Result<RoleSummary>> CreateRoleAsync(NewRole role, CancellationToken cancellationToken);
 	Task<Result<RoleMembers>> ListRoleMembersAsync(string roleId, CancellationToken cancellationToken);
 	Task<Result<int>> CountRoleMembersAsync(string roleId, int atMost, CancellationToken cancellationToken);
+	Task<Result<bool>> UserHoldsRoleAsync(string userId, string roleId, CancellationToken cancellationToken);
 }
 ```
 
@@ -158,6 +164,7 @@ All of these are our own types, never the SDK's. The SDK's `UserIdentitySchema` 
 | `CreateRoleAsync` | `Roles.CreateAsync(CreateRoleRequestContent { Name, Description })` |
 | `ListRoleMembersAsync` | `Roles.Users.ListAsync(id, ListRoleUsersRequestParameters { From, Take = 100 })`, checkpoint paging, up to the [member cap](#the-member-cap) |
 | `CountRoleMembersAsync` | the same call, stopping as soon as `atMost` members have been seen, never cached |
+| `UserHoldsRoleAsync` | `Users.Roles.ListAsync(id, …)`, every page, never cached |
 
 ### The member cap
 
@@ -167,8 +174,14 @@ All of these are our own types, never the SDK's. The SDK's `UserIdentitySchema` 
 
 ### The rate limiter
 
-Every call acquires a token from a `TokenBucketRateLimiter` before it reaches Auth0. The bucket matches Auth0's own. The limiter queues calls in order, and a call still
-waiting after `QueueTimeout` fails with `ManagementApi.RateLimited`.
+The limiter counts HTTP requests, not `IManagementApi` calls: one call can send several requests (every page of a listing, `GetUserAsync`'s two, and the SDK's retry).
+
+- **Where it runs:** a `DelegatingHandler` on the `"Auth0Management"` `HttpClient` acquires one token from the `TokenBucketRateLimiter` for each request to `/api/v2/*`,
+  retries included. `/oauth/token` doesn't take one: the token is cached, and it's the Authentication API, with its own limits.
+- **The bucket** matches Auth0's own, from `PermitsPerSecond` and `Burst`. The limiter queues requests in order.
+- **A timeout:** a request still waiting after `QueueTimeout` gets a 429 from the handler itself, with no `X-RateLimit-*` headers, and never reaches Auth0. It then goes
+  through the SDK's retry and the adapter's mapping like Auth0's own 429, so the call fails with `ManagementApi.RateLimited`.
+- **In tests:** the limiter is registered as a singleton `RateLimiter`, so a test can replace it with one built with `AutoReplenishment = false` and replenish it by hand.
 
 ### Options
 
@@ -201,7 +214,11 @@ Decided in [How do the User list's search, paging and cache work?](https://githu
 - **The input:**
   - It's trimmed.
   - Lucene's special characters are escaped with `\`: `+ - && || ! ( ) { } [ ] ^ " ~ * ? : \ /`.
-  - An empty box sends no `q` and lists every User.
+  - Each run of whitespace inside it becomes one space escaped with `\`, so "Jane Doe" stays one prefix term per field: `name:Jane\ Doe*`. Splitting it into words joined
+    with `AND` doesn't work, because v3 doesn't split a field's value into words, so `name:Doe*` never matches "Jane Doe"
+    ([rate limit findings](../research/auth0-user-search-and-rate-limits.md)).
+  - An empty box sends no `q` and lists every User. There's no minimum length: a prefix term needs none.
+  - A query Auth0 still refuses with a 400 returns `User.SearchInvalid` ([The catalogue](#the-catalogue)).
 - **The sort order** is `name:1`.
 - **The placeholder** reads "Search name or email".
 - **Building `q`** is a pure function in the Users slice, with its own unit tests.
@@ -211,15 +228,28 @@ Decided in [How do the User list's search, paging and cache work?](https://githu
 - **As the Admin types,** with a **400 ms** debounce that waits on the injected `TimeProvider`. **Enter** searches at once.
 - **A newer search** cancels the one in flight through its `CancellationToken`.
 - **A new search** goes back to page 1.
-- **The URL:** `q`, `page` and `user` are written with `NavigationManager.NavigateTo(…, replace: true)`, so Back doesn't step through each keystroke.
+- **The URL:** `q`, `page` and `user` replace the current history entry, so Back doesn't step through each keystroke.
+  - The page writes them with `history.replaceState` through a small JS module, called from `OnAfterRenderAsync` when they've changed, never
+    `NavigationManager.NavigateTo`. The `Router` is static ([ADR 0010](../adr/0010-interactive-server-management-pages.md)), so a `NavigateTo` would be an enhanced
+    navigation: a request that renders the page again on the server, Management API reads included.
+  - The page reads `q`, `page` and `user` from the URL once, when it initializes, and keeps them as its own state after that, because `NavigationManager.Uri` doesn't see
+    a `replaceState`.
+  - Moving to another page, such as a row's link from the Roles page or the tab switch, is an ordinary navigation.
 
 ### Paging
 
 - **25 per page,** fixed in code.
 - **The controls** are the prototype's: "‹ Prev", "Page x of y · N Users" and "Next ›".
 - **`page` in the URL** is 1-based. A value below 1 or not a number is treated as 1, and one past the last reachable page shows the last reachable page.
+- **The page count:** the reachable page count is `max(1, min(ceil(total / 25), 40))`, a pure rule in the handler. A search with no matches is "Page 1 of 1 · 0 Users",
+  with "No Users match." in place of the rows.
+- **Clamping:** the handler can't know the last page before Auth0 returns the total, so it works in this order:
+  1. It clamps `page` to between 1 and 40 before any request.
+  2. It requests that page.
+  3. If the page is past the reachable page count the response gives, it requests the last reachable page instead. That overshoot costs one extra request.
+
+  The rule's unit tests cover a total of 0, an exact multiple of 25, a total over 1000, and an overshoot.
 - **The 1000 cap:**
-  - The reachable page count is `min(ceil(total / 25), 40)`, a pure rule in the handler.
   - Next is disabled on the last reachable page.
   - When `total > 1000`, a note reads "Auth0 shows only the first 1,000 of N matches. Narrow the search."
   - A page past the cap is clamped, and is never sent to Auth0.
@@ -259,11 +289,12 @@ Decided in [How do the User list's search, paging and cache work?](https://githu
 | The Role list | one key | 5 min |
 | A Role's members | role id | 60 s |
 
-`CountRoleMembersAsync` and every write go straight to the adapter.
+`CountRoleMembersAsync`, `UserHoldsRoleAsync` and every write go straight to the adapter.
 
 **What each write makes stale:**
 
-- `UpdateProfileFieldsAsync(user)`: evict that User and every search page. The search pages share a `CancellationChangeToken`, so they can be dropped together.
+- `UpdateProfileFieldsAsync(user)`: evict that User, every search page and every Role's members, because those carry the User's name, email and picture in
+  `UserSummary` rows. The search pages share one `CancellationChangeToken` and the Role-member entries another, so each set is dropped together.
   Auth0's search lags behind a save, so the Users page also patches the saved User's row in the page it has loaded.
 - `AssignRoleAsync` or `RemoveRoleAsync(user, role)`: evict that User and that Role's members.
 - `CreateRoleAsync`: evict the Role list.
@@ -339,11 +370,14 @@ Decided in [What is the Management API seam the Users and Roles slices call?](ht
 
 It lives in `RemoveRoleHandler`, and applies only when the Role being removed is `Admin`. The handler finds the `Admin` id through `ListRolesAsync`.
 
-1. **Before removing,** it calls `CountRoleMembersAsync(Admin, atMost: 2)`, which is uncached. If the count is below 2, it refuses with `User.LastAdmin` and never calls
-   `RemoveRoleAsync`.
-2. **It removes the Role.**
-3. **After removing,** it calls `CountRoleMembersAsync(Admin, atMost: 1)` again. If it's 0, because another Admin removed theirs at the same moment, it calls
-   `AssignRoleAsync` to put the Role back and returns `User.LastAdmin`.
+1. **Does the User hold `Admin`?** It calls `UserHoldsRoleAsync(user, Admin)`, which is uncached. If they don't, the removal is a no-op: it succeeds without calling
+   `RemoveRoleAsync`, and none of the steps below run. The detail pane can show an `Admin` chip from a cached User after a change elsewhere, so the guard never trusts
+   that.
+2. **Before removing,** it calls `CountRoleMembersAsync(Admin, atMost: 2)`, which is uncached. The User holds `Admin`, so a count below 2 means they're the last Admin:
+   it refuses with `User.LastAdmin` and never calls `RemoveRoleAsync`.
+3. **It removes the Role.**
+4. **After removing,** it calls `CountRoleMembersAsync(Admin, atMost: 1)` again. If it's 0, because another Admin removed theirs at the same moment, it calls
+   `AssignRoleAsync` to put the Role back and returns `User.LastAdmin`. The User held `Admin` at step 1, so the restore never gives it to someone who didn't.
 
 Removing your own `Admin` is allowed while another Admin exists. If the restore itself fails, the Tenant has no Admin until someone fixes it in the Auth0 Dashboard. The
 handler logs that at Critical.
@@ -380,7 +414,7 @@ throws.
 
 | Use case | Code | Category | Cause |
 | --- | --- | --- | --- |
-| Search Users | `User.SearchInvalid` | Validation | the validator |
+| Search Users | `User.SearchInvalid` | Validation | the validator, or Auth0's 400 for a query it can't parse, mapped on the search call only |
 | | `User.SearchTooBroad` | Validation | Auth0's 503 for a query that runs over about 2 s, mapped on the search call only |
 | Get a User | `User.NotFound` | NotFound | 404 |
 | Update Profile Fields | the field codes and `User.NoChanges` | Validation | the validator |
@@ -394,6 +428,7 @@ throws.
 | Create a Role | `Role.NameRequired`, `Role.NameTooLong`, `Role.DescriptionTooLong` | Validation | the validator |
 | | `Role.AlreadyExists` | Conflict | 409 |
 | List or count a Role's members | `Role.NotFound` | NotFound | 404 |
+| Check whether a User holds a Role | `User.NotFound` | NotFound | 404 |
 
 ### Rate limits
 
@@ -419,7 +454,9 @@ throws.
 - **The error boundary:** the management content of `/admin/users`, `/admin/roles` and the counts on `/admin` sits in a shared `ManagementApiErrorBoundary`
   (`Components/Shared/`), an `<ErrorBoundary>`.
   - It shows "The app couldn't reach Auth0's Management API. Try again, or ask whoever runs the app to check its Auth0 Management settings."
-  - Its **Try again** button calls `Recover()`.
+  - Its **Try again** depends on how it renders, which it reads from `RendererInfo.IsInteractive`:
+    - On the interactive `/admin/users` and `/admin/roles`, it's a button that calls `Recover()`.
+    - On the static `/admin`, where an `@onclick` never runs, it's a link to the current URL, which reloads the page.
 - **A validation code** shows under its field.
 - **`User.NotFound`** for the selected User replaces the detail pane with "This User no longer exists in the Tenant." The list stays, and a stale `?user=` shows the same
   message.
@@ -468,27 +505,31 @@ These tests run everywhere, the Sandcastle sandbox included.
   - `src/UI` gets no `InternalsVisibleTo`.
   - What they cover:
     - every status-code mapping in [the catalogue](#the-catalogue)
-    - the Lucene query and its escaping, as sent
+    - the Lucene query and its escaping, as sent, whitespace included
     - checkpoint paging, the member cap with `Truncated`, and a 429 partway through
-    - `CountRoleMembersAsync` stopping at `atMost`
+    - `CountRoleMembersAsync` stopping at `atMost`, and `UserHoldsRoleAsync`
     - each cache lifetime and invalidation rule, a cache hit showing as no second request
-    - the limiter timing out a queued call
+    - the limiter pacing a multi-page listing, one token per request, with a hand-replenished limiter
+    - the limiter timing out a queued request, which reaches `ManagementApi.RateLimited` and never reaches the stub
 - **Handlers and validators, in `UI.Tests.Unit/Components/Features/<Slice>/`:**
   - Each handler's success path, and every code it can return.
   - A `[Theory]` for each validator rule.
   - The pure rules: the reachable page count, the changed-fields diff, `EditableFields` for each connection type, and the retry seconds.
-  - The last-Admin guard's refusal (with `Received(0)` on `RemoveRoleAsync`) and its restore.
+  - The last-Admin guard's refusal (with `Received(0)` on `RemoveRoleAsync`), its restore, and removing `Admin` from a User who doesn't hold it while only one Admin
+    exists, which succeeds without calling `RemoveRoleAsync`.
   - The change logs, checked with `FakeLogger` from `Microsoft.Extensions.Diagnostics.Testing`, a new test-only package: the log carries the `AdminId` and the field names, never
     a value.
 - **bUnit:**
   - The real handlers and validators run, with a substituted `IManagementApi`, a `FakeNavigationManager` and a `FakeTimeProvider`.
   - It covers every behaviour in [Pages and routes](#pages-and-routes), [Search and paging](#search-and-paging), [Profile Fields](#profile-fields),
     [Roles on a User](#roles-on-a-user), [Creating a Role](#creating-a-role) and [Where each failure shows](#where-each-failure-shows).
-  - It also covers `Alert`, and `ManagementApiErrorBoundary`'s Try again.
+  - It also covers `Alert`, and `ManagementApiErrorBoundary`'s Try again, in both its interactive and static forms.
+  - The Roles page's "?" cells and note for a `Truncated` Role.
 - **`WebApplicationFactory` integration tests:**
   - `UiWebApplicationFactory` gains placeholder `Auth0:Management:*` settings, and the tests substitute `IManagementApi`.
   - On `/admin/users` and `/admin/roles`, a Visitor is redirected to sign in, a User without `Admin` gets 403, and an Admin gets 200.
   - `/admin` returns 200 for everyone, with counts only for an Admin.
+  - With an `IManagementApi` that throws, `/admin` returns 200 for an Admin, showing the error boundary's message and its Try again link to `/admin`.
   - With any one `Auth0:Management:*` setting missing, the host fails to start.
   - `IManagementApi` resolves to `CachedManagementApi`, registered once when both slice registrations run.
 - **Architecture tests:**
@@ -516,7 +557,7 @@ The Tenant in the UI's user secrets is a private testing Tenant on the Free tier
     - `GetUserAsync` on the target User
     - a nickname change, reverted in the cleanup
     - assigning and removing the test Role on the target User
-    - `ListRoleMembersAsync` and `CountRoleMembersAsync`
+    - `ListRoleMembersAsync`, `CountRoleMembersAsync` and `UserHoldsRoleAsync`
     - a 404 for an unknown User id, mapped to `User.NotFound`
     - `CreateRoleAsync` with a fixed name: the first run creates it, and every later run proves `Role.AlreadyExists` against Auth0's real 409
   - Together they also prove the permissions in the README's table.
