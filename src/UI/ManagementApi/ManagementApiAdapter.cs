@@ -41,7 +41,7 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 	private const string SettingsHint =
 		"Check the Auth0:Management:Domain, Auth0:Management:ClientId and Auth0:Management:ClientSecret settings, and that the Machine to Machine application has the permissions in the README's permission table.";
 
-	private static readonly TimeSpan s_timeout = TimeSpan.FromSeconds(10);
+	private static readonly TimeSpan ClientTimeout = TimeSpan.FromSeconds(10);
 
 	private readonly IHttpClientFactory _httpClientFactory;
 	private readonly ILogger<ManagementApiAdapter> _logger;
@@ -368,7 +368,7 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 			TokenProvider = _tokenProvider,
 			HttpClient = _httpClientFactory.CreateClient(HttpClientName),
 			MaxRetries = 1,
-			Timeout = s_timeout,
+			Timeout = ClientTimeout,
 		});
 	}
 
@@ -424,33 +424,14 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 
 	private static UpdateUserRequestContent ToRequest(ProfileFieldsChange change)
 	{
-		UpdateUserRequestContent request = new();
-
-		// An unset Optional is left out of the body; an Optional holding null sends an explicit null, which clears it.
-		if (change.Name is not null)
+		UpdateUserRequestContent request = new()
 		{
-			request.Name = OptionalOf(change.Name);
-		}
-
-		if (change.GivenName is not null)
-		{
-			request.GivenName = OptionalOf(change.GivenName);
-		}
-
-		if (change.FamilyName is not null)
-		{
-			request.FamilyName = OptionalOf(change.FamilyName);
-		}
-
-		if (change.Nickname is not null)
-		{
-			request.Nickname = OptionalOf(change.Nickname);
-		}
-
-		if (change.Picture is not null)
-		{
-			request.Picture = OptionalOf(change.Picture);
-		}
+			Name = OptionalOf(change.Name),
+			GivenName = OptionalOf(change.GivenName),
+			FamilyName = OptionalOf(change.FamilyName),
+			Nickname = OptionalOf(change.Nickname),
+			Picture = OptionalOf(change.Picture),
+		};
 
 		if (change.Email is not null)
 		{
@@ -463,9 +444,15 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 		return request;
 	}
 
-	private static Optional<string?> OptionalOf(string value)
+	// An undefined Optional is left out of the body; one holding null sends an explicit null, which clears the field.
+	private static Optional<string?> OptionalOf(string? value)
 	{
-		return Optional<string?>.Of(value.Length == 0 ? null : value);
+		return value switch
+		{
+			null => Optional<string?>.Undefined,
+			"" => Optional<string?>.Of(null),
+			_ => Optional<string?>.Of(value),
+		};
 	}
 
 	// Assumes Auth0's default "Sync user profile attributes at each login": the app has no read:connections permission

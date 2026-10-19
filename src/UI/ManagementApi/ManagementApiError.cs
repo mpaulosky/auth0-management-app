@@ -77,19 +77,6 @@ internal sealed record ManagementApiError(string Code, ResultErrorCode Category,
 	}
 
 	/// <summary>
-	///   The whole seconds until <paramref name="reset" />, rounded up and at least 1.
-	/// </summary>
-	/// <param name="reset">When Auth0's bucket refills.</param>
-	/// <param name="now">The current time.</param>
-	/// <returns>The seconds to wait.</returns>
-	public static int RetrySeconds(DateTimeOffset reset, DateTimeOffset now)
-	{
-		double seconds = Math.Ceiling((reset - now).TotalSeconds);
-
-		return seconds < 1 ? 1 : (int)Math.Min(seconds, int.MaxValue);
-	}
-
-	/// <summary>
 	///   This error as a failed <see cref="Result{T}" />.
 	/// </summary>
 	/// <typeparam name="T">The value type.</typeparam>
@@ -97,6 +84,14 @@ internal sealed record ManagementApiError(string Code, ResultErrorCode Category,
 	public Result<T> ToResult<T>()
 	{
 		return Result.Fail<T>(Message, Category, Code);
+	}
+
+	// Rounded up and at least 1, so the Admin never sees "0 seconds" for a reset that has just passed.
+	private static int RetrySeconds(DateTimeOffset reset, DateTimeOffset now)
+	{
+		double seconds = Math.Ceiling((reset - now).TotalSeconds);
+
+		return seconds < 1 ? 1 : (int)Math.Min(seconds, int.MaxValue);
 	}
 
 	private static string Seconds(int seconds)

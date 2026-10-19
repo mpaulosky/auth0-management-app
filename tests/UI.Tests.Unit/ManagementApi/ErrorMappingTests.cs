@@ -74,16 +74,7 @@ public class ErrorMappingTests
 	}
 
 	[Theory]
-	[InlineData("SearchUsers")]
-	[InlineData("GetUser")]
-	[InlineData("UpdateProfileFields")]
-	[InlineData("AssignRole")]
-	[InlineData("RemoveRole")]
-	[InlineData("ListRoles")]
-	[InlineData("CreateRole")]
-	[InlineData("ListRoleMembers")]
-	[InlineData("CountRoleMembers")]
-	[InlineData("UserHoldsRole")]
+	[MemberData(nameof(ApiCalls.All), MemberType = typeof(ApiCalls))]
 	public async Task Call_Auth0RefusesWith429_ReturnsRateLimitedFromEveryUseCase(string call)
 	{
 		// Arrange

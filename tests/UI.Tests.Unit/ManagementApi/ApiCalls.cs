@@ -23,7 +23,7 @@ internal static class ApiCalls
 	public const string UserId = "auth0|abc";
 	public const string RoleId = "rol_admin";
 
-	public static readonly string[] All =
+	public static TheoryData<string> All =>
 	[
 		"SearchUsers", "GetUser", "UpdateProfileFields", "AssignRole", "RemoveRole", "ListRoles", "CreateRole",
 		"ListRoleMembers", "CountRoleMembers", "UserHoldsRole",

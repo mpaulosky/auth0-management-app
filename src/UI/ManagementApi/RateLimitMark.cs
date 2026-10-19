@@ -16,7 +16,7 @@ namespace UI.ManagementApi;
 /// </summary>
 internal sealed class RateLimitMark : IDisposable
 {
-	private static readonly AsyncLocal<RateLimitMark?> s_current = new();
+	private static readonly AsyncLocal<RateLimitMark?> CurrentMark = new();
 
 	private readonly RateLimitMark? _previous;
 	private int _metRateLimit;
@@ -29,7 +29,7 @@ internal sealed class RateLimitMark : IDisposable
 	/// <summary>
 	///   Gets the mark of the call the current request belongs to, or <see langword="null" /> outside a call.
 	/// </summary>
-	public static RateLimitMark? Current => s_current.Value;
+	public static RateLimitMark? Current => CurrentMark.Value;
 
 	/// <summary>
 	///   Gets a value indicating whether a request of this call met a 429.
@@ -43,8 +43,8 @@ internal sealed class RateLimitMark : IDisposable
 	/// <returns>The mark, which restores the previous one when disposed.</returns>
 	public static RateLimitMark Begin()
 	{
-		RateLimitMark mark = new(s_current.Value);
-		s_current.Value = mark;
+		RateLimitMark mark = new(CurrentMark.Value);
+		CurrentMark.Value = mark;
 
 		return mark;
 	}
@@ -60,6 +60,6 @@ internal sealed class RateLimitMark : IDisposable
 	/// <inheritdoc />
 	public void Dispose()
 	{
-		s_current.Value = _previous;
+		CurrentMark.Value = _previous;
 	}
 }
