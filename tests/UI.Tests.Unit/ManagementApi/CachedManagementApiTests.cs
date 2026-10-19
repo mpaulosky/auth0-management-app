@@ -483,6 +483,32 @@ public class CachedManagementApiTests
 			Roles: false));
 	}
 
+	[Theory]
+	[InlineData("UpdateProfileFields", "GetUser")]
+	[InlineData("UpdateProfileFields", "SearchUsers")]
+	[InlineData("UpdateProfileFields", "ListRoleMembers")]
+	[InlineData("AssignRole", "GetUser")]
+	[InlineData("AssignRole", "ListRoleMembers")]
+	[InlineData("RemoveRole", "GetUser")]
+	[InlineData("RemoveRole", "ListRoleMembers")]
+	[InlineData("CreateRole", "ListRoles")]
+	public async Task Write_FailsWith429_StillEvictsTheEntriesItMakesStale(string write, string read)
+	{
+		// Arrange
+		using Scenario scenario = new();
+		await ReadAsync(scenario.Api, read);
+
+		// Act
+		scenario.Failing = true;
+		Result written = await ApiCalls.InvokeAsync(scenario.Api, write, Ct);
+		scenario.Failing = false;
+		bool reached = await scenario.ReachesAuth0Async(async () => await ReadAsync(scenario.Api, read));
+
+		// Assert
+		written.Success.Should().BeFalse();
+		reached.Should().BeTrue("a write that failed may still have reached Auth0, so the entries it makes stale are dropped anyway");
+	}
+
 	[Fact]
 	public async Task CreateRoleAsync_Created_EvictsTheRoleListOnly()
 	{
