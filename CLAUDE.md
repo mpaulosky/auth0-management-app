@@ -128,9 +128,12 @@ Watch every PR you open until it merges: Sandcastle's follow-up sweep acts only 
 nothing else answers a hand-opened PR's review threads or fixes its red checks, and PR Auto-Merge holds it on every
 unresolved thread. After opening the PR, start a background loop that polls it every minute or so: its `state`, its
 checks (`gh pr checks <n>`, which reports none until the workflows register them, so don't treat that as done) and its
-unresolved `reviewThreads` (GraphQL, `isResolved: false`). It wakes you when the PR closes, when the checks have all
-finished and one failed, or when a new unresolved thread appears, and keeps polling through a review that lands after
-the checks. Fix each red check. Fix each thread you agree with, reply saying what changed, and resolve it. On a thread
-you decline, reply with why and leave it unresolved, so the hold keeps it for the owner. Push from the branch's
-worktree, update the description if the change moved, and restart the loop. Stop when the PR has merged, or when only
-declined threads or a check you can't fix remain, and tell the owner which.
+unresolved `reviewThreads` (GraphQL, `isResolved: false`, with each thread's last comment author). It wakes you when the
+PR closes, when the checks have all finished and one failed, when an unresolved thread's last comment isn't yours (a new
+thread, or a reply on one you answered), or when nothing has changed for 30 minutes. It keeps polling through a review
+that lands after the checks. Fix each red check. On a thread you agree with, fix it and reply saying what changed; then
+resolve it if Claude Review or Copilot opened it, and leave a person's thread for them to resolve. On a thread you
+decline, reply with why and leave it unresolved, so the hold keeps it for the owner. Push from the branch's worktree,
+update the description if the change moved, and restart the loop. Stop when the PR has merged or closed, when only
+threads waiting on a person or a check you can't fix remain, or when it has sat 30 minutes with nothing to act on, and
+tell the owner which.
