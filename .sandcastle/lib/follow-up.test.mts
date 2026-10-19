@@ -28,8 +28,10 @@ const IN_SCOPE = new Set([42]);
 // with every check green; tests override just the fields their scenario
 // needs.
 function pr(overrides: Partial<SweepPullRequest> = {}): SweepPullRequest {
+  const number = overrides.number ?? 101;
   return {
-    number: 101,
+    number,
+    url: `https://github.com/o/r/pull/${number}`,
     author: HOST,
     body: `${PR_MARKER}\nCloses #42`,
     baseRefName: "main",
@@ -1248,6 +1250,7 @@ describe("sweepPullRequests' review label", () => {
 
   it("doesn't read the timeline of a PR that carries review:claude now", () => {
     const { github, addedPrLabels } = stubGithub({ prs: [pr({ labels: [REVIEW_LABEL] })], failTimelineFor: [101] });
+
     const unlabelled = run(github);
 
     assert.deepEqual(addedPrLabels, []);

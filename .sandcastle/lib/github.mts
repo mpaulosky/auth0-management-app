@@ -250,9 +250,10 @@ function ghWithStderr(run: typeof execFileSync, args: string[], input?: string, 
 // lib/build.mts#publish. A run that stops between the create and the label
 // isn't covered here: no later run calls this for that branch, since the gate
 // holds back an issue with an open PR, so the follow-up sweep labels that PR
-// instead (lib/follow-up.mts#sweepPullRequests, #51). Labelling comes after the create, and a failure only warns and goes in the
-// run report, so a missing label never costs a finished build its PR and the
-// owner still sees it.
+// instead (lib/follow-up.mts#sweepPullRequests, #51). Labelling comes after
+// the create, and a failure only warns and goes in the run report, so a
+// missing label never costs a finished build its PR and the owner still sees
+// it.
 export function openPullRequest(
   branch: string,
   title: string,
@@ -423,7 +424,7 @@ type CheckContext = {
 type SweepNode = {
   id: string;
   number: number;
-  url?: string;
+  url: string;
   isDraft: boolean;
   isCrossRepository: boolean;
   baseRefName: string;
@@ -481,7 +482,7 @@ function sweepPullRequest(node: SweepNode): SweepPullRequest {
   return {
     id: node.id,
     number: node.number,
-    ...(node.url === undefined ? {} : { url: node.url }),
+    url: node.url,
     author: authorLogin(node.author),
     body: node.body ?? "",
     baseRefName: node.baseRefName,

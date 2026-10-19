@@ -71,8 +71,8 @@ export type SweepPullRequest = PullRequestIdentity & {
   // Set when any nested list (reviews, threads, checks, ...) was truncated by
   // GraphQL's page size, so the sweep can't decide safely from partial data.
   truncated: boolean;
-  // The PR's page, for the run report. Absent from a stub that doesn't need it.
-  url?: string;
+  // The PR's page, for the run report.
+  url: string;
 };
 
 // Whether a login is Copilot's code-review account (see
@@ -400,7 +400,7 @@ function labelForReview(
     log(`  🏷 PR #${pr.number} had never carried ${REVIEW_LABEL}: added it, so Claude reviews it`);
   } catch (error) {
     log(`  ⚠ Couldn't add ${REVIEW_LABEL} to PR #${pr.number}, so add it by hand for Claude to review it: ${error}`);
-    unlabelled.record({ pr: pr.number, url: pr.url ?? `#${pr.number}` });
+    unlabelled.record({ pr: pr.number, url: pr.url });
   }
 }
 
