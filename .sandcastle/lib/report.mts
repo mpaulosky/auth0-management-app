@@ -153,23 +153,30 @@ export class HumanThreadReport {
 // The one report every follow-up pass this run makes records into.
 export const humanThreadReport = new HumanThreadReport();
 
-// A PR the host opened, reused or swept without REVIEW_LABEL because adding it,
-// or reading whether it ever carried it, failed (lib/github.mts#openPullRequest,
-// lib/follow-up.mts#sweepPullRequests): Claude never reviews it until a person
+// A PR the host opened, reused or swept without REVIEW_LABEL because adding it
+// failed, or, for a reused PR, reading whether it ever carried it failed
+// (lib/github.mts#openPullRequest, lib/follow-up.mts#sweepPullRequests, whose
+// failed reads only warn): Claude never reviews it until a person
 // adds the label, and the run log alone is a line nobody reads in an
 // unattended run.
 export type UnlabelledPrEntry = { pr: number; url: string };
 
-// Every such PR this run left, so the run report names them.
+// Every such PR this run left, once each, so the run report names them. A
+// later round's sweep that labels the PR, or finds it has carried the label,
+// resolves it, so the run ends red only for the PRs still unlabelled.
 export class UnlabelledPrReport {
-  private readonly entries: UnlabelledPrEntry[] = [];
+  private readonly entries = new Map<number, UnlabelledPrEntry>();
 
   record(entry: UnlabelledPrEntry): void {
-    this.entries.push(entry);
+    this.entries.set(entry.pr, entry);
+  }
+
+  resolve(pr: number): void {
+    this.entries.delete(pr);
   }
 
   items(): readonly UnlabelledPrEntry[] {
-    return this.entries;
+    return [...this.entries.values()];
   }
 }
 

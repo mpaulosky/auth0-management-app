@@ -9,6 +9,7 @@ import {
   REPORT_DIR,
   renderSummary,
   targetUrl,
+  UnlabelledPrReport,
   UsageReport,
   WaitingPrReport,
   writeRunReport,
@@ -128,6 +129,28 @@ describe("intakeStopExitCode", () => {
 
   it("is 1 when intake recorded any stop this run, whatever else happened", () => {
     assert.equal(intakeStopExitCode([{ reason: "8 intake runs in a row failed", unjudged: [1], firstError: "boom" }]), 1);
+  });
+});
+
+describe("UnlabelledPrReport", () => {
+  it("lists each PR once, with the latest url recorded for it", () => {
+    const report = new UnlabelledPrReport();
+
+    report.record({ pr: 9, url: "https://github.com/o/r/pull/9" });
+    report.record({ pr: 9, url: "https://github.com/o/r/pull/9#again" });
+
+    assert.deepEqual(report.items(), [{ pr: 9, url: "https://github.com/o/r/pull/9#again" }]);
+  });
+
+  it("drops a PR once it's resolved, and ignores one it never recorded", () => {
+    const report = new UnlabelledPrReport();
+    report.record({ pr: 9, url: "https://github.com/o/r/pull/9" });
+    report.record({ pr: 10, url: "https://github.com/o/r/pull/10" });
+
+    report.resolve(9);
+    report.resolve(11);
+
+    assert.deepEqual(report.items(), [{ pr: 10, url: "https://github.com/o/r/pull/10" }]);
   });
 });
 

@@ -308,7 +308,7 @@ export function sweepPullRequests(
   now: number = Date.now(),
   outcomes: OutcomeReport = outcomeReport,
   waiting: WaitingPrReport = waitingPrReport,
-  unlabelled: Pick<UnlabelledPrReport, "record"> = unlabelledPrReport,
+  unlabelled: Pick<UnlabelledPrReport, "record" | "resolve"> = unlabelledPrReport,
 ): SweepResult {
   const host = github.hostLogin();
   const issues = github.inScopeIssues();
@@ -384,24 +384,41 @@ export function sweepPullRequests(
 // reviews one whose run stopped between `gh pr create` and the label, or one
 // opened before #45 labelled the PRs it opens (#51). A PR that carried it
 // before is left alone, as lib/github.mts#openPullRequest leaves one, so PR
-// Auto-Merge's review cap holds. A failed timeline read or label add warns and
-// goes in the run report rather than throw, so the PR is still followed up;
-// the next round's sweep tries again.
+// Auto-Merge's review cap holds. A failed timeline read only warns: every PR
+// the cap unlabelled is read each round, so recording it would tell the owner
+// to add the label by hand and bypass the cap. A failed add warns and goes in
+// the run report. Neither throws, so the PR is still followed up, and the next
+// round's sweep tries again; any outcome but a failure resolves the PR's entry.
 function labelForReview(
   pr: SweepPullRequest,
   github: FollowUpGitHub,
   log: (line: string) => void,
-  unlabelled: Pick<UnlabelledPrReport, "record">,
+  unlabelled: Pick<UnlabelledPrReport, "record" | "resolve">,
 ): void {
-  if (hasLabel(pr, REVIEW_LABEL)) return;
+  if (hasLabel(pr, REVIEW_LABEL)) {
+    unlabelled.resolve(pr.number);
+    return;
+  }
+  let carried: boolean;
   try {
-    if (hasCarriedReviewLabel(github.labelTimeline(pr.number))) return;
+    carried = hasCarriedReviewLabel(github.labelTimeline(pr.number));
+  } catch (error) {
+    log(`  ⚠ Couldn't check whether PR #${pr.number} ever carried ${REVIEW_LABEL}; the next round's sweep checks again: ${error}`);
+    return;
+  }
+  if (carried) {
+    unlabelled.resolve(pr.number);
+    return;
+  }
+  try {
     github.addPullRequestLabel(pr.number, REVIEW_LABEL);
-    log(`  🏷 PR #${pr.number} had never carried ${REVIEW_LABEL}: added it, so Claude reviews it`);
   } catch (error) {
     log(`  ⚠ Couldn't add ${REVIEW_LABEL} to PR #${pr.number}, so add it by hand for Claude to review it: ${error}`);
     unlabelled.record({ pr: pr.number, url: pr.url });
+    return;
   }
+  unlabelled.resolve(pr.number);
+  log(`  🏷 PR #${pr.number} had never carried ${REVIEW_LABEL}: added it, so Claude reviews it`);
 }
 
 // One PR the sweep marked as needing a follow-up pass, with what
