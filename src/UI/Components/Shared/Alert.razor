@@ -1,8 +1,6 @@
 @namespace UI.Components.Shared
 
-@{
-	throw new NotImplementedException();
-}
+<div role="alert" class="@ToneClass">@ChildContent</div>
 
 @code {
 	/// <summary>
@@ -16,4 +14,13 @@
 	/// </summary>
 	[Parameter]
 	public RenderFragment? ChildContent { get; set; }
+
+	private string ToneClass => Tone switch
+	{
+		AlertTone.Error =>
+			"rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/15 dark:text-red-300",
+		AlertTone.Warning =>
+			"rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300",
+		_ => throw new ArgumentOutOfRangeException(nameof(Tone), Tone, "Unknown AlertTone."),
+	};
 }
