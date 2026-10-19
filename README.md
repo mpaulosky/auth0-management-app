@@ -70,6 +70,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.8](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.8) | 2026-10-19 | docs(research): Record Auth0 user search and rate limit findings | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-24-docs-research-record-auth0-user-search-and-rate-limit-findings.md) |
 | [v0.0.7](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.7) | 2026-10-19 | docs(research): Record the Auth0 Management SDK findings | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-23-docs-research-record-the-auth0-management-sdk-findings.md) |
 | [v0.0.6](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.6) | 2026-10-19 | docs: Grant the Management API application read:role_members | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-26-docs-grant-the-management-api-application-read-role-members.md) |
 | [v0.0.5](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.5) | 2026-10-19 | docs(adr): Put one deep seam in front of the Management API | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-22-docs-adr-put-one-deep-seam-in-front-of-the-management-api.md) |
