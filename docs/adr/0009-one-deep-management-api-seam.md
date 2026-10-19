@@ -32,8 +32,14 @@ This departs from `mpaulosky/Articles`, the reference `CLAUDE.md` points to, who
 
 - Handler tests substitute `IManagementApi`, and only the adapter's tests touch the SDK, offline, through a stub `HttpMessageHandler` and a `DelegateTokenProvider`.
 - Adding a use case adds a method and its records to `IManagementApi`, its adapter and the cache decorator.
-- Which Users hold which Roles comes from listing each Role's members, one request per Role, not from fetching each User's Roles, so `UserSummary` carries no Roles.
-  The adapter runs those requests a few at a time, bounded by a `ManagementApiOptions` setting that defaults to 2 (the Free tier's burst), so a Tenant with many Roles stays
-  under Auth0's rate limits, and the cache decorator keeps the result until a Role change clears it.
+- Which Users hold which Roles comes from listing each Role's members, not from fetching each User's Roles, so `UserSummary` carries no Roles. The adapter pages each Role's
+  members with checkpoint paging (`from`/`take`), because offset paging stops at 1000 Users, so the cost is one request per page of members per Role. It runs those requests
+  a few at a time, bounded by a `ManagementApiOptions` setting that defaults to 2 (the Free tier's burst), to stay under Auth0's rate limits. An adapter test covers a Role
+  with more than one page of members.
+- The cache is in memory, in one process, with a short absolute expiry, and the app's own writes clear what they make stale. A change made elsewhere, such as in the Auth0
+  Dashboard or by another instance of the app, shows only once the entry expires. So the last-Admin guard reads the `Admin` Role's members uncached, and never trusts a stale
+  count.
+- `ValidateOnStart` means the app won't start without `Auth0:Management:*` settings once a slice calls `AddManagementApi()`. The integration tests' factory and the AppHost
+  and E2E test setups supply placeholder values, and a developer without the Machine to Machine application sets them as user secrets, as the README describes.
 - As [ADR 0007](0007-cross-cutting-code-outside-the-slices.md) requires of a cross-cutting folder, an architecture test checks that `UI.ManagementApi` depends on no slice.
 - `CLAUDE.md`'s paragraph that names `IManagementApiClientFactory` as the pattern to follow changes to point here.
