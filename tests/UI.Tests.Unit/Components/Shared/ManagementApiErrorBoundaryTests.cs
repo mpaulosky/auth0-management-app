@@ -103,6 +103,24 @@ public class ManagementApiErrorBoundaryTests : BunitContext
 	}
 
 	[Fact]
+	public void Render_ParametersSetAgainAfterAChildThrew_RecoversAndRendersTheChildAgain()
+	{
+		// Arrange
+		Switch fault = new() { Throw = true };
+		SetRendererInfo(new RendererInfo("Server", true));
+		IRenderedComponent<ManagementApiErrorBoundary> cut = RenderBoundary(fault);
+		fault.Throw = false;
+
+		// Act
+		cut.Render(parameters => parameters
+			.AddChildContent<FaultyChild>(child => child.Add(c => c.Fault, fault)));
+
+		// Assert
+		cut.Markup.Should().Contain("child ok");
+		cut.Markup.Should().NotContain("couldn't reach");
+	}
+
+	[Fact]
 	public void Render_StaticAndChildThrows_TryAgainIsALinkToTheCurrentUrlNotAButton()
 	{
 		// Arrange

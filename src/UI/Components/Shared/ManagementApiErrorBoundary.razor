@@ -30,5 +30,12 @@
 	[Parameter]
 	public RenderFragment? ChildContent { get; set; }
 
+	// A routed page is reused when only its URL's parameters change, such as ?user=, so the boundary would keep showing the
+	// last error after the Admin moves on. Recovering on each new set of parameters renders the child again for the new URL.
+	protected override void OnParametersSet()
+	{
+		_boundary?.Recover();
+	}
+
 	private void Recover() => _boundary?.Recover();
 }
