@@ -18,7 +18,7 @@ namespace UI.Tests.Unit.Components.Features.Home;
 public class HomePageTests : BunitContext
 {
 	[Fact]
-	public void Render_ShowsAppNameHeadingUnderTemplateEyebrowWithTheSpecsLead()
+	public void Render_ShowsAppNameHeadingUnderAdminToolEyebrowWithTheLead()
 	{
 		// Arrange
 		AddAuthorization().SetNotAuthorized();
@@ -30,11 +30,11 @@ public class HomePageTests : BunitContext
 		IElement heading = cut.Find("h1");
 		heading.TextContent.Should().Be(ApplicationConstants.AppName);
 		string? eyebrowText = heading.PreviousElementSibling?.TextContent.Trim();
-		eyebrowText.Should().Be("Template");
+		eyebrowText.Should().Be("Admin tool");
 		IElement header = heading.Closest("header") ?? throw new InvalidOperationException("No <header> ancestor.");
 		string? leadText = header.QuerySelector("p")?.TextContent.Trim();
 		leadText.Should().Be(
-			"A server-rendered Blazor Web App with Tailwind CSS theming and Auth0 sign-in, ready to become your app.");
+			"Coming soon: manage the Users and Roles of your Auth0 Tenant, edit a User's Profile Fields, and create new Roles.");
 	}
 
 	[Fact]
@@ -119,7 +119,7 @@ public class HomePageTests : BunitContext
 	}
 
 	[Fact]
-	public void Render_WhatsInsideCard_CarriesANeutralTemplateBadge()
+	public void Render_WhatsInsideCard_CarriesANeutralProjectsBadge()
 	{
 		// Arrange
 		AddAuthorization().SetNotAuthorized();
@@ -129,7 +129,7 @@ public class HomePageTests : BunitContext
 
 		// Assert
 		IElement card = CardWithHeading(cut, "What's inside");
-		IElement badge = card.QuerySelectorAll("span").Single(span => span.TextContent.Trim() == "Template");
+		IElement badge = card.QuerySelectorAll("span").Single(span => span.TextContent.Trim() == "Projects");
 		badge.ClassList.Should().Contain("border-accent-200");
 	}
 

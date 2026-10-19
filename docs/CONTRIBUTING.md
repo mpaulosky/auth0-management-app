@@ -40,7 +40,8 @@ Please report unwanted behavior to [Project Maintainer](mailto:matthew.paulosky@
 
 ## What should I know before I get started
 
-This project is a GitHub template for a server-rendered Blazor Web App built with .NET 10, C# 14, Tailwind CSS v4, and Auth0 authentication. See [CONTEXT.md](../CONTEXT.md) for the domain language.
+This project is a server-rendered Blazor Web App, built with .NET 10, C# 14, Tailwind CSS v4 and Auth0, that lets an Admin
+manage the Users and Roles of an Auth0 Tenant. See [CONTEXT.md](../CONTEXT.md) for the domain language.
 
 ### Code Style & Commit Messages
 
@@ -51,7 +52,7 @@ This project is a GitHub template for a server-rendered Blazor Web App built wit
 
 ### Project Folder Structure
 
-This project is designed to be built and run primarily with [your preferred IDEs/editors].
+This project is designed to be built and run primarily with Visual Studio, JetBrains Rider or Visual Studio Code.
 The folders are configured so that they will support editing and working in other editors and on other operating systems.
 We encourage you to develop with these other environments, because we would like to be able to support developers who use those tools as well.
 The folders are configured as follows:
@@ -63,7 +64,7 @@ src/                                    -- Source code
   AppHost/                              -- Aspire AppHost (local orchestration, E2E host)
   Domain/                               -- Shared Kernel: Result, Result<T>, ApplicationConstants
     Abstractions/                       -- Operation outcomes (Result, Result<T>, ResultErrorCode)
-    Constants/                          -- Names the Template relies on (policy, role, cookies)
+    Constants/                          -- Names the app relies on (policy, role, cookies)
   ServiceDefaults/                      -- Aspire service defaults (telemetry, health checks)
   UI/                                   -- Blazor Web App (server-rendered)
     Components/                         -- Razor components
@@ -89,7 +90,7 @@ tests/                                  -- Test projects (<Project>.Tests.<Kind>
   UI.Tests.Integration/                 -- UI integration tests (WebApplicationFactory)
   UI.Tests.E2E/                         -- End-to-end tests (Playwright)
 
-[SolutionName].slnx                     -- Solution file
+Auth0ManagementApp.slnx                 -- Solution file
 aspire.config.json                      -- Aspire CLI settings, pointing at src/AppHost
 .editorconfig                           -- Formatting, style, and naming rules
 CONTEXT.md                              -- Domain language
@@ -102,11 +103,12 @@ README.md                               -- Project overview
 
 See the main [README.md](../README.md) for more details.
 
-All official versions of the project are built and delivered with [your CI/CD system, e.g., GitHub Actions] and linked in the main README.md and [releases tab in your repository].
+All official versions of the project are built and delivered with GitHub Actions and linked in the main README.md and the
+[Releases page](https://github.com/mpaulosky/auth0-management-app/releases).
 
 ### Design Decisions
 
-Design for this project is ultimately decided by the project team lead ([maintainer name or role]). The following project tenets are adhered to when making decisions:
+Design for this project is ultimately decided by the project maintainer ([@mpaulosky](https://github.com/mpaulosky)). The following project tenets are adhered to when making decisions:
 
 1. Use server-rendered Blazor with Tailwind CSS v4 for the UI.
 1. Use Auth0 for authentication and role-based authorization.

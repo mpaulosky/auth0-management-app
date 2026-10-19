@@ -54,7 +54,7 @@ public partial class CentralPackageManagementTests
 
 		// Assert
 		referencesResilienceOrServiceDiscovery.Should().BeFalse(
-			"no service in this template calls another service yet, so HTTP resilience and service discovery packages stay out (issue #246)");
+			"no service in this app calls another service yet, so HTTP resilience and service discovery packages stay out (issue #246)");
 	}
 
 	[Fact]

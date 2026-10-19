@@ -32,7 +32,7 @@ when the issue needs it: each one costs a run.
 - `architect`: the issue needs a design before the tests are written. Pick it when the issue adds a new type, module or public API whose shape the issue leaves open, touches
   several modules or slices that must agree, or makes a decision that would be hard to reverse. Leave it out for a fix or a change whose shape the issue already spells out.
 - `ui`: the issue adds or changes Blazor components or pages (`.razor` files, their code-behind, layout or Tailwind styling).
-- `scribe`: the issue adds or changes a domain term in `CONTEXT.md`, or changes how the Template is set up or used (`README.md` prose, `docs/CONTRIBUTING.md` or another
+- `scribe`: the issue adds or changes a domain term in `CONTEXT.md`, or changes how the app is set up or used (`README.md` prose, `docs/CONTRIBUTING.md` or another
   hand-written guide).
 
 An empty list, `[]`, means the issue needs none of them. If you leave `roles` out, every optional role runs.

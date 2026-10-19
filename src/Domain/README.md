@@ -1,6 +1,6 @@
 # Domain
 
-The Template's **Shared Kernel** (see [CONTEXT.md](../../CONTEXT.md)): the building blocks every Generated App
+The app's **Shared Kernel** (see [CONTEXT.md](../../CONTEXT.md)): the building blocks every feature
 needs, no matter what it does or where it stores data. The `UI` project references it.
 
 ## Contents
@@ -8,7 +8,7 @@ needs, no matter what it does or where it stores data. The `UI` project referenc
 - `Abstractions/Result.cs`: operation outcomes. `Result` and `Result<T>` report success or failure, and a failure
   carries a message, a `ResultErrorCode` category (`NotFound`, `Validation`, `Conflict`, ...) and optional details.
   Handlers return them for expected failures instead of throwing.
-- `Constants/ApplicationConstants.cs`: the names the Template itself relies on, such as the Admin policy and role, the
+- `Constants/ApplicationConstants.cs`: the names the app itself relies on, such as the Admin policy and role, the
   Theme and Palette cookie names, and the Aspire resource name of the UI project.
 
 ## Rules
@@ -16,7 +16,7 @@ needs, no matter what it does or where it stores data. The `UI` project referenc
 - No business concepts. Entities, feature logic and validators belong in the UI project's feature slices,
   `src/UI/Components/Features/<Feature>/`
   (see [ADR-0005](../../docs/adr/0005-feature-slices-live-in-the-ui-project.md)).
-- No persistence. `Domain` references no other project and no package, so a Generated App can choose any data store.
+- No persistence. `Domain` references no other project and no package, so a feature can choose any data store.
   `tests/Architecture.Tests` enforces this.
 - Add a folder only when something needs it.
 

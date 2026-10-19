@@ -31,6 +31,6 @@ public class DomainTests
 
 		// Assert
 		result.FailingTypeNames.Should().BeNullOrEmpty(
-			"the Shared Kernel depends on nothing, so every Generated App can use it (see ADR-0001)");
+			"the Shared Kernel depends on nothing, so every feature can use it (see ADR-0001)");
 	}
 }

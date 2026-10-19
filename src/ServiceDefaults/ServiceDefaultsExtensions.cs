@@ -22,7 +22,7 @@ using OpenTelemetry.Trace;
 namespace ServiceDefaults;
 
 /// <summary>
-///   Wires OpenTelemetry and health checks into a Generated App's host, and maps the health endpoints Development
+///   Wires OpenTelemetry and health checks into the app's host, and maps the health endpoints Development
 ///   uses to probe it.
 /// </summary>
 public static class ServiceDefaultsExtensions
@@ -62,7 +62,7 @@ public static class ServiceDefaultsExtensions
 	{
 		ArgumentNullException.ThrowIfNull(app);
 
-		// Health endpoints in production leak state and invite probing, so a deployed Generated App adds its own
+		// Health endpoints in production leak state and invite probing, so a deployment adds its own
 		// protected ones when its host needs them (https://aka.ms/dotnet/aspire/healthchecks).
 		if (app.Environment.IsDevelopment())
 		{

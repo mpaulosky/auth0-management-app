@@ -10,10 +10,10 @@
 namespace Domain.Constants;
 
 /// <summary>
-///   Names the Template itself relies on, shared by every project in a Generated App.
+///   Names the app itself relies on across slices and projects: authorization policy, role, cookie and resource names.
 /// </summary>
 /// <remarks>
-///   Keep this list to names the Template needs. A Generated App adds its own when it adds persistence or caching.
+///   Keep this list to the names the app relies on, as the Shared Kernel entry in CONTEXT.md describes.
 ///   Split the class by concern if it grows past about a dozen members.
 /// </remarks>
 public static class ApplicationConstants
@@ -44,7 +44,7 @@ public static class ApplicationConstants
 	public const string Website = "WebApp";
 
 	/// <summary>
-	///   The app's brand name, shown in the nav, the footer and Home's heading. A Generated App changes it to rebrand.
+	///   The app's brand name, shown in the nav, the footer and Home's heading.
 	/// </summary>
 	public const string AppName = "Auth0 Management App";
 }
