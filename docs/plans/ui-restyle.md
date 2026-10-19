@@ -6,7 +6,7 @@
 This is the visual spec for restyling the Generated App after the look of the Articles repo (`mpaulosky/Articles`): a floating rounded nav with a letter tile, slate cards,
 a hero with an eyebrow pill and stat tiles, and coloured pill badges, in light and dark.
 
-It was charted on the map [Map: Restyle the Generated App after the Articles look](https://github.com/mpaulosky/auth0-management-app/issues/303). Each section links the ticket that holds
+It was charted on the map [Map: Restyle the Generated App after the Articles look](https://github.com/mpaulosky/Blazor-Server/issues/303). Each section links the ticket that holds
 the reasoning; this document says *what* to build, and the tickets say *why*. The work is split into the `Sandcastle` issues in [Implementation issues](#implementation-issues).
 
 ## Principles
@@ -27,8 +27,8 @@ visual-regression tests.
 
 ## Tokens
 
-Decided in [How Tailwind v4's dark variant can follow the OS now and the Theme cookie later](https://github.com/mpaulosky/auth0-management-app/issues/304) and
-[How to define an accent token in Tailwind v4 that the Palette can swap at runtime](https://github.com/mpaulosky/auth0-management-app/issues/305).
+Decided in [How Tailwind v4's dark variant can follow the OS now and the Theme cookie later](https://github.com/mpaulosky/Blazor-Server/issues/304) and
+[How to define an accent token in Tailwind v4 that the Palette can swap at runtime](https://github.com/mpaulosky/Blazor-Server/issues/305).
 
 ### The dark variant
 
@@ -84,8 +84,8 @@ The nav and footer show it, Home's h1 is it, and the letter tile shows its first
 
 ## Shared components
 
-Decided in [Where the shared UI components live and how they're named and tested](https://github.com/mpaulosky/auth0-management-app/issues/306), with the classes from
-[The shared components and page shell in light and dark](https://github.com/mpaulosky/auth0-management-app/issues/307) (variant A, on the never-merged branch `chore/prototype-ui-restyle`).
+Decided in [Where the shared UI components live and how they're named and tested](https://github.com/mpaulosky/Blazor-Server/issues/306), with the classes from
+[The shared components and page shell in light and dark](https://github.com/mpaulosky/Blazor-Server/issues/307) (variant A, on the never-merged branch `chore/prototype-ui-restyle`).
 
 ### Conventions
 
@@ -168,7 +168,7 @@ Written inline where they're used, with these classes:
 
 ## Layout
 
-From [The shared components and page shell in light and dark](https://github.com/mpaulosky/auth0-management-app/issues/307).
+From [The shared components and page shell in light and dark](https://github.com/mpaulosky/Blazor-Server/issues/307).
 
 ### Page shell
 
@@ -232,7 +232,7 @@ A new `Footer.razor` in `Components/Layout/`, rendered after `<main>`. A floatin
 
 ### Error bar
 
-From [How each page, the Home showcase copy, the reconnect modal and the error bar use the restyle](https://github.com/mpaulosky/auth0-management-app/issues/309).
+From [How each page, the Home showcase copy, the reconnect modal and the error bar use the restyle](https://github.com/mpaulosky/Blazor-Server/issues/309).
 `#blazor-error-ui` in `MainLayout.razor` becomes a floating amber bar.
 
 - **Root:** `#blazor-error-ui` keeps `hidden` and `data-nosnippet`, and carries the position and colours:
@@ -269,7 +269,7 @@ From the same ticket. `ReconnectModal.razor` is fully restyled:
 
 ## Pages
 
-From [How each page, the Home showcase copy, the reconnect modal and the error bar use the restyle](https://github.com/mpaulosky/auth0-management-app/issues/309). Every page composes the
+From [How each page, the Home showcase copy, the reconnect modal and the error bar use the restyle](https://github.com/mpaulosky/Blazor-Server/issues/309). Every page composes the
 shared components. None needs a new one.
 
 ### Home
@@ -346,10 +346,10 @@ The coding-standard lines this restyle needs landed with this spec.
 
 | Issue | Blocked by |
 | --- | --- |
-| [Add the dark variant, the accent token and the app name constant](https://github.com/mpaulosky/auth0-management-app/issues/311) | this spec ([#310](https://github.com/mpaulosky/auth0-management-app/pull/310)) |
-| [Add the shared Card, PageHeader, StatTile, Badge and Button components](https://github.com/mpaulosky/auth0-management-app/issues/312) | #311 |
-| [Restyle the page shell, nav, footer and error bar](https://github.com/mpaulosky/auth0-management-app/issues/313) | #312 |
-| [Restyle the reconnect modal](https://github.com/mpaulosky/auth0-management-app/issues/314) | #312 |
-| [Turn Home into the Template showcase](https://github.com/mpaulosky/auth0-management-app/issues/315) | #312 |
-| [Restyle the Profile and Admin pages](https://github.com/mpaulosky/auth0-management-app/issues/316) | #312 |
-| [Restyle the Access Denied, Not Found and Error pages](https://github.com/mpaulosky/auth0-management-app/issues/317) | #312 |
+| [Add the dark variant, the accent token and the app name constant](https://github.com/mpaulosky/Blazor-Server/issues/311) | this spec ([#310](https://github.com/mpaulosky/Blazor-Server/pull/310)) |
+| [Add the shared Card, PageHeader, StatTile, Badge and Button components](https://github.com/mpaulosky/Blazor-Server/issues/312) | #311 |
+| [Restyle the page shell, nav, footer and error bar](https://github.com/mpaulosky/Blazor-Server/issues/313) | #312 |
+| [Restyle the reconnect modal](https://github.com/mpaulosky/Blazor-Server/issues/314) | #312 |
+| [Turn Home into the Template showcase](https://github.com/mpaulosky/Blazor-Server/issues/315) | #312 |
+| [Restyle the Profile and Admin pages](https://github.com/mpaulosky/Blazor-Server/issues/316) | #312 |
+| [Restyle the Access Denied, Not Found and Error pages](https://github.com/mpaulosky/Blazor-Server/issues/317) | #312 |

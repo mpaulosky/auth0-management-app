@@ -21,7 +21,7 @@ as IssueTracker's TestingSupport.Library set neither, so they're skipped.
 A Condition on IsTestProject or its PropertyGroup is evaluated against the
 project's name when it has one of the shapes the repos use, optionally negated
 with !: $(MSBuildProjectName.Contains('x')), .StartsWith('x'), .EndsWith('x'),
-or '$(MSBuildProjectName)' == 'x' (or !=). Auth0 Management App sets it in its root
+or '$(MSBuildProjectName)' == 'x' (or !=). Blazor-Server sets it in its root
 Directory.Build.props only where $(MSBuildProjectName.Contains('.Tests')), so
 a helper library under tests/ stays out. Any other Condition is logged and
 counts as holding.

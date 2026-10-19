@@ -3,7 +3,7 @@
 This is the design for the enhanced Sandcastle pipeline: the agent pipeline in `.sandcastle/` that turns `Sandcastle`-labelled issues into merged pull requests without a human in
 the loop. It extends the outline in [plan-workflow-list.md](plan-workflow-list.md) (intake, critiqued plan, role-based team, full gate, PR, review follow-up, merge).
 
-It was charted on the map [Map: Enhance the Sandcastle issue workflow](https://github.com/mpaulosky/auth0-management-app/issues/52). Each section links the decision ticket that holds the
+It was charted on the map [Map: Enhance the Sandcastle issue workflow](https://github.com/mpaulosky/Blazor-Server/issues/52). Each section links the decision ticket that holds the
 reasoning; this document says *what* to build, and the tickets say *why*. The implementation is split into `Sandcastle` issues listed in [Implementation issues](#implementation-issues),
 so Sandcastle builds its own upgrade.
 
@@ -81,7 +81,7 @@ Saved search for everything waiting on a human: `is:open label:sandcastle:needs-
 6. **Build**: one sandbox per picked issue runs the role team, the gate and publishes a PR.
 
 The queue is the `Sandcastle` label in Actions. A local run must name its scope, either an issue number or a dev label such as `Sandcastle:dev` through an environment variable, so it
-never competes with Actions for work ([trigger decision](https://github.com/mpaulosky/auth0-management-app/issues/61)). Every phase works only on issues and PRs in that scope, and only on
+never competes with Actions for work ([trigger decision](https://github.com/mpaulosky/Blazor-Server/issues/61)). Every phase works only on issues and PRs in that scope, and only on
 issues the owner approved (see **Labels**).
 
 ### Early exit
@@ -91,8 +91,8 @@ settled PR for follow-up. With none, the run exits 0 at once. Scheduled and even
 
 ## Phase 1: Follow-up sweep
 
-Decided in [How Sandcastle follows up on an open PR until it can merge](https://github.com/mpaulosky/auth0-management-app/issues/60). API facts are in
-[GitHub APIs for automated PR review follow-up](https://github.com/mpaulosky/auth0-management-app/issues/55).
+Decided in [How Sandcastle follows up on an open PR until it can merge](https://github.com/mpaulosky/Blazor-Server/issues/60). API facts are in
+[GitHub APIs for automated PR review follow-up](https://github.com/mpaulosky/Blazor-Server/issues/55).
 
 **Scope.** Open, non-draft, same-repo PRs into `main` whose head is `feature/{n}-…`, `fix/{n}-…` or `hotfix/{n}-…`, where `#n` is an open issue in scope. PRs labelled `sandcastle:needs-human` are
 skipped. A PR is Sandcastle's only when the repository owner opened it (the host publishes with the owner's PAT) and its body carries the `<!-- sandcastle:pr -->` marker the host
@@ -108,7 +108,7 @@ that human resolves them. That is deliberate: a human who comments has joined th
 `expected_head_sha`. `DIRTY` is merged locally in the sandbox during a pass.
 
 **A pass** runs in one `createSandbox()` on the PR branch. The host runs `git fetch` for the branch first, because otherwise Sandcastle silently branches from `main`
-([Sandcastle research](https://github.com/mpaulosky/auth0-management-app/issues/53)).
+([Sandcastle research](https://github.com/mpaulosky/Blazor-Server/issues/53)).
 
 1. The host merges `origin/main` if the branch is behind or conflicting.
 2. The **follow-up** role resolves conflicts, handles review threads and any CodeQL failure logs, commits its fixes, and writes the gitignored `.sandcastle/follow-up.json`:
@@ -138,7 +138,7 @@ flaky, unless the pass pushed, which starts CI afresh anyway. If a check the gat
 prompt budget, so one run's log can't crowd another's out) goes to the follow-up role; if the role commits nothing and the pass pushes nothing, it gives up at once rather than
 repeating the same costly, unfixable pass every sweep. Pending checks mean the PR waits for a later sweep. The host doesn't wait for a re-run: it starts one and the sweep waits
 for it like any running check. A run already on a later attempt has had its one re-run, so a check still red there hands the PR back
-([#79](https://github.com/mpaulosky/auth0-management-app/issues/79)).
+([#79](https://github.com/mpaulosky/Blazor-Server/issues/79)).
 
 **Parallelism.** The host fetches every PR branch it will pass on serially, in one step before any pass starts, because concurrent fetches contend on the shared git ref lock (the reason
 `main.mts` already fetches `origin/main` once per round). Then passes for different PRs run with `Promise.allSettled`. The build phase starts after the sweep. The reviewer role doesn't run
@@ -155,7 +155,7 @@ label to rebuild". The next build of that issue starts fresh from `main`: the ho
 
 ## Phase 2: Intake
 
-Decided in [What makes a Sandcastle issue ready to build, and what happens when it isn't](https://github.com/mpaulosky/auth0-management-app/issues/56).
+Decided in [What makes a Sandcastle issue ready to build, and what happens when it isn't](https://github.com/mpaulosky/Blazor-Server/issues/56).
 
 **Definition of Ready.** An issue is ready when it has:
 
@@ -192,27 +192,27 @@ The planner (unchanged in purpose) picks the ready issues to build in parallel t
 
 - **It stops emitting branch names.** The host names the branch `fix/{n}-{slug}` when the issue has `bug` and `feature/{n}-{slug}` otherwise, with the slug computed from the title.
   An existing `feature/{n}-*`, `fix/{n}-*` or `hotfix/{n}-*` branch on the remote is reused and fetched before `createSandbox()`
-  ([critique decision](https://github.com/mpaulosky/auth0-management-app/issues/57)).
+  ([critique decision](https://github.com/mpaulosky/Blazor-Server/issues/57)).
 - **It picks the optional roles.** Each picked issue gets a `roles` field listing any of `architect`, `ui`, `scribe`. The host validates it and runs every role when it's missing or
-  invalid ([team decision](https://github.com/mpaulosky/auth0-management-app/issues/58)).
+  invalid ([team decision](https://github.com/mpaulosky/Blazor-Server/issues/58)).
 - **It predicts each pick's files.** Each picked issue gets a `files` field listing the paths the planner expects it to change. The host's overlap check (Phase 5) reads it
-  ([#421](https://github.com/mpaulosky/auth0-management-app/issues/421)).
+  ([#421](https://github.com/mpaulosky/Blazor-Server/issues/421)).
 
 ## Phase 5: Critique
 
-Decided in [What the plan critique (rubber duck) checks and may change](https://github.com/mpaulosky/auth0-management-app/issues/57).
+Decided in [What the plan critique (rubber duck) checks and may change](https://github.com/mpaulosky/Blazor-Server/issues/57).
 
-**The host's overlap check runs first** (`lib/overlap.mts`, [#421](https://github.com/mpaulosky/auth0-management-app/issues/421)), in code with no agent.
+**The host's overlap check runs first** (`lib/overlap.mts`, [#421](https://github.com/mpaulosky/Blazor-Server/issues/421)), in code with no agent.
 It defers a pick whose `files` share a path with a pick kept earlier in the planner's order, or with any open PR into main from this repository's branches, whoever opened it.
 The host makes each path repo-relative first (`resolveFiles` in `lib/plan.mts`), dropping blanks and entries with control characters, and a folder covers the paths under it.
 A PR's paths are read from every page of its file list.
 A pick with no `files` is treated as touching anything: it waits behind the first kept pick or open PR, and with neither, the first such pick is built and the rest wait behind it.
 Each deferral gets one comment naming the file and the issue or PR it waits on, found again by its marker so a later run doesn't post another. No deferral is linked as blocked.
 Instead the host holds the pick back for the rest of the run when it waits on a PR, or on a pick that opened one.
-A hold behind a pick the critique defers, or whose build opens no PR, is released at the end of the round ([#425](https://github.com/mpaulosky/auth0-management-app/issues/425)).
-When a pick's comments can't be read, it's still deferred, and only its comment is skipped, with a warning ([#428](https://github.com/mpaulosky/auth0-management-app/issues/428)).
+A hold behind a pick the critique defers, or whose build opens no PR, is released at the end of the round ([#425](https://github.com/mpaulosky/Blazor-Server/issues/425)).
+When a pick's comments can't be read, it's still deferred, and only its comment is skipped, with a warning ([#428](https://github.com/mpaulosky/Blazor-Server/issues/428)).
 The critique then judges what's left, with each pick's `files`.
-It gets the held picks among the unpicked ready issues, those held this round and those whose hold lasts the run, each with a note that it's held, so a pick that depends on one is deferred behind it ([#428](https://github.com/mpaulosky/auth0-management-app/issues/428)).
+It gets the held picks among the unpicked ready issues, those held this round and those whose hold lasts the run, each with a note that it's held, so a pick that depends on one is deferred behind it ([#428](https://github.com/mpaulosky/Blazor-Server/issues/428)).
 
 The critique checks one thing: whether the round's parallel set is safe, meaning no file or module overlap between picks, and no pick depending on an API or decision another open issue
 will establish. Its only power is to **defer** a pick.
@@ -228,8 +228,8 @@ the next round rather than stopping. If the critique run itself fails, the round
 
 ## Phase 6: Build
 
-Decided in [How the role-based team is composed and run per issue](https://github.com/mpaulosky/auth0-management-app/issues/58) and
-[How the full pre-push gate runs inside the sandbox](https://github.com/mpaulosky/auth0-management-app/issues/59).
+Decided in [How the role-based team is composed and run per issue](https://github.com/mpaulosky/Blazor-Server/issues/58) and
+[How the full pre-push gate runs inside the sandbox](https://github.com/mpaulosky/Blazor-Server/issues/59).
 
 Each picked issue gets one `createSandbox()`. The host calls `sandbox.run()` once per role, in this order:
 
@@ -295,7 +295,7 @@ A failed fetch also publishes without the merge.
 
 **Pushing.** When checkpoint 2 exits 0, the host pushes the commit that gate ran on, by its id (`<sha>:refs/heads/<branch>`) and without force, from the main checkout with git
 hooks off. It never runs git or `gh` in the agent's worktree: git there would run the branch's own pre-push hook, `scripts/gate.sh` and test code, files the agents wrote, on the
-host. The gate already ran in the sandbox, and CI stays the independent check ([model and budget decision](https://github.com/mpaulosky/auth0-management-app/issues/64)). No gate-pass
+host. The gate already ran in the sandbox, and CI stays the independent check ([model and budget decision](https://github.com/mpaulosky/Blazor-Server/issues/64)). No gate-pass
 marker is written: `.git/config` is read-only in the sandbox, and no hook runs on the host's push. See `.sandcastle/lib/host-safety.mts`.
 
 A push or `gh pr create` that fails with a GitHub server error (a `5xx` or `Internal Server Error` in git's or gh's output) is retried with backoff, up to
@@ -304,8 +304,8 @@ the error, the branch keeps its commits, and the run summary lists the branch as
 
 ## Roles, models and budgets
 
-Decided in [Which model and budget each Sandcastle role gets](https://github.com/mpaulosky/auth0-management-app/issues/64); timeouts come from the
-[trigger decision](https://github.com/mpaulosky/auth0-management-app/issues/61), with the values below set by this spec.
+Decided in [Which model and budget each Sandcastle role gets](https://github.com/mpaulosky/Blazor-Server/issues/64); timeouts come from the
+[trigger decision](https://github.com/mpaulosky/Blazor-Server/issues/61), with the values below set by this spec.
 
 Every role's settings live in one `ROLE_AGENTS` map in the host code, so tuning is a one-line change. Opus goes where a wrong answer costs a whole round; Sonnet goes where the gate,
 the reviewer or CI checks the output anyway.
@@ -329,7 +329,7 @@ A timeout is enforced with an `AbortSignal` on the run. Running out of iteration
 
 ## Giving up and telling the human
 
-Decided in [How Sandcastle gives up on an issue and tells the human](https://github.com/mpaulosky/auth0-management-app/issues/63).
+Decided in [How Sandcastle gives up on an issue and tells the human](https://github.com/mpaulosky/Blazor-Server/issues/63).
 
 **Build retry cap: 2 failed attempts.** A failed attempt is anything that stops the issue's pipeline (see **When a role fails**): the gate still red after the gate-fixer's attempts at either
 checkpoint, or an architect, tester, backend or UI run failing or timing out. A scribe or reviewer failure, and a gate-fixer run that fails but leaves attempts for a later one,
@@ -364,8 +364,8 @@ If this proves noisy or the `Copilot` gap matters, the upgrade path is a separat
 
 ## Trigger and run environment
 
-Decided in [How and where Sandcastle is triggered automatically](https://github.com/mpaulosky/auth0-management-app/issues/61), from
-[Where an automatic Sandcastle trigger could run](https://github.com/mpaulosky/auth0-management-app/issues/54). The reasoning for the runner and token is in
+Decided in [How and where Sandcastle is triggered automatically](https://github.com/mpaulosky/Blazor-Server/issues/61), from
+[Where an automatic Sandcastle trigger could run](https://github.com/mpaulosky/Blazor-Server/issues/54). The reasoning for the runner and token is in
 [ADR 0002](../adr/0002-unattended-sandcastle-on-a-hosted-runner.md).
 
 **Workflow:** `.github/workflows/sandcastle.yml` on `ubuntu-24.04`. It always checks out `main` (never the event's ref) with `persist-credentials: false`, sets up pnpm and Node 22, runs
@@ -460,33 +460,33 @@ The file names are a proposal; the first implementation issue settles them.
 Filed with native "blocked by" links, so the blocker gate builds them in order and the trigger lands last. Three are manual and aren't labelled `Sandcastle`: the secrets, and the
 two `.github/workflows/**` changes the PAT can't push (see **Workflow files**). A human builds the trigger once its blockers have landed.
 
-[#80](https://github.com/mpaulosky/auth0-management-app/issues/80), making runs safe to start unattended, was split into #146 and #147.
+[#80](https://github.com/mpaulosky/Blazor-Server/issues/80), making runs safe to start unattended, was split into #146 and #147.
 Issues #149 and #150 were filed after the plan, from problems seen in runs. The critique added #149 as a blocker of #72 and #73, since all three change
 `buildIssue`'s failure and publish paths, and later #73 as a blocker of #72, so #72's new roles fit #73's failure counting.
 Issue #214 came out of the review of #213: an organization never posts, so "the owner" means anyone with write access, and #146 reuses its check.
 
 | Issue | Blocked by |
 | --- | --- |
-| [Split main.mts into modules and configure every role from one ROLE_AGENTS map](https://github.com/mpaulosky/auth0-management-app/issues/66) | [#65](https://github.com/mpaulosky/auth0-management-app/pull/65) (this spec) |
-| [One gate script shared by the pre-push hook, the sandbox and people](https://github.com/mpaulosky/auth0-management-app/issues/67) | #66 |
-| [The host names branches and skips issues that already have a PR](https://github.com/mpaulosky/auth0-management-app/issues/68) | #66 |
-| [Run the gate at two checkpoints with a gate-fixer role](https://github.com/mpaulosky/auth0-management-app/issues/69) | #66, #67 |
-| [Skip the pre-push hook's gate for commits the sandbox already gated](https://github.com/mpaulosky/auth0-management-app/issues/70) | #69 |
-| [Replace the implementer with a tester and a backend developer](https://github.com/mpaulosky/auth0-management-app/issues/71) | #69 |
-| [Hand an issue back to a human after two failed builds](https://github.com/mpaulosky/auth0-management-app/issues/73) | #69, #149 |
-| [Add architect, UI developer and scribe roles picked by the planner](https://github.com/mpaulosky/auth0-management-app/issues/72) | #68, #71, #73, #149 |
-| [Intake judges each issue against the Definition of Ready](https://github.com/mpaulosky/auth0-management-app/issues/74) | #68, #73 |
-| [Intake splits oversized issues into blocked child issues](https://github.com/mpaulosky/auth0-management-app/issues/75) | #74 |
-| [Critique each round's plan and defer picks that aren't safe in parallel](https://github.com/mpaulosky/auth0-management-app/issues/76) | #68 |
-| [Sweep open Sandcastle PRs each round and keep them current](https://github.com/mpaulosky/auth0-management-app/issues/77) | #68, #73 |
-| [Keep pr-automerge.yml from merging PRs handed back to a human (manual, not `Sandcastle`)](https://github.com/mpaulosky/auth0-management-app/issues/84) | none |
-| [Follow-up passes resolve review threads and merge conflicts](https://github.com/mpaulosky/auth0-management-app/issues/78) | #69, #77, #84 |
-| [Follow-up passes fix red CI on Sandcastle PRs](https://github.com/mpaulosky/auth0-management-app/issues/79) | #78 |
-| [Keep comments from anyone with write access, not only the repository owner's](https://github.com/mpaulosky/auth0-management-app/issues/214) | none |
-| [Scope the queue to work the repository owner approved](https://github.com/mpaulosky/auth0-management-app/issues/146) | #74, #77, #214 |
-| [Stop unattended runs cleanly when there's no work, time or usage left](https://github.com/mpaulosky/auth0-management-app/issues/147) | #146 |
-| [Write a run report with outcomes, hand-backs and token usage](https://github.com/mpaulosky/auth0-management-app/issues/81) | #73, #77, #78 |
-| [Create the secrets Sandcastle needs to run from GitHub Actions (manual, not `Sandcastle`)](https://github.com/mpaulosky/auth0-management-app/issues/83) | none |
-| [Retry a publish that fails on a GitHub server error](https://github.com/mpaulosky/auth0-management-app/issues/149) | none |
-| [Mark an issue while Sandcastle builds it](https://github.com/mpaulosky/auth0-management-app/issues/150) | #73 |
-| [Trigger Sandcastle automatically from GitHub Actions (manual, not `Sandcastle`)](https://github.com/mpaulosky/auth0-management-app/issues/82) | #70, #72, #75, #76, #79, #81, #83, #146, #147, #150 |
+| [Split main.mts into modules and configure every role from one ROLE_AGENTS map](https://github.com/mpaulosky/Blazor-Server/issues/66) | [#65](https://github.com/mpaulosky/Blazor-Server/pull/65) (this spec) |
+| [One gate script shared by the pre-push hook, the sandbox and people](https://github.com/mpaulosky/Blazor-Server/issues/67) | #66 |
+| [The host names branches and skips issues that already have a PR](https://github.com/mpaulosky/Blazor-Server/issues/68) | #66 |
+| [Run the gate at two checkpoints with a gate-fixer role](https://github.com/mpaulosky/Blazor-Server/issues/69) | #66, #67 |
+| [Skip the pre-push hook's gate for commits the sandbox already gated](https://github.com/mpaulosky/Blazor-Server/issues/70) | #69 |
+| [Replace the implementer with a tester and a backend developer](https://github.com/mpaulosky/Blazor-Server/issues/71) | #69 |
+| [Hand an issue back to a human after two failed builds](https://github.com/mpaulosky/Blazor-Server/issues/73) | #69, #149 |
+| [Add architect, UI developer and scribe roles picked by the planner](https://github.com/mpaulosky/Blazor-Server/issues/72) | #68, #71, #73, #149 |
+| [Intake judges each issue against the Definition of Ready](https://github.com/mpaulosky/Blazor-Server/issues/74) | #68, #73 |
+| [Intake splits oversized issues into blocked child issues](https://github.com/mpaulosky/Blazor-Server/issues/75) | #74 |
+| [Critique each round's plan and defer picks that aren't safe in parallel](https://github.com/mpaulosky/Blazor-Server/issues/76) | #68 |
+| [Sweep open Sandcastle PRs each round and keep them current](https://github.com/mpaulosky/Blazor-Server/issues/77) | #68, #73 |
+| [Keep pr-automerge.yml from merging PRs handed back to a human (manual, not `Sandcastle`)](https://github.com/mpaulosky/Blazor-Server/issues/84) | none |
+| [Follow-up passes resolve review threads and merge conflicts](https://github.com/mpaulosky/Blazor-Server/issues/78) | #69, #77, #84 |
+| [Follow-up passes fix red CI on Sandcastle PRs](https://github.com/mpaulosky/Blazor-Server/issues/79) | #78 |
+| [Keep comments from anyone with write access, not only the repository owner's](https://github.com/mpaulosky/Blazor-Server/issues/214) | none |
+| [Scope the queue to work the repository owner approved](https://github.com/mpaulosky/Blazor-Server/issues/146) | #74, #77, #214 |
+| [Stop unattended runs cleanly when there's no work, time or usage left](https://github.com/mpaulosky/Blazor-Server/issues/147) | #146 |
+| [Write a run report with outcomes, hand-backs and token usage](https://github.com/mpaulosky/Blazor-Server/issues/81) | #73, #77, #78 |
+| [Create the secrets Sandcastle needs to run from GitHub Actions (manual, not `Sandcastle`)](https://github.com/mpaulosky/Blazor-Server/issues/83) | none |
+| [Retry a publish that fails on a GitHub server error](https://github.com/mpaulosky/Blazor-Server/issues/149) | none |
+| [Mark an issue while Sandcastle builds it](https://github.com/mpaulosky/Blazor-Server/issues/150) | #73 |
+| [Trigger Sandcastle automatically from GitHub Actions (manual, not `Sandcastle`)](https://github.com/mpaulosky/Blazor-Server/issues/82) | #70, #72, #75, #76, #79, #81, #83, #146, #147, #150 |

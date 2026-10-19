@@ -110,7 +110,7 @@ def when(condition, body):
 
 
 def test_a_conditional_is_test_project_applies_only_where_the_condition_holds(tmp_path):
-    # Auth0 Management App's root Directory.Build.props.
+    # Blazor-Server's root Directory.Build.props.
     props_file(tmp_path, "", when("$(MSBuildProjectName.Contains('.Tests'))", "<IsTestProject>true</IsTestProject>"))
     project(tmp_path, "Domain.Tests.Unit")
     project(tmp_path, "TestingSupport.Library")
