@@ -80,6 +80,34 @@ public class FailureLoggingTests
 		harness.Handler.ManagementRequests.Should().HaveCount(2, "the SDK retries a 5xx once");
 	}
 
+	[Theory]
+	[InlineData("token")]
+	[InlineData("management")]
+	public async Task Call_Auth0IsUnreachable_ThrowsAndLogsAnErrorNamingTheSettings(string failingRequest)
+	{
+		// Arrange
+		using ManagementApiHarness harness = ManagementApiHarness.Create();
+		harness.Handler.Respond(_ => Auth0Responses.NoContent());
+
+		if (failingRequest == "token")
+		{
+			harness.Handler.TokenResponder = _ => throw new HttpRequestException("No such host is known.");
+		}
+		else
+		{
+			harness.Handler.Responder = (_, _) => throw new HttpRequestException("No such host is known.");
+		}
+
+		// Act
+		Func<Task> act = () => harness.Api.ListRolesAsync(Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		await act.Should().ThrowAsync<Exception>();
+		string[] errorLines = ErrorLines(harness);
+		errorLines.Should().NotBeEmpty("an unreachable Auth0 is logged at Error");
+		errorLines.Should().Contain(line => line.Contains("Auth0:Management:Domain", StringComparison.Ordinal));
+	}
+
 	[Fact]
 	public async Task Call_TimesOut_ThrowsAndLogsAnError()
 	{

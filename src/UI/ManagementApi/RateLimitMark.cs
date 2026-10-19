@@ -10,9 +10,11 @@
 namespace UI.ManagementApi;
 
 /// <summary>
-///   Records, for one <see cref="IManagementApi" /> call, whether any of its requests met a 429, from Auth0 or from the
-///   client-side limiter. The SDK's timeout covers both attempts, so it can cancel a call that was only rate limited;
-///   the adapter reads this mark to report that as <c>ManagementApi.RateLimited</c> rather than as an outage.
+///   Records, for one <see cref="IManagementApi" /> call, whether the request now in flight, or an earlier one that
+///   hasn't since succeeded, met a 429, from Auth0 or from the client-side limiter. A success clears it, so a later
+///   page's outage isn't taken for rate limiting. The SDK's timeout covers both attempts, so it can cancel a call that
+///   was only rate limited; the adapter reads this mark to report that as <c>ManagementApi.RateLimited</c> rather than
+///   as an outage.
 /// </summary>
 internal sealed class RateLimitMark : IDisposable
 {
@@ -32,7 +34,7 @@ internal sealed class RateLimitMark : IDisposable
 	public static RateLimitMark? Current => CurrentMark.Value;
 
 	/// <summary>
-	///   Gets a value indicating whether a request of this call met a 429.
+	///   Gets a value indicating whether the current request, or a failed one before it, met a 429.
 	/// </summary>
 	public bool MetRateLimit => Volatile.Read(ref _metRateLimit) == 1;
 
@@ -55,6 +57,14 @@ internal sealed class RateLimitMark : IDisposable
 	public void Mark()
 	{
 		Volatile.Write(ref _metRateLimit, 1);
+	}
+
+	/// <summary>
+	///   Records that a request succeeded, so a 429 an earlier request of this call met no longer explains a later failure.
+	/// </summary>
+	public void Clear()
+	{
+		Volatile.Write(ref _metRateLimit, 0);
 	}
 
 	/// <inheritdoc />

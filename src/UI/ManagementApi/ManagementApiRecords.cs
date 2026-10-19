@@ -10,7 +10,9 @@
 namespace UI.ManagementApi;
 
 /// <summary>
-///   A User search: a Lucene query, a 1-based page and a page size.
+///   A User search: a Lucene query, a 1-based page and a page size. Auth0 searches only the first 1000 Users, so
+///   <c>Page * PerPage</c> can't pass 1000 and <c>PerPage</c> can't pass 100; the search throws
+///   <see cref="ArgumentOutOfRangeException" /> past either, and callers clamp the page first.
 /// </summary>
 /// <param name="Query">The Lucene query sent as <c>q</c>, or <see langword="null" /> to list every User.</param>
 /// <param name="Page">The 1-based page number.</param>

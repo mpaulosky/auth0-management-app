@@ -75,6 +75,11 @@ internal sealed class RateLimitingHandler : DelegatingHandler
 		{
 			RateLimitMark.Current?.Mark();
 		}
+		else if (response.IsSuccessStatusCode)
+		{
+			// A request that gets through ends the rate limiting for the mark: a later request's failure is its own.
+			RateLimitMark.Current?.Clear();
+		}
 
 		return response;
 	}

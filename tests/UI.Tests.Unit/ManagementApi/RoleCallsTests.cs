@@ -18,6 +18,27 @@ namespace UI.Tests.Unit.ManagementApi;
 public class RoleCallsTests
 {
 	[Fact]
+	public async Task Calls_InSequence_ShareOneCachedToken()
+	{
+		// Arrange
+		using ManagementApiHarness harness = ManagementApiHarness.Create();
+		harness.Handler.Respond(request => request.Method == HttpMethod.Get
+			? Auth0Responses.RolesPage(request, ["rol_admin"])
+			: Auth0Responses.NoContent());
+
+		// Act
+		Result<IReadOnlyList<RoleSummary>> roles = await harness.Api.ListRolesAsync(Xunit.TestContext.Current.CancellationToken);
+		Result assigned = await harness.Api.AssignRoleAsync(ApiCalls.UserId, "rol_admin", Xunit.TestContext.Current.CancellationToken);
+		Result removed = await harness.Api.RemoveRoleAsync(ApiCalls.UserId, "rol_admin", Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		roles.Success.Should().BeTrue();
+		assigned.Success.Should().BeTrue();
+		removed.Success.Should().BeTrue();
+		harness.Handler.TokenRequestCount.Should().Be(1, "each call builds a new client, but the singleton provider keeps the token");
+	}
+
+	[Fact]
 	public async Task AssignRoleAsync_UserAndRole_PostsTheRoleIdToTheUsersRoles()
 	{
 		// Arrange

@@ -11,6 +11,8 @@ using System.Net;
 
 using Domain.Abstractions;
 
+using UI.ManagementApi;
+
 namespace UI.Tests.Unit.ManagementApi;
 
 public class ErrorMappingTests
@@ -129,6 +131,49 @@ public class ErrorMappingTests
 		result.ErrorCode.Should().Be(ResultErrorCode.RateLimited);
 		result.Details.Should().Be("ManagementApi.RateLimited");
 		harness.Handler.ManagementRequests.Should().HaveCount(2);
+	}
+
+	[Fact]
+	public async Task SearchUsersAsync_Auth0Returns503OnTheRetryAfterA429_ReturnsRateLimitedNotTooBroad()
+	{
+		// Arrange
+		using ManagementApiHarness harness = ManagementApiHarness.Create();
+		long resetSoon = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 1;
+		int attempts = 0;
+		harness.Handler.Respond(_ => Interlocked.Increment(ref attempts) == 1
+			? Auth0Responses.RateLimited(resetSoon)
+			: Auth0Responses.Error(HttpStatusCode.ServiceUnavailable, "Search timed out."));
+
+		// Act
+		Result<UserPage> result = await harness.Api.SearchUsersAsync(
+			new UserSearch("name:ja*", 1, 25), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Success.Should().BeFalse();
+		result.Details.Should().Be("ManagementApi.RateLimited");
+		result.ErrorCode.Should().Be(ResultErrorCode.RateLimited);
+	}
+
+	[Fact]
+	public async Task ListRoleMembersAsync_A429ClearedOnPage1ThenA5xxOnPage2_ThrowsInsteadOfReportingRateLimited()
+	{
+		// Arrange
+		using ManagementApiHarness harness = ManagementApiHarness.Create();
+		long resetSoon = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 1;
+		int attempts = 0;
+		harness.Handler.Respond(_ => Interlocked.Increment(ref attempts) switch
+		{
+			1 => Auth0Responses.RateLimited(resetSoon),
+			2 => Auth0Responses.RoleUsersPage(["auth0|1"], "checkpoint-1"),
+			_ => Auth0Responses.Error(HttpStatusCode.InternalServerError, "Internal server error"),
+		});
+
+		// Act
+		Func<Task> act = () => harness.Api.ListRoleMembersAsync(ApiCalls.RoleId, Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		await act.Should().ThrowAsync<Exception>("page 1 got through, so page 2's outage is a real outage");
+		harness.Handler.ManagementRequests.Should().HaveCount(4);
 	}
 
 	[Theory]

@@ -36,6 +36,12 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 	/// <summary>The most members <see cref="ListRoleMembersAsync" /> fetches: ten checkpoint pages.</summary>
 	public const int MemberCap = 1000;
 
+	/// <summary>The most Users Auth0 lets a search reach: <c>page * per_page</c> can't pass it.</summary>
+	public const int SearchWindow = 1000;
+
+	/// <summary>The largest page size Auth0 accepts for a User search.</summary>
+	public const int MaxSearchPerPage = 100;
+
 	private const int MemberPageSize = 100;
 	private const int RolePageSize = 50;
 	private const string SettingsHint =
@@ -78,6 +84,12 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 	{
 		ArgumentNullException.ThrowIfNull(search);
 		ArgumentOutOfRangeException.ThrowIfLessThan(search.Page, 1);
+		ArgumentOutOfRangeException.ThrowIfLessThan(search.PerPage, 1);
+		ArgumentOutOfRangeException.ThrowIfGreaterThan(search.PerPage, MaxSearchPerPage);
+
+		// Auth0 answers a 400 for a page past its search window, which would read as "invalid search text" below. The
+		// Users slice clamps the page before it asks (see the plan's "The 1000 cap"), so reaching here is a caller bug.
+		ArgumentOutOfRangeException.ThrowIfGreaterThan((long)search.Page * search.PerPage, SearchWindow);
 
 		return CallAsync(nameof(SearchUsersAsync), async (client, token) =>
 		{
@@ -316,16 +328,17 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 
 			return ManagementApiError.RateLimited(exception.RateLimit?.Reset, _timeProvider.GetUtcNow()).ToResult<T>();
 		}
+		catch (ManagementApiException exception) when (exception.StatusCode >= 500 && mark.MetRateLimit)
+		{
+			// The request's retry met a 429 first, so the 5xx is most likely Auth0 shedding load, not an outage. This
+			// precedes mapExpected, which maps a 503 on the search to "too broad". The exception stays in the log.
+			LogRateLimitedByFailure(exception, operation, exception.StatusCode);
+
+			return ManagementApiError.RateLimited(null, _timeProvider.GetUtcNow()).ToResult<T>();
+		}
 		catch (ManagementApiException exception) when (mapExpected(exception) is { } error)
 		{
 			return error.ToResult<T>();
-		}
-		catch (ManagementApiException exception) when (exception.StatusCode >= 500 && mark.MetRateLimit)
-		{
-			// The retry met a 429 first, so the 5xx is most likely Auth0 shedding load, not an outage.
-			LogRateLimited(operation);
-
-			return ManagementApiError.RateLimited(null, _timeProvider.GetUtcNow()).ToResult<T>();
 		}
 		catch (ManagementApiException exception) when (exception.StatusCode is 401 or 403)
 		{
@@ -355,6 +368,13 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 		catch (ApiException exception)
 		{
 			LogTokenExchangeFailed(exception, operation, SettingsHint);
+
+			throw;
+		}
+		catch (HttpRequestException exception) when (!cancellationToken.IsCancellationRequested)
+		{
+			// A DNS failure or refused connection, from the token exchange or a request: most likely a mistyped Domain.
+			LogUnreachable(exception, operation, SettingsHint);
 
 			throw;
 		}
@@ -533,6 +553,14 @@ internal sealed partial class ManagementApiAdapter : IManagementApi
 
 	[LoggerMessage(Level = LogLevel.Error, Message = "The Management API call {Operation} timed out")]
 	private partial void LogTimedOut(Exception exception, string operation);
+
+	[LoggerMessage(Level = LogLevel.Warning,
+		Message = "Auth0 is rate limiting the Management API call {Operation}, and its retry failed with status {StatusCode}")]
+	private partial void LogRateLimitedByFailure(Exception exception, string operation, int statusCode);
+
+	[LoggerMessage(Level = LogLevel.Error,
+		Message = "The Management API call {Operation} couldn't reach Auth0. {Hint}")]
+	private partial void LogUnreachable(Exception exception, string operation, string hint);
 
 	[LoggerMessage(Level = LogLevel.Error,
 		Message = "The Management API call {Operation} couldn't get an access token from Auth0. {Hint}")]

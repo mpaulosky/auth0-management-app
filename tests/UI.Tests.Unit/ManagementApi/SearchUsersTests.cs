@@ -41,6 +41,44 @@ public class SearchUsersTests
 		request.Query["q"].Should().Be("email:ja* OR name:ja*");
 	}
 
+	[Theory]
+	[InlineData(41, 25)]
+	[InlineData(11, 100)]
+	[InlineData(1, 101)]
+	[InlineData(1, 0)]
+	public async Task SearchUsersAsync_PagePastAuth0sWindowOrPerPageOutOfRange_ThrowsWithoutCallingAuth0(int page, int perPage)
+	{
+		// Arrange
+		using ManagementApiHarness harness = ManagementApiHarness.Create();
+		harness.Handler.Respond(_ => Auth0Responses.Json(Auth0Responses.UsersPage(0)));
+
+		// Act
+		Func<Task> act = () => harness.Api.SearchUsersAsync(
+			new UserSearch("name:ja*", page, perPage), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
+		harness.Handler.Requests.Should().BeEmpty("Auth0 would answer a 400 that reads as invalid search text");
+	}
+
+	[Theory]
+	[InlineData(40, 25)]
+	[InlineData(10, 100)]
+	public async Task SearchUsersAsync_LastPageInAuth0sWindow_Searches(int page, int perPage)
+	{
+		// Arrange
+		using ManagementApiHarness harness = ManagementApiHarness.Create();
+		harness.Handler.Respond(_ => Auth0Responses.Json(Auth0Responses.UsersPage(5000, "auth0|1")));
+
+		// Act
+		Result<UserPage> result = await harness.Api.SearchUsersAsync(
+			new UserSearch("name:ja*", page, perPage), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Success.Should().BeTrue();
+		harness.Handler.ManagementRequests.Should().ContainSingle();
+	}
+
 	[Fact]
 	public async Task SearchUsersAsync_NullQuery_SendsNoQ()
 	{
