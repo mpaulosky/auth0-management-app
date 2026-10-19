@@ -569,15 +569,20 @@ The Tenant in the UI's user secrets is a private testing Tenant on the Free tier
 
 - **When they skip:** every test here is skipped while the `Auth0:Management:*` or `Auth0:Testing:*` settings are absent or are the placeholders, so Sandcastle, Dependabot and
   a fresh clone skip them.
+- **Only locally and on `main`:** in CI they also skip unless the run is a push to `main` (`GITHUB_EVENT_NAME` is `push` and `GITHUB_REF` is `refs/heads/main`), so PR
+  runs never share the Tenant's fixtures. Pushes to `main` land one merge at a time, so two runs rarely overlap. A local run while `main`'s CI runs can still collide,
+  which is accepted, and the fixed baseline below repairs it on the next run.
 - **Where the settings come from:** locally the UI's user secrets, and in CI the `TEST_ENV` secret.
 - **The contract tests,** in `UI.Tests.Integration/ManagementApi/`:
   - They run the real `IManagementApi` from `AddManagementApi()`, one at a time in a single collection.
-  - Each one puts back what it changed, except `CreateRoleAsync`'s test: the app can't delete Roles, so the Role it creates on the first run stays in the Tenant.
+  - Each one restores a **fixed baseline**, never a value it read first, so a run that read another run's change can't make it permanent: the target User's nickname
+    is `contract-target`, their given name is `Contract`, and they don't hold the test Role. The exception is `CreateRoleAsync`'s test: the app can't delete Roles, so
+    the Role it creates on the first run stays in the Tenant.
   - A `ManagementApi.RateLimited` result skips the test instead of failing it.
   - What they cover:
     - search and paging return our records
     - `GetUserAsync` on the target User
-    - a nickname change, and clearing the given name, each read back and reverted in the cleanup
+    - a nickname change, and clearing the given name, each read back, with the cleanup setting the baseline again
     - assigning and removing the test Role on the target User
     - `ListRoleMembersAsync`, `CountRoleMembersAsync` and `UserHoldsRoleAsync`
     - a 404 for an unknown User id, mapped to `User.NotFound`
@@ -601,7 +606,8 @@ This is a one-time checklist for the owner, outside Sandcastle:
 
 1. Create a database-connection User to act as the Admin test User, give them a password, and assign them `Admin`.
 2. Create a database-connection User to act as the non-Admin test User, with a password and no `Admin`.
-3. Create a database-connection target User for the contract tests to edit, and note their user id.
+3. Create a database-connection target User for the contract tests to edit, with the nickname `contract-target` and the given name `Contract`, and note their
+   user id.
 4. Create a Role named `TestRole`, and note its id.
 5. Put the `Auth0:Testing:*` values in the UI's user secrets, and as `Auth0__Testing__*` lines in the `TEST_ENV` repository secret, with the `Auth0__Management__*` values.
 
