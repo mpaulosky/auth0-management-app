@@ -119,5 +119,5 @@ Branches, worktrees, commits, PR titles and descriptions, merging and releases f
 Don't start work on an issue labelled `sandcastle:building`: a Sandcastle run is building it, and the label clears when
 that build ends. Check before running `/implement-spec` or opening a branch for an issue.
 
-Claude reviews a PR only when it has the `review:claude` label. Add the label to every PR you open, and to every PR a
-Sandcastle run opens that you're watching, as soon as it exists.
+Claude reviews a PR only when it has the `review:claude` label. Add the label to every PR you open. Sandcastle adds it to
+the PRs it opens itself; add it by hand only when a run warns that it couldn't.

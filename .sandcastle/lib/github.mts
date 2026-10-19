@@ -6,7 +6,7 @@
 
 import { execFileSync } from "node:child_process";
 import { endOf } from "./checkpoint.mts";
-import { COPILOT_REVIEWER, QUEUE_LABEL, SANDCASTLE_LABELS, type QueueScope, type SandcastleLabel } from "./config.mts";
+import { COPILOT_REVIEWER, QUEUE_LABEL, REVIEW_LABEL, SANDCASTLE_LABELS, type QueueScope, type SandcastleLabel } from "./config.mts";
 import type { CheckState, SweepPullRequest } from "./follow-up.mts";
 import { handBackReport, targetUrl, type HandBackReport } from "./report.mts";
 import { sh } from "./shell.mts";
@@ -242,12 +242,18 @@ function ghWithStderr(run: typeof execFileSync, args: string[], input?: string, 
   }
 }
 
+// A PR this opens gets REVIEW_LABEL, so Claude reviews it. A PR it reuses
+// doesn't: PR Auto-Merge removes the label once the review cap is reached, and
+// adding it back on every publish would get round that cap. Labelling comes
+// after the create, and a failure only warns, so a missing label never costs a
+// finished build its PR.
 export function openPullRequest(
   branch: string,
   title: string,
   body: string,
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
+  warn: (message: string) => void = console.error,
 ): string {
   const listed = JSON.parse(
     ghWithStderr(run, [
@@ -256,11 +262,17 @@ export function openPullRequest(
   ) as ListedPullRequest[];
   const existing = sameRepository(listed).find((pr) => pr.headRefName === branch)?.url;
   if (existing) return existing;
-  return ghWithStderr(
+  const url = ghWithStderr(
     run,
     ["pr", "create", "--repo", repo, "--base", "main", "--head", branch, "--title", title, "--body-file", "-"],
     body,
   ).trim();
+  try {
+    ghWithStderr(run, ["pr", "edit", url.slice(url.lastIndexOf("/") + 1), "--repo", repo, "--add-label", REVIEW_LABEL]);
+  } catch (error) {
+    warn(`  ⚠ Opened ${url} but couldn't add ${REVIEW_LABEL}, so add it by hand for Claude to review it: ${error}`);
+  }
+  return url;
 }
 
 // The fields the follow-up sweep (lib/follow-up.mts) checks on every PR it

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { execFileSync } from "node:child_process";
-import { COPILOT_REVIEWER, SANDCASTLE_LABELS } from "./config.mts";
+import { COPILOT_REVIEWER, REVIEW_LABEL, SANDCASTLE_LABELS } from "./config.mts";
 import {
   addIssueLabel,
   addPullRequestLabel,
@@ -363,6 +363,31 @@ describe("openPullRequest", () => {
       "pr", "create", "--repo", "o/r", "--base", "main", "--head", branch, "--title", "Add search", "--body-file", "-",
     ]);
     assert.equal(calls[1]!.input, "Closes #4");
+  });
+
+  it("labels a PR it opens review:claude, so Claude reviews it", () => {
+    const { calls, run } = gh([]);
+
+    openPullRequest(branch, "Add search", "Closes #4", run, "o/r");
+
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls[2]!.args, ["pr", "edit", "9", "--repo", "o/r", "--add-label", REVIEW_LABEL]);
+  });
+
+  it("still returns a PR it opened, with a warning, when labelling it fails", () => {
+    const run = ((_cmd: string, args: readonly string[]) => {
+      if (args[1] === "list") return "[]";
+      if (args[1] === "create") return "https://github.com/o/r/pull/9\n";
+      throw Object.assign(new Error("gh failed"), { stderr: "could not add label: 'review:claude' not found" });
+    }) as unknown as typeof execFileSync;
+    const warnings: string[] = [];
+
+    const url = openPullRequest(branch, "Add search", "Closes #4", run, "o/r", (message) => void warnings.push(message));
+
+    assert.equal(url, "https://github.com/o/r/pull/9");
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /review:claude/);
+    assert.match(warnings[0]!, /pull\/9/);
   });
 });
 
