@@ -26,8 +26,8 @@ namespace UI.ManagementApi;
 	Justification = "AddManagementApi() registers it, and the container instantiates it.")]
 internal sealed class CachedManagementApi : IManagementApi, IDisposable
 {
-	/// <summary>The most entries the cache holds; each entry has size 1.</summary>
-	public const int SizeLimit = 1000;
+	// The most entries the cache holds; each entry has size 1.
+	private const int SizeLimit = 1000;
 
 	private static readonly TimeSpan SearchLifetime = TimeSpan.FromSeconds(30);
 	private static readonly TimeSpan UserLifetime = TimeSpan.FromSeconds(60);
@@ -37,10 +37,9 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 
 	private readonly MemoryCache _cache = new(new MemoryCacheOptions { SizeLimit = SizeLimit });
 	private readonly IManagementApi _inner;
-	private readonly Lock _evictionLock = new();
 	private readonly TimeProvider _timeProvider;
-	private CancellationTokenSource _searchEviction = new();
-	private CancellationTokenSource _membersEviction = new();
+	private readonly EvictionGroup _searchPages = new();
+	private readonly EvictionGroup _roleMembers = new();
 
 	/// <summary>
 	///   Initializes a new instance of the <see cref="CachedManagementApi" /> class.
@@ -65,7 +64,7 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 
 		SearchKey key = new(search.Query?.Trim().ToLowerInvariant(), search.Page, search.PerPage);
 
-		return ReadThroughAsync(key, SearchLifetime, EvictionToken(ref _searchEviction),
+		return ReadThroughAsync(key, SearchLifetime, _searchPages,
 			() => _inner.SearchUsersAsync(search, cancellationToken));
 	}
 
@@ -88,8 +87,8 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 		{
 			// Search pages and Role members carry the User's name, email and picture in their UserSummary rows.
 			_cache.Remove(new UserKey(userId));
-			EvictAll(ref _searchEviction);
-			EvictAll(ref _membersEviction);
+			_searchPages.EvictAll();
+			_roleMembers.EvictAll();
 		}
 	}
 
@@ -141,7 +140,7 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 	/// <inheritdoc />
 	public Task<Result<RoleMembers>> ListRoleMembersAsync(string roleId, CancellationToken cancellationToken)
 	{
-		return ReadThroughAsync(new MembersKey(roleId), MembersLifetime, EvictionToken(ref _membersEviction),
+		return ReadThroughAsync(new MembersKey(roleId), MembersLifetime, _roleMembers,
 			() => _inner.ListRoleMembersAsync(roleId, cancellationToken));
 	}
 
@@ -161,20 +160,23 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 	public void Dispose()
 	{
 		_cache.Dispose();
-		_searchEviction.Dispose();
-		_membersEviction.Dispose();
+		_searchPages.Dispose();
+		_roleMembers.Dispose();
 	}
 
-	private async Task<Result<T>> ReadThroughAsync<T>(object key, TimeSpan lifetime, CancellationToken? evictionToken,
+	private async Task<Result<T>> ReadThroughAsync<T>(object key, TimeSpan lifetime, EvictionGroup? group,
 		Func<Task<Result<T>>> read)
 	{
-		if (_cache.TryGetValue(key, out Entry<T>? cached) && cached is not null
-			&& _timeProvider.GetUtcNow() < cached.ExpiresAt)
+		DateTimeOffset now = _timeProvider.GetUtcNow();
+
+		if (_cache.TryGetValue(key, out Entry<T>? cached) && cached is not null && now < cached.ExpiresAt)
 		{
 			return cached.Result;
 		}
 
-		DateTimeOffset expiresAt = _timeProvider.GetUtcNow() + lifetime;
+		// Taken before the read, so a write that evicts the group while the read is in flight leaves this entry already
+		// expired rather than caching what the write made stale.
+		CancellationChangeToken? evictionToken = group?.CurrentToken();
 		Result<T> result = await read().ConfigureAwait(false);
 
 		// A failure, a 429 included, is never cached, so the next call asks Auth0 again.
@@ -191,14 +193,12 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 			AbsoluteExpirationRelativeToNow = lifetime,
 		};
 
-		// The token was taken before the read, so a write that evicted the set while the read was in flight leaves this
-		// entry already expired rather than caching what the write made stale.
-		if (evictionToken is { } token)
+		if (evictionToken is not null)
 		{
-			options.AddExpirationToken(new CancellationChangeToken(token));
+			options.AddExpirationToken(evictionToken);
 		}
 
-		_cache.Set(key, new Entry<T>(result, expiresAt), options);
+		_cache.Set(key, new Entry<T>(result, now + lifetime), options);
 
 		return result;
 	}
@@ -209,29 +209,6 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 		_cache.Remove(new MembersKey(roleId));
 	}
 
-	private CancellationToken EvictionToken(ref CancellationTokenSource source)
-	{
-		lock (_evictionLock)
-		{
-			return source.Token;
-		}
-	}
-
-	private void EvictAll(ref CancellationTokenSource source)
-	{
-		CancellationTokenSource evicted;
-
-		lock (_evictionLock)
-		{
-			evicted = source;
-			source = new CancellationTokenSource();
-		}
-
-		// Readers take the token under the lock, so none can reach the evicted source once it's swapped out.
-		evicted.Cancel();
-		evicted.Dispose();
-	}
-
 	private sealed record Entry<T>(Result<T> Result, DateTimeOffset ExpiresAt);
 
 	private sealed record SearchKey(string? Query, int Page, int PerPage);
@@ -239,4 +216,42 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 	private sealed record UserKey(string UserId);
 
 	private sealed record MembersKey(string RoleId);
+
+	/// <summary>
+	///   A set of entries a write drops together, such as every search page: each entry carries the group's current
+	///   token, and <see cref="EvictAll" /> cancels it and starts a new one.
+	/// </summary>
+	private sealed class EvictionGroup : IDisposable
+	{
+		private readonly Lock _lock = new();
+		private CancellationTokenSource _source = new();
+
+		public CancellationChangeToken CurrentToken()
+		{
+			lock (_lock)
+			{
+				return new CancellationChangeToken(_source.Token);
+			}
+		}
+
+		public void EvictAll()
+		{
+			CancellationTokenSource evicted;
+
+			lock (_lock)
+			{
+				evicted = _source;
+				_source = new CancellationTokenSource();
+			}
+
+			// Readers take the token under the lock, so none can reach the evicted source once it's swapped out.
+			evicted.Cancel();
+			evicted.Dispose();
+		}
+
+		public void Dispose()
+		{
+			_source.Dispose();
+		}
+	}
 }
