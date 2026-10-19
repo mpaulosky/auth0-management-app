@@ -380,7 +380,7 @@ describe("openPullRequest", () => {
     assert.deepEqual(calls[1]!.args.slice(0, 3), ["api", "--paginate", "repos/o/r/issues/3/timeline"]);
   });
 
-  it("labels a reused PR that has never carried the label, as when the run stopped between its create and its label", () => {
+  it("labels a reused PR that has never carried the label, as when a create GitHub carried out is retried", () => {
     const { calls, run } = gh(reused([]), [labelEvent("labeled", "docs-only")]);
 
     assert.equal(openPullRequest(branch, "Add search", "Closes #4", run, "o/r"), "https://github.com/o/r/pull/3");

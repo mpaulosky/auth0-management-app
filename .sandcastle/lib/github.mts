@@ -245,11 +245,14 @@ function ghWithStderr(run: typeof execFileSync, args: string[], input?: string, 
 // A PR this opens gets REVIEW_LABEL, so Claude reviews it. A PR it reuses
 // gets it only if it has never carried it: PR Auto-Merge removes the label
 // once the review cap is reached, and adding it back on every publish would
-// get round that cap. A reused PR can still be one this never labelled, when a
-// create GitHub carried out but answered with an error is retried, or the run
-// stopped between the create and the label. Labelling comes after the create,
-// and a failure only warns and goes in the run report, so a missing label
-// never costs a finished build its PR and the owner still sees it.
+// get round that cap. A reused PR can still be one this never labelled: a
+// create GitHub carried out but answered with an error, retried by
+// lib/build.mts#publish. A run that stops between the create and the label
+// isn't covered: no later run calls this for that branch, since the gate holds
+// back an issue with an open PR, so its PR stays unlabelled and unreported.
+// Labelling comes after the create, and a failure only warns and goes in the
+// run report, so a missing label never costs a finished build its PR and the
+// owner still sees it.
 export function openPullRequest(
   branch: string,
   title: string,

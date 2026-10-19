@@ -301,7 +301,8 @@ marker is written: `.git/config` is read-only in the sandbox, and no hook runs o
 **Labelling the PR.** A PR the host opens gets `review:claude` straight after it's created, so Claude reviews it without anyone adding the label (`openPullRequest` in
 `lib/github.mts`). A PR the host finds already open for the branch gets the label only if it has never carried it, going by its label events: PR Auto-Merge removes
 `review:claude` once the review cap is reached, and adding it back on every publish would get round that cap. A reused PR that never had it is one whose create GitHub carried out
-but answered with an error, or whose run stopped before the label went on. A failure to add the label, or to read the PR's label events, only warns, so the PR is still published.
+but answered with an error, which `publish` retries. A run that stops between the create and the label isn't covered: no later run reuses that PR, since the gate holds back
+an issue with an open PR, so its PR stays unlabelled and no report lists it. A failure to add the label, or to read the PR's label events, only warns, so the PR is still published.
 The run report lists the PR under **Pull requests without `review:claude`**, and the owner adds the label by hand.
 
 A push or `gh pr create` that fails with a GitHub server error (a `5xx` or `Internal Server Error` in git's or gh's output) is retried with backoff, up to
