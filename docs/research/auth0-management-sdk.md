@@ -10,8 +10,9 @@ Research for [#12](https://github.com/mpaulosky/auth0-management-app/issues/12),
   it expires, so keep it a singleton.
 - The SDK ships `IManagementApiClient`, with an interface for every sub-client. It is awkward to substitute directly, so
   the map's decision to put our own interface in front of it stands.
-- Every non-2xx response throws a `ManagementApiException` subclass. Map on `StatusCode`, plus `ErrorCode` and
-  `Description`, rather than on the subclass: some status codes have no subclass for some endpoints.
+- Every non-2xx response throws a `ManagementApiException`: a subclass when the endpoint's spec lists the code,
+  otherwise the base type. Map on the call and its `StatusCode`, plus `ErrorCode` and `Description`, rather than on the
+  subclass.
 - `PATCH /users/{id}` refuses some Profile Fields by connection type:
   - `name`, `given_name`, `family_name`, `nickname` and `picture` change only for database and passwordless Users, or
     where the connection's "Sync user profile attributes at each login" is off.
@@ -36,7 +37,7 @@ and `NuGetAuditMode=all` at `NuGetAuditLevel=low`, called every method listed be
 audit findings. It sits alongside the repo's `Auth0.AspNetCore.Authentication` 1.11.0 with no overlap: that package
 depends on `Microsoft.AspNetCore.Authentication.OpenIdConnect`, not on `Auth0.AuthenticationApi`.
 
-The Articles reference pins **10.4.0** (`/home/teqs/github/Articles/Directory.Packages.props`). Between 10.4.0 and 10.5.0
+The Articles reference pins **10.4.0** (`mpaulosky/Articles`, `Directory.Packages.props`). Between 10.4.0 and 10.5.0
 only doc comments and the Roles list's `owner_id` filter changed in the code we'd call.
 
 ```xml
@@ -186,18 +187,36 @@ JSON, throws a plain `ManagementApiException` with `StatusCode` set. Network fai
 | `Users.Roles.DeleteAsync` | 404, 429 | No 400 is mapped, so a 400 arrives as a plain `ManagementApiException` |
 | `Roles.Users.ListAsync` | 400, 404, 429 | 404 means the Role wasn't found |
 
-Proposed mapping to `Result` error codes, one place in the seam:
+Proposed mapping to `Result` error codes. A status code means different things on different calls (a 404 is a missing
+User on one and a missing Role on another), so each call maps its own codes:
+
+| Call | Status | Error code |
+| --- | --- | --- |
+| `Users.ListAsync` | 400 | `Validation`: a bad `q` or paging past 1,000 |
+| `Users.ListAsync` | 503 | `User.SearchTooBroad`: the search timed out, so the Admin narrows it |
+| `Users.GetAsync`, `Users.Roles.*` | 404 | `User.NotFound` |
+| `Users.UpdateAsync` | 404 | `User.NotFound` |
+| `Users.UpdateAsync` | 400 | `User.FieldNotEditable`, with `ex.Description` |
+| `Users.UpdateAsync` | 409 | `User.EmailInUse`, if a duplicate email returns 409 (see [Not verified](#not-verified)) |
+| `Roles.CreateAsync` | 409 | `Role.AlreadyExists` |
+| `Roles.Users.ListAsync` | 404 | `Role.NotFound` |
+| Any call | 429 | `Auth0.RateLimited`, with `ex.RateLimit` |
 
 ```csharp
+// In the adapter's UpdateProfileFieldsAsync, for example:
 catch (ManagementApiException ex) when (ex.StatusCode == 404) { return Result.Fail("User.NotFound", …); }
-catch (ManagementApiException ex) when (ex.StatusCode == 409) { return Result.Fail("Role.AlreadyExists", …); }
+catch (ManagementApiException ex) when (ex.StatusCode == 400) { return Result.Fail("User.FieldNotEditable", ex.Description); }
+catch (ManagementApiException ex) when (ex.StatusCode == 409) { return Result.Fail("User.EmailInUse", …); }
 catch (ManagementApiException ex) when (ex.StatusCode == 429) { return Result.Fail("Auth0.RateLimited", …); } // ex.RateLimit
-catch (ManagementApiException ex) when (ex.StatusCode == 400) { return Result.Fail("User.FieldNotEditable" or "Validation", ex.Description); }
 ```
 
 Use the `StatusCode` filter, not the subclass. It works the same for an endpoint whose spec leaves out a code, such as a
-400 from `Users.Roles.DeleteAsync`. Other codes (401, 403, 5xx) are configuration or outage failures, so let them throw,
-as the coding standards say.
+400 from `Users.Roles.DeleteAsync`. Other codes (401, 403, and 5xx except the search's 503) are configuration or outage
+failures, so let them throw, as the coding standards say.
+
+The search's 503 comes from the Admin's query, not from an outage. The SDK retries it like any 5xx before it throws, so
+each retry re-runs a query that already timed out. Keep `MaxRetries` low for the list call, or the Admin waits through
+every retry before seeing `User.SearchTooBroad`.
 
 ## Profile Fields refused by connection type
 
@@ -256,7 +275,7 @@ From the [PATCH /users/{id} reference][patch-user] and the [root attributes page
 
 ## Compared with mpaulosky/Articles
 
-`/home/teqs/github/Articles/src/Web/Components/Features/UserManagement/`:
+`mpaulosky/Articles` (`src/Web/Components/Features/UserManagement/`):
 
 | Aspect | Articles | This feature |
 | --- | --- | --- |
@@ -276,7 +295,7 @@ From the [PATCH /users/{id} reference][patch-user] and the [root attributes page
 - Whether `read:role_members` is needed in practice: the reference contradicts itself, so check it against a Tenant.
 - The scope list for `DELETE /users/{id}/roles`: inferred from `POST`, not fetched.
 - Whether a duplicate email on `PATCH` returns 400 or 409: not documented. If it's 409, the SDK throws a plain
-  `ManagementApiException`, and the `StatusCode` mapping still handles it.
+  `ManagementApiException`, and `UpdateAsync`'s own 409 mapping turns it into `User.EmailInUse`.
 
 [nuget-index]: https://api.nuget.org/v3-flatcontainer/auth0.managementapi/index.json
 [nuspec]: https://api.nuget.org/v3-flatcontainer/auth0.managementapi/10.5.0/auth0.managementapi.nuspec
