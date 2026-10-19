@@ -17,7 +17,7 @@ Read the sections that govern the changed code before commenting on it:
 - `docs/CODING_STANDARDS.md`: style, .NET and Blazor, Auth0, error handling with `Result`, FluentValidation,
   Vertical Slice Architecture, Central Package Management, and testing. It wins when another rule file
   disagrees.
-- `CONTEXT.md`: the domain language (Template, Generated App, Theme, Palette, Visitor, User, Admin, Shared Kernel).
+- `CONTEXT.md`: the domain language (Tenant, Management API, Visitor, User, Admin, Role, Profile Fields, Theme, Palette, Shared Kernel, Release).
 - `docs/adr/`: recorded decisions. A change that contradicts an ADR needs a new ADR that supersedes it.
 - `.claude/rules/`: the path-scoped rules (Blazor, .NET, Markdown and blog posts).
 - `docs/PROCESS.md`: branches, commits, PR titles and descriptions, and merging. The commit format is in
@@ -29,7 +29,7 @@ Read the sections that govern the changed code before commenting on it:
 (for example "color scheme" for Palette) or a term used for its neighbour (Theme for Palette).
 
 **Shared Kernel boundary.** `src/Domain` holds only operation outcomes (`Result`, `Result<T>`, `ResultErrorCode`) and
-the names the Template relies on (`ApplicationConstants`), and it references no other project and no package. Flag
+the names the app relies on (`ApplicationConstants`), and it references no other project and no package. Flag
 entities, feature logic, validators, persistence types, or a new reference there; feature code belongs in
 `src/UI/Components/Features/<Feature>/`.
 

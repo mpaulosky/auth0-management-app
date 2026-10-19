@@ -41,7 +41,7 @@ Then read the documents you own, below, and `.claude/rules/markdown.md` for how 
 
 - **`CONTEXT.md`**: the glossary. Add a term when the branch introduces a domain concept, and update one whose meaning the branch changed. Follow the existing entries' shape:
   the term in bold, its definition, and an `_Avoid_:` line.
-- **`README.md`**: its prose, such as what the Template holds, how to set it up and how to use it.
+- **`README.md`**: its prose, such as what the app does, how to set it up and how to use it.
 - **Hand-written guides**, such as `docs/CONTRIBUTING.md`: update the steps the branch changed.
 
 # WHAT YOU NEVER TOUCH
@@ -52,7 +52,7 @@ Then read the documents you own, below, and `.claude/rules/markdown.md` for how 
 
 # EXECUTION
 
-1. Decide whether the branch changes anything a reader of the docs would need: a new or changed domain term, or a change to how the Template is set up or used.
+1. Decide whether the branch changes anything a reader of the docs would need: a new or changed domain term, or a change to how the app is set up or used.
 2. If it doesn't, commit nothing. That's a normal outcome, not a failure.
 3. If it does, make the smallest edits that document it, in the repository's voice. Lint each Markdown file you touched with `pnpm exec markdownlint-cli2 <file>`, fix what it
    reports, and commit with `docs(<scope>): <Summary>`.

@@ -19,24 +19,40 @@
 
 ## About
 
-This repository is the **Template**: a GitHub template repository. Selecting **Use this template** creates a new
-repository seeded with its contents, and the Blazor Web App that repository becomes is a **Generated App**. This README
-describes the Template; a Generated App is expected to replace it.
+Auth0 Management App is a server-rendered Blazor Web App on .NET 10 for managing the **User**s and roles of one Auth0
+tenant, without opening the Auth0 dashboard. Only an **Admin** (a User with the `Admin` role) can manage anything.
 
-The Template is intended to give every Generated App:
+It lets an Admin:
 
-- A server-rendered Blazor Web App on .NET 10.
-- Tailwind CSS styling with a light/dark **Theme** and a selectable **Palette** that tints the accent color and the
-  surfaces, both persisted in cookies.
-- Auth0 authentication and authorization, distinguishing a **Visitor** (unauthenticated), a **User** (authenticated)
-  and an **Admin** (a User with the Admin role).
+- **Browse Users**: list the tenant's Users with their email and current roles.
+- **Edit a User's profile**: change their name, given name, family name, nickname, picture URL and email.
+  The app never changes a User's password or username, and doesn't create or delete Users.
+- **Add and remove roles**: assign any of the tenant's roles to a User, or take one away.
+- **Create roles**: add a new role, with a name and description, when the existing ones don't fit.
 
-See [CONTEXT.md](https://github.com/mpaulosky/auth0-management-app/blob/main/CONTEXT.md) for the exact meaning of these terms.
+The app talks to Auth0 in two ways:
 
-**Status:** early stage. The Template currently contains the **Shared Kernel** (`src/Domain`), the Blazor Web App
-scaffold (`src/UI`: a Home page, a nav menu, a NotFound page and the Tailwind CSS v4 build), sign-in and sign-out through
-Auth0 with the Admin role mapped, a Profile page listing a **User**'s own claims, an Admin page only an **Admin** can
-open, the light/dark **Theme**, the **Palette** that tints the accent and the surfaces, and their tests.
+- **Sign-in** uses a Regular Web Application and `Auth0.AspNetCore.Authentication`, with cookie sessions. Tokens stay on the server.
+- **Management** uses a separate Machine to Machine application that holds a client-credentials grant for the
+  [Auth0 Management API](https://auth0.com/docs/api/management/v2). The app requests its token on the server and caches it,
+  and never sends it to the browser.
+
+See [CONTEXT.md](https://github.com/mpaulosky/auth0-management-app/blob/main/CONTEXT.md) for the exact meaning of
+**User**, **Admin** and the other terms.
+
+### Status
+
+Early stage. Built so far:
+
+- The Blazor Web App (`src/UI`) with a Home page, a nav menu, NotFound and Error pages, and the Tailwind CSS v4 build.
+- Sign-in and sign-out through Auth0, with the `Admin` role mapped from the ID token.
+- A Profile page that lists the signed-in User's own claims, and an Admin page only an Admin can open.
+- A light/dark **Theme** and a **Palette** that tints the accent and the surfaces, both kept in cookies.
+- The Aspire AppHost, the ServiceDefaults and the tests for all of the above.
+
+Planned next: the User list, the profile editor, role assignment and role creation, all through the Management API.
+
+### Look and feel
 
 The **Theme** is chosen from a Light, Dark and System group in the nav, on desktop and in the mobile menu. Each button
 posts to `/theme`, which stores the choice in a `theme` cookie and returns to the same page, so it works without
@@ -46,8 +62,6 @@ uses the chosen Theme. System, the default, deletes the cookie and follows the O
 The **Palette** is chosen from a menu of 17 Tailwind hues, from Red to Rose, opened from a swatch button in the nav on desktop and shown
 as a Palette section in the mobile menu. Each tile posts to `/palette`, which stores the hue in a `palette` cookie and returns to the
 same page, again without JavaScript. The server writes `data-palette` on `<html>`, and a CSS rule for each hue swaps the accent scale.
-The Palette tints the accent (buttons, links and highlights) and the surfaces (the page, cards, nav, footer, borders, dividers and hover
-fills), in both Themes. Text stays neutral, and the Palette menu's own panel stays slate so each swatch shows its true hue.
 Blue, the default, renders no attribute.
 
 ## Releases
@@ -65,12 +79,11 @@ Blue, the default, renders no attribute.
 
 ## Getting started
 
-1. Select **Use this template** on the [repository page](https://github.com/mpaulosky/auth0-management-app) to create your
-   own repository, then clone it:
+1. Clone the repository:
 
    ```bash
-   git clone https://github.com/<your-account>/<your-repo>.git
-   cd <your-repo>
+   git clone https://github.com/mpaulosky/auth0-management-app.git
+   cd auth0-management-app
    ```
 
 2. Install the prerequisites:
@@ -79,7 +92,9 @@ Blue, the default, renders no attribute.
    - Node.js and pnpm (`corepack enable`), used by the Tailwind CSS build, the git hooks and the lint tools. The repo refuses `npm install`.
    - [yamllint](https://yamllint.readthedocs.io/), which the pre-push hook runs on changed YAML files.
 
-3. Install the pnpm packages, then build and test each test project:
+3. Set up Auth0 as described in [Auth0 setup](#auth0-setup). The app won't start without it.
+
+4. Install the pnpm packages, then build and test each test project:
 
    ```bash
    pnpm install
@@ -91,32 +106,29 @@ Blue, the default, renders no attribute.
    `dotnet test --solution` can report zero tests even when the projects pass.
 
    `pnpm install` must come first: `dotnet build` runs the Tailwind CLI to write `src/UI/wwwroot/css/app.css`, and fails
-   with an error naming `pnpm install` when the packages are missing. Run the app with:
+   with an error naming `pnpm install` when the packages are missing.
 
-   ```bash
-   dotnet run --project src/UI
-   ```
-
-   Or run it through the Aspire AppHost, which starts the UI as `WebApp` and opens the Aspire dashboard with its logs,
-   traces and metrics. `aspire run` needs the [Aspire CLI](https://aspire.dev/get-started/install-cli/); `dotnet run`
-   works without it. The AppHost's `https` profile, which `aspire run` uses, serves both the dashboard and `WebApp`
-   over HTTPS (`https://localhost:7161`), and the `http` profile needs no developer certificate:
+5. Run the app through the Aspire AppHost, which starts the UI as `WebApp` and opens the Aspire dashboard with its logs,
+   traces and metrics, or run the UI on its own:
 
    ```bash
    aspire run
-   dotnet run --project src/AppHost --launch-profile https
    dotnet run --project src/AppHost --launch-profile http
+   dotnet run --project src/UI
    ```
+
+   `aspire run` needs the [Aspire CLI](https://aspire.dev/get-started/install-cli/) and uses the AppHost's `https`
+   profile, which serves both the dashboard and `WebApp` over HTTPS (`https://localhost:7161`). The `http` profile needs
+   no developer certificate.
 
    The `https` profile needs a trusted developer certificate. Trust it once with `dotnet dev-certs https --trust`. On
    Linux, .NET also reads the trusted copy only when `$HOME/.aspnet/dev-certs/trust` is in `SSL_CERT_DIR`, for example
    `export SSL_CERT_DIR="$HOME/.aspnet/dev-certs/trust:/etc/ssl/certs"` (see <https://aka.ms/dev-certs-trust>).
 
    In Development, the UI reports its health at `/health` and `/alive`.
-
    While editing markup, `pnpm --dir src/UI run watch:css` rebuilds the CSS as you save.
 
-4. Optionally enable the git hooks in `.github/hooks` (markdownlint on commit, and `scripts/gate.sh` on push):
+6. Optionally enable the git hooks in `.github/hooks` (markdownlint on commit, and `scripts/gate.sh` on push):
 
    ```bash
    git config core.hooksPath .github/hooks
@@ -127,8 +139,12 @@ Blue, the default, renders no attribute.
 
 ## Auth0 setup
 
-The app won't start without an Auth0 tenant's settings: it validates `Auth0:Domain`, `Auth0:ClientId` and
-`Auth0:ClientSecret` on startup and names any that's missing.
+The app uses two Auth0 applications in the same tenant: one to sign Admins in, and one to call the Management API.
+
+### Sign-in application
+
+The app won't start without these settings: it validates `Auth0:Domain`, `Auth0:ClientId` and `Auth0:ClientSecret` on
+startup and names any that's missing.
 
 1. In the [Auth0 dashboard](https://manage.auth0.com/), create an application of type **Regular Web Application**.
    Sign-in uses the authorization-code flow, so leave the **Authorization Code** grant on (it is by default). The app
@@ -139,7 +155,8 @@ The app won't start without an Auth0 tenant's settings: it validates `Auth0:Doma
 
    Sign-in works on the `http` profile only on `localhost`, because the browser keeps Auth0's `Secure` sign-in cookies
    for `http://localhost` alone. The `https` profile is the safer choice anywhere else.
-3. Under **User Management → Roles**, create a role named `Admin` and assign it to the users who should be an **Admin**.
+3. Under **User Management → Roles**, create a role named `Admin` and assign it to yourself and anyone else who should
+   manage Users and roles.
 4. Under **Actions → Library**, create a **Post Login** Action that adds the user's roles to the ID token, and add it to
    the Login flow:
 
@@ -166,21 +183,40 @@ The app won't start without an Auth0 tenant's settings: it validates `Auth0:Doma
 claim the Action above sets; change both together. The app maps each role in that claim to a .NET role, so an `Admin`
 there satisfies the Admin policy.
 
-## After generating your app
+A role you add to or remove from yourself takes effect at your next sign-in, when Auth0 issues a new ID token.
 
-- Replace this README with one that describes your Generated App.
-- Give your app its own user secrets: replace the `UserSecretsId` in both `src/UI/UI.csproj` and
-  `src/AppHost/AppHost.csproj` with one new GUID (for example from `uuidgen`). Otherwise every app made from this
-  template reads and writes the same `Auth0:*` secrets on your machine.
-- Repoint the badges at your own repository, or remove them.
-- Decide whether to keep the release automation: [release.yml](https://github.com/mpaulosky/auth0-management-app/blob/main/.github/workflows/release.yml) tags a release and
-  opens a release-notes PR for every merged PR, which also copies `README.md` to `docs/README.md`. Delete it if you don't want it.
-- The release-notes PR adds a blog post written by [release_post.py](https://github.com/mpaulosky/auth0-management-app/blob/main/.github/scripts/release_post.py).
-  Add an `ANTHROPIC_API_KEY` repository secret to open each post with a short AI summary; without it, posts skip the summary.
-  Run [backfill-blog-posts.yml](https://github.com/mpaulosky/auth0-management-app/blob/main/.github/workflows/backfill-blog-posts.yml) by hand to write posts for
-  past releases that lack one, or set `regenerate` to rewrite them all. It opens one PR and never creates tags or Releases.
-- [docs/index.html](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/index.html) is the GitHub Pages home page. Repoint its header links at your
-  repository, or delete it and `docs/.nojekyll` if you don't publish Pages.
+### Management API application
+
+User and role management isn't built yet; these are the settings it will need.
+
+1. Create an application of type **Machine to Machine** and authorize it for the **Auth0 Management API**.
+2. Grant it only these permissions:
+
+   | Permission | Used to |
+   | ---------- | ------- |
+   | `read:users` | List Users and read one User's profile and roles |
+   | `update:users` | Change a User's name, email and the other profile fields |
+   | `read:roles` | List the tenant's roles |
+   | `create:roles` | Create a role |
+   | `create:role_members` | Assign a role to a User |
+   | `delete:role_members` | Remove a role from a User |
+
+   Don't grant `delete:users`, `create:users` or any permission the app doesn't use: the client secret can do whatever
+   the grant allows.
+3. Store its settings as user secrets, the same way:
+
+   ```bash
+   dotnet user-secrets set "Auth0:Management:Domain" "<your-tenant>.auth0.com" --project src/UI
+   dotnet user-secrets set "Auth0:Management:ClientId" "<m2m-client-id>" --project src/UI
+   dotnet user-secrets set "Auth0:Management:ClientSecret" "<m2m-client-secret>" --project src/UI
+   ```
+
+   Outside Development, set `Auth0__Management__Domain`, `Auth0__Management__ClientId` and
+   `Auth0__Management__ClientSecret` instead.
+
+Auth0 lets the app change a User's profile fields only where Auth0 owns them: Users in a database connection, or Users
+from a social or enterprise connection whose profile isn't synced at each login. Otherwise the identity provider
+overwrites the change at that User's next sign-in.
 
 ## Project layout
 
@@ -189,7 +225,8 @@ src/AppHost/                     -- Aspire AppHost: runs the UI as the WebApp re
 src/Domain/                      -- Shared Kernel: Result, Result<T>, ApplicationConstants
 src/ServiceDefaults/             -- Aspire service defaults: OpenTelemetry and health checks
 src/UI/                          -- Blazor Web App (server-rendered)
-src/UI/Components/Features/      -- One folder per feature slice (e.g. Home)
+src/UI/Components/Features/      -- One folder per feature slice (Authentication, Profile, Admin, Themes, Palettes)
+src/UI/Security/                 -- Cross-cutting code that isn't a component, such as LocalReturnUrl
 src/UI/Styles/                   -- Tailwind CSS v4 source
 tests/AppHost.Tests.Integration/ -- AppHost integration tests (Aspire.Hosting.Testing)
 tests/Architecture.Tests/        -- Architecture rules (Domain's dependencies, UI's references, slice boundaries)
@@ -207,6 +244,14 @@ CLAUDE.md, .claude/              -- Claude Code instructions, rules and skills
 .github/scripts/                 -- Release blog post generator, backfill and pytest tests
 .github/copilot-instructions.md  -- Copilot PR review checklist, generated from the code-review skill
 ```
+
+## Releases and blog posts
+
+Every PR merged to `main` cuts a Release: [release.yml](https://github.com/mpaulosky/auth0-management-app/blob/main/.github/workflows/release.yml)
+tags it and opens a release-notes PR, which also copies `README.md` to `docs/README.md` and adds a blog post written by
+[release_post.py](https://github.com/mpaulosky/auth0-management-app/blob/main/.github/scripts/release_post.py).
+With an `ANTHROPIC_API_KEY` repository secret, each post opens with a short AI summary.
+[docs/index.html](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/index.html) is the GitHub Pages home page.
 
 ## Contributing
 

@@ -10,7 +10,7 @@
 namespace UI.Components.Features.Palettes;
 
 /// <summary>
-///   The accent-color hue a visitor picks for the Generated App's UI, chosen from Tailwind's hue scales minus the
+///   The accent-color hue a visitor picks for the app's UI, chosen from Tailwind's hue scales minus the
 ///   gray family. Members are declared in Tailwind's order, which is also the Palette menu's order.
 /// </summary>
 public enum Palette

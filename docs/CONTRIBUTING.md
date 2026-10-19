@@ -40,7 +40,7 @@ Please report unwanted behavior to [Project Maintainer](mailto:matthew.paulosky@
 
 ## What should I know before I get started
 
-This project is a GitHub template for a server-rendered Blazor Web App built with .NET 10, C# 14, Tailwind CSS v4, and Auth0 authentication. See [CONTEXT.md](../CONTEXT.md) for the domain language.
+This project is a server-rendered Blazor Web App, built with .NET 10, C# 14, Tailwind CSS v4 and Auth0, that lets an Admin manage the Users and Roles of an Auth0 Tenant. See [CONTEXT.md](../CONTEXT.md) for the domain language.
 
 ### Code Style & Commit Messages
 
@@ -63,7 +63,7 @@ src/                                    -- Source code
   AppHost/                              -- Aspire AppHost (local orchestration, E2E host)
   Domain/                               -- Shared Kernel: Result, Result<T>, ApplicationConstants
     Abstractions/                       -- Operation outcomes (Result, Result<T>, ResultErrorCode)
-    Constants/                          -- Names the Template relies on (policy, role, cookies)
+    Constants/                          -- Names the app relies on (policy, role, cookies)
   ServiceDefaults/                      -- Aspire service defaults (telemetry, health checks)
   UI/                                   -- Blazor Web App (server-rendered)
     Components/                         -- Razor components

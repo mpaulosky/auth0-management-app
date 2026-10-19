@@ -1,10 +1,32 @@
 # CLAUDE.md
 
-This repository is a GitHub template for a server-rendered Blazor Web App on .NET 10 and C# 14, with Tailwind CSS v4
-theming and Auth0 authentication. Today it holds the Shared Kernel (`src/Domain/`), the Blazor Web App scaffold
-(`src/UI/`, with a Home page, the Tailwind build, the Auth0 sign-in and sign-out in the `Authentication` slice, a
-User's claims in the `Profile` slice, the Admin-only page in the `Admin` slice, the Theme control in the `Themes` slice
-and the Palette menu in the `Palettes` slice), the Aspire AppHost and ServiceDefaults, and their tests.
+This repository is the Auth0 Management App: a server-rendered Blazor Web App on .NET 10 and C# 14, with Tailwind CSS
+v4 theming and Auth0 authentication, that lets an Admin manage the Users and Roles of one Auth0 Tenant. An Admin edits a
+User's Profile Fields, adds and removes their Roles, and creates new Roles, all through the Management API. The app never
+changes a User's password or username, never creates or deletes Users, and never deletes Roles. It isn't a template, so
+don't write docs or code for "apps generated from it".
+
+Today it holds the Shared Kernel (`src/Domain/`), the Blazor Web App (`src/UI/`, with a Home page, the Tailwind build,
+the Auth0 sign-in and sign-out in the `Authentication` slice, a User's claims in the `Profile` slice, the Admin-only page
+in the `Admin` slice, the Theme control in the `Themes` slice and the Palette menu in the `Palettes` slice), the Aspire
+AppHost and ServiceDefaults, and their tests. User and Role management isn't built yet.
+`mpaulosky/Articles` (`src/Web/Components/Features/UserManagement/`) is the reference for how it calls the Management API:
+a cached client-credentials token provider behind an `IManagementApiClientFactory`, settings under `Auth0:Management:*`,
+and a bounded fan-out when fetching each User's Roles, to stay under Auth0's rate limits.
+
+## Auth0 Management API
+
+- The app signs Admins in with one Auth0 application (Regular Web Application, `Auth0:*` settings) and calls the
+  Management API with a second (Machine to Machine, `Auth0:Management:Domain`, `:ClientId`, `:ClientSecret`). Never reuse
+  the sign-in application's credentials for the Management API.
+- Grant the Machine to Machine application only `read:users`, `update:users`, `read:roles`, `create:roles`,
+  `create:role_members` and `delete:role_members`. A feature that needs another scope adds it to `README.md`'s table.
+- Management API calls happen on the server, inside a slice's handler, behind an interface so tests substitute it. The
+  Management API token never reaches the browser or the logs.
+- Every page and endpoint that reads or changes Users or Roles requires the Admin policy (`[Authorize]` with it, not
+  `<AuthorizeView>` alone): hiding a button isn't a security boundary.
+- The Management API's failures (not found, rate limited, a field Auth0 won't change) come back as a failed `Result`
+  with a stable error code, for example `"User.NotFound"` or `"Role.AlreadyExists"`.
 
 ## Domain language
 
