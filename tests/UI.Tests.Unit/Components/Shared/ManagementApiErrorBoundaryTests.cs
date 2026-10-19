@@ -22,6 +22,27 @@ public class ManagementApiErrorBoundaryTests : BunitContext
 	private const string Message =
 		"The app couldn't reach Auth0's Management API. Try again, or ask whoever runs the app to check its Auth0 Management settings.";
 
+	public ManagementApiErrorBoundaryTests()
+	{
+		// The component reads RendererInfo, which bUnit requires a test to set. Static is the default; interactive tests override it.
+		SetRendererInfo(new RendererInfo("Static", false));
+	}
+
+	[Fact]
+	public void Render_ChildThrowsAfterAnAwait_ShowsTheManagementApiMessage()
+	{
+		// Arrange
+		Switch fault = new() { Throw = true };
+
+		// Act
+		IRenderedComponent<ManagementApiErrorBoundary> cut = Render<ManagementApiErrorBoundary>(parameters => parameters
+			.AddChildContent<AsyncFaultyChild>(child => child.Add(c => c.Fault, fault)));
+
+		// Assert
+		cut.WaitForAssertion(() => cut.Markup.Should().Contain(Message));
+		cut.Markup.Should().NotContain("child ok");
+	}
+
 	[Fact]
 	public void Render_ChildDoesNotThrow_ShowsTheChildAndNoMessage()
 	{
@@ -120,6 +141,27 @@ public class ManagementApiErrorBoundaryTests : BunitContext
 				throw new InvalidOperationException("Management API unreachable");
 			}
 
+			builder.AddContent(0, "child ok");
+		}
+	}
+
+	// Throws after an await, as a page does when its Management API call fails during OnInitializedAsync.
+	private sealed class AsyncFaultyChild : ComponentBase
+	{
+		[Parameter]
+		public Switch Fault { get; set; } = new();
+
+		protected override async Task OnInitializedAsync()
+		{
+			await Task.Yield();
+			if (Fault.Throw)
+			{
+				throw new InvalidOperationException("Management API unreachable");
+			}
+		}
+
+		protected override void BuildRenderTree(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder)
+		{
 			builder.AddContent(0, "child ok");
 		}
 	}

@@ -6,7 +6,7 @@
 	<ErrorContent>
 		<Alert Tone="AlertTone.Error">
 			<p>The app couldn't reach Auth0's Management API. Try again, or ask whoever runs the app to check its Auth0 Management settings.</p>
-			@if (IsInteractive)
+			@if (RendererInfo.IsInteractive)
 			{
 				<button type="button" @onclick="Recover" class="@TryAgainClass">Try again</button>
 			}
@@ -29,23 +29,6 @@
 	/// </summary>
 	[Parameter]
 	public RenderFragment? ChildContent { get; set; }
-
-	// A host that hasn't published its renderer info, such as a bUnit test that never calls SetRendererInfo, throws on access.
-	// The link works in every mode, so a failed read falls back to it instead of hiding the message behind a second failure.
-	private bool IsInteractive
-	{
-		get
-		{
-			try
-			{
-				return RendererInfo.IsInteractive;
-			}
-			catch (Exception)
-			{
-				return false;
-			}
-		}
-	}
 
 	private void Recover() => _boundary?.Recover();
 }

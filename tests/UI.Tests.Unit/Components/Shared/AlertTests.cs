@@ -51,6 +51,23 @@ public class AlertTests : BunitContext
 		classes.Should().NotContain($"-{otherHue}-");
 	}
 
+	[Fact]
+	public void Render_ClassAndExtraAttributes_AppliesThemToTheAlert()
+	{
+		// Arrange
+
+		// Act
+		IRenderedComponent<Alert> cut = Render<Alert>(parameters => parameters
+			.Add(c => c.Class, "mt-4")
+			.AddUnmatched("id", "save-failure")
+			.Add(c => c.ChildContent, "Something failed"));
+
+		// Assert
+		IElement alert = cut.Find("[role='alert']");
+		alert.ClassList.Should().Contain("mt-4");
+		alert.GetAttribute("id").Should().Be("save-failure");
+	}
+
 	[Theory]
 	[InlineData(AlertTone.Error)]
 	[InlineData(AlertTone.Warning)]
