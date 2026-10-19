@@ -196,18 +196,31 @@ User on one and a missing Role on another), so each call maps its own codes:
 | `Users.ListAsync` | 503 | `User.SearchTooBroad`: the search timed out, so the Admin narrows it |
 | `Users.GetAsync`, `Users.Roles.*` | 404 | `User.NotFound` |
 | `Users.UpdateAsync` | 404 | `User.NotFound` |
-| `Users.UpdateAsync` | 400 | `User.FieldNotEditable`, with `ex.Description` |
+| `Users.UpdateAsync` | 400 | Split by `ex.ErrorCode` and the message (see below) |
 | `Users.UpdateAsync` | 409 | `User.EmailInUse`, if a duplicate email returns 409 (see [Not verified](#not-verified)) |
 | `Roles.CreateAsync` | 409 | `Role.AlreadyExists` |
 | `Roles.Users.ListAsync` | 404 | `Role.NotFound` |
-| Any call | 429 | `Auth0.RateLimited`, with `ex.RateLimit` |
+| Any call | 429 | `ManagementApi.RateLimited`, with `ex.RateLimit`, once the SDK's retries run out |
+
+A 400 from `Users.UpdateAsync` isn't always a refused field. `PATCH /users/{id}` also returns 400 for a body that fails
+Auth0's validation (a name over its length limit, a `picture` that isn't a URI, a malformed email), for an email change
+in a disabled connection, and possibly for a duplicate email. So:
+
+- The slice's validator checks the lengths, the URL and the email format before the call, so Auth0's body validation
+  should rarely fire.
+- The adapter splits the 400s that remain by `ex.ErrorCode` and by the known message texts:
+  - a body that fails validation (`errorCode` `invalid_body`, unverified) becomes `Validation`;
+  - a duplicate email becomes `User.EmailInUse`;
+  - a refused Profile Field, or an email change for a User outside a database connection, becomes
+    `User.FieldNotEditable`;
+  - any other 400 becomes `User.UpdateRejected`, with `ex.Description`.
 
 ```csharp
 // In the adapter's UpdateProfileFieldsAsync, for example:
 catch (ManagementApiException ex) when (ex.StatusCode == 404) { return Result.Fail("User.NotFound", …); }
-catch (ManagementApiException ex) when (ex.StatusCode == 400) { return Result.Fail("User.FieldNotEditable", ex.Description); }
+catch (ManagementApiException ex) when (ex.StatusCode == 400) { return Result.Fail(MapUpdateRejection(ex), ex.Description); }
 catch (ManagementApiException ex) when (ex.StatusCode == 409) { return Result.Fail("User.EmailInUse", …); }
-catch (ManagementApiException ex) when (ex.StatusCode == 429) { return Result.Fail("Auth0.RateLimited", …); } // ex.RateLimit
+catch (ManagementApiException ex) when (ex.StatusCode == 429) { return Result.Fail("ManagementApi.RateLimited", …); } // ex.RateLimit
 ```
 
 Use the `StatusCode` filter, not the subclass. It works the same for an endpoint whose spec leaves out a code, such as a
@@ -291,11 +304,14 @@ From the [PATCH /users/{id} reference][patch-user] and the [root attributes page
 
 - The Management API rate limits for each Tenant type: the [endpoint rate limits page][ratelimits] defers to another page.
   The SDK's retry and `RateLimit` parsing cover how we handle a 429 either way.
-- The `errorCode` values Auth0 returns for each refused-field 400: the reference documents only message text.
+- The `errorCode` values Auth0 returns for each 400 from `PATCH /users/{id}` (a refused field, a body that fails
+  validation, a disabled connection): the reference documents only message text. Check them against a Tenant before
+  writing `MapUpdateRejection`.
 - Whether `read:role_members` is needed in practice: the reference contradicts itself, so check it against a Tenant.
 - The scope list for `DELETE /users/{id}/roles`: inferred from `POST`, not fetched.
-- Whether a duplicate email on `PATCH` returns 400 or 409: not documented. If it's 409, the SDK throws a plain
-  `ManagementApiException`, and `UpdateAsync`'s own 409 mapping turns it into `User.EmailInUse`.
+- Whether a duplicate email on `PATCH` returns 400 or 409, and with which `errorCode`: not documented. Check it against
+  a Tenant. If it's 409, the SDK throws a plain `ManagementApiException`, and `UpdateAsync`'s own 409 mapping turns it
+  into `User.EmailInUse`. If it's 400, `MapUpdateRejection` has to recognise it by `errorCode` or message.
 
 [nuget-index]: https://api.nuget.org/v3-flatcontainer/auth0.managementapi/index.json
 [nuspec]: https://api.nuget.org/v3-flatcontainer/auth0.managementapi/10.5.0/auth0.managementapi.nuspec
