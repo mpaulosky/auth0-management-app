@@ -70,6 +70,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.13](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.13) | 2026-10-19 | feat(sandcastle): Label each PR Sandcastle opens review:claude | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-45-feat-sandcastle-label-each-pr-sandcastle-opens-review-claude.md) |
 | [v0.0.12](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.12) | 2026-10-19 | feat(ManagementApi): Add the Management API seam | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-47-feat-managementapi-add-the-management-api-seam.md) |
 | [v0.0.11](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.11) | 2026-10-19 | feat(UI): Add the Alert and the Management API error boundary | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-44-feat-ui-add-the-alert-and-the-management-api-error-boundary.md) |
 | [v0.0.10](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.10) | 2026-10-19 | docs: Specify User and Role management | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-30-docs-specify-user-and-role-management.md) |
@@ -79,7 +80,6 @@ Blue, the default, renders no attribute.
 | [v0.0.6](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.6) | 2026-10-19 | docs: Grant the Management API application read:role_members | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-26-docs-grant-the-management-api-application-read-role-members.md) |
 | [v0.0.5](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.5) | 2026-10-19 | docs(adr): Put one deep seam in front of the Management API | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-22-docs-adr-put-one-deep-seam-in-front-of-the-management-api.md) |
 | [v0.0.4](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.4) | 2026-10-19 | docs: Capitalise Role and Tenant in the README | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-9-docs-capitalise-role-and-tenant-in-the-readme.md) |
-| [v0.0.3](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.3) | 2026-10-19 | docs: Describe the app as an Auth0 User and Role manager | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-7-docs-describe-the-app-as-an-auth0-user-and-role-manager.md) |
 
 <!-- RELEASES_END -->
 
