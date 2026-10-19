@@ -78,12 +78,14 @@ public class RateLimiterTests
 
 		// Act
 		Task<Result<RoleMembers>> call = harness.Api.ListRoleMembersAsync(ApiCalls.RoleId, Xunit.TestContext.Current.CancellationToken);
-		await ManagementApiHarness.WaitUntilAsync(() => Queued(limiter) == 1, "the second page is waiting for a token");
+		await ManagementApiHarness.WaitUntilAsync(
+			() => harness.Handler.ManagementRequests.Count == 1 && Queued(limiter) == 1, "the second page is waiting for a token");
 		int requestsBeforeFirstRefill = harness.Handler.ManagementRequests.Count;
-		limiter.TryReplenish();
-		await ManagementApiHarness.WaitUntilAsync(() => Queued(limiter) == 1, "the third page is waiting for a token");
+		await ManagementApiHarness.ReplenishAsync(limiter);
+		await ManagementApiHarness.WaitUntilAsync(
+			() => harness.Handler.ManagementRequests.Count == 2 && Queued(limiter) == 1, "the third page is waiting for a token");
 		int requestsBeforeSecondRefill = harness.Handler.ManagementRequests.Count;
-		limiter.TryReplenish();
+		await ManagementApiHarness.ReplenishAsync(limiter);
 		Result<RoleMembers> result = await call;
 
 		// Assert

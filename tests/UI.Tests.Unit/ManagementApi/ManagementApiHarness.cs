@@ -122,7 +122,8 @@ internal sealed class ManagementApiHarness : IDisposable
 	}
 
 	/// <summary>
-	///   A token bucket that refills only when a test calls <see cref="TokenBucketRateLimiter.TryReplenish" />.
+	///   A token bucket that refills only when a test calls <see cref="ReplenishAsync" />. Its period is one millisecond
+	///   because <see cref="TokenBucketRateLimiter.TryReplenish" /> does nothing until a full period has passed.
 	/// </summary>
 	public static TokenBucketRateLimiter ManualLimiter(int tokenLimit, int queueLimit = 100)
 	{
@@ -130,11 +131,30 @@ internal sealed class ManagementApiHarness : IDisposable
 		{
 			TokenLimit = tokenLimit,
 			TokensPerPeriod = tokenLimit,
-			ReplenishmentPeriod = TimeSpan.FromSeconds(1),
+			ReplenishmentPeriod = TimeSpan.FromMilliseconds(1),
 			AutoReplenishment = false,
 			QueueLimit = queueLimit,
 			QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
 		});
+	}
+
+	/// <summary>
+	///   Replenishes <paramref name="limiter" /> once by hand: retries <see cref="TokenBucketRateLimiter.TryReplenish" />
+	///   until it has changed the bucket, so a call that lands inside the replenishment period isn't lost.
+	/// </summary>
+	public static async Task ReplenishAsync(TokenBucketRateLimiter limiter)
+	{
+		ArgumentNullException.ThrowIfNull(limiter);
+
+		RateLimiterStatistics before = limiter.GetStatistics()!;
+
+		await WaitUntilAsync(() =>
+		{
+			limiter.TryReplenish();
+			RateLimiterStatistics after = limiter.GetStatistics()!;
+
+			return after.CurrentQueuedCount < before.CurrentQueuedCount || after.CurrentAvailablePermits > before.CurrentAvailablePermits;
+		}, "the bucket has been replenished");
 	}
 
 	/// <summary>

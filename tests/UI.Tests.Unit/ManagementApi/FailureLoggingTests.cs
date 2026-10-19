@@ -130,7 +130,7 @@ public class FailureLoggingTests
 				harness.Handler.Respond(request => Auth0Responses.RolesPage(request, ["rol_admin"]));
 				break;
 			case "expected failure":
-				harness.Handler.RespondWithError(HttpStatusCode.NotFound, "The role does not exist.");
+				harness.Handler.RespondWithError(HttpStatusCode.NotFound, "The user does not exist.");
 				break;
 			case "token exchange fails":
 				harness.Handler.TokenResponder = _ => Auth0Responses.Json(
@@ -145,7 +145,9 @@ public class FailureLoggingTests
 		}
 
 		// Act
-		Func<Task> act = () => harness.Api.ListRolesAsync(Xunit.TestContext.Current.CancellationToken);
+		Func<Task> act = scenario == "expected failure"
+			? () => harness.Api.GetUserAsync(ApiCalls.UserId, Xunit.TestContext.Current.CancellationToken)
+			: () => harness.Api.ListRolesAsync(Xunit.TestContext.Current.CancellationToken);
 		if (scenario is "token exchange fails" or "403" or "5xx")
 		{
 			// These scenarios throw by design; this test only reads what they logged.
