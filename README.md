@@ -196,10 +196,11 @@ User and Role management isn't built yet; these are the settings it will need.
 
    | Permission | Used to |
    | ---------- | ------- |
-   | `read:users` | List Users and read one User's profile and Roles |
+   | `read:users` | List Users and read one User's profile |
    | `update:users` | Change a User's name, email and the other Profile Fields |
    | `read:roles` | List the Tenant's Roles |
    | `create:roles` | Create a Role |
+   | `read:role_members` | List a User's Roles and a Role's Users |
    | `create:role_members` | Assign a Role to a User |
    | `delete:role_members` | Remove a Role from a User |
 
