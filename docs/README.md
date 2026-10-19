@@ -56,6 +56,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.2](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.2) | 2026-10-19 | build(deps): Override smol-toml to a fixed version | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-5-build-deps-override-smol-toml-to-a-fixed-version.md) |
 | [v0.0.1](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.1) | 2026-10-19 | chore: Rename the project to Auth0 Management App | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-2-chore-rename-the-project-to-auth0-management-app.md) |
 
 <!-- RELEASES_END -->
