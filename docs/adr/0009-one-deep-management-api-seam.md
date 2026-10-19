@@ -43,8 +43,8 @@ This departs from `mpaulosky/Articles`, the reference `CLAUDE.md` points to, who
   second, burst 2. It counts requests rather than `IManagementApi` calls, because one call can send several. Capping how many calls run at once isn't enough,
   because Auth0 refills its bucket by rate and answers a call over the limit with a 429 at once rather than queueing it
   ([rate limit findings](../research/auth0-user-search-and-rate-limits.md)). The limiter queues requests in order, and the handler answers one still waiting after
-  `ManagementApiOptions.QueueTimeout` (5 s by default) with a 429 of its own, so the call fails with `ManagementApi.RateLimited` through the same mapping as Auth0's
-  429.
+  `ManagementApiOptions.QueueTimeout` with a 429 of its own, so the call fails with `ManagementApi.RateLimited` through the same mapping as Auth0's 429.
+  `QueueTimeout` is 4 s by default and at most 4 s, so both attempts and the SDK's backoff fit inside the SDK's 10 s timeout.
 - The cache is in memory, in one process, with a short absolute expiry, and the app's own writes clear what they make stale. A change made elsewhere, such as in the Auth0
   Dashboard or by another instance of the app, shows only once the entry expires. So the last-Admin guard counts the `Admin` Role's members with
   `CountRoleMembersAsync(roleId, atMost)`, which the decorator never caches and which stops paging once it has seen `atMost` members, and never trusts a stale count.

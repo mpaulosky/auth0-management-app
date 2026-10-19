@@ -21,7 +21,8 @@ The work is split into the issues in [Implementation issues](#implementation-iss
 - **`CLAUDE.md`'s Management API rules hold throughout:**
   - A Machine to Machine application of its own, with only the permissions in the README's table.
   - The token never reaches the browser or the logs.
-  - Every page that reads or changes Users or Roles carries `[Authorize]` with the Admin policy.
+  - Every page that reads or changes Users or Roles carries `[Authorize]` with the Admin policy. The public `/admin` page's counts are the one exception, gated on the
+    server ([The landing page](#the-landing-page-admin)).
   - Failures come back as a failed `Result` with a stable code.
 - **Every acceptance criterion is testable offline.** The Sandcastle sandbox has no Auth0 credentials, so tests run against fakes. Tests against the testing Tenant skip
   when its settings are absent ([Testing](#testing)).
@@ -52,6 +53,11 @@ This is variant A's landing page. It is **open to everyone** and stays staticall
 
   They sit inside the [Management API error boundary](#where-each-failure-shows). The page is static, so there the boundary's **Try again** is a link that reloads
   `/admin`, not a button.
+- **The gate is on the server:** the page checks the Admin policy through `IAuthorizationService` before it makes any Management API call, and a Visitor or non-Admin
+  gets no counts and causes no call. This is the one exception to `CLAUDE.md`'s rule that a page reading Users or Roles carries `[Authorize]`, and issue 10 amends
+  that rule to say so.
+- **A count that comes back as a failed `Result`** shows "—" in its tile. If any of them is `ManagementApi.RateLimited`, the rate-limit `Alert` (Warning) shows above the
+  tiles.
 
 ### The Users page, `/admin/users?q=&page=&user={id}`
 
@@ -88,6 +94,7 @@ This is variant C's console without its User drawer, behind the Admin policy.
   - A Visitor is sent to sign in, which is the existing challenge.
   - A signed-in User without `Admin` gets the existing Access denied page, `/authentication/access-denied`, which returns 403.
 - **`CONTEXT.md` changes to match:** the `/admin` landing page is public, and every page that reads or changes Users or Roles is Admin-only.
+- **`CLAUDE.md` changes to match:** its Admin-policy rule names `/admin`'s counts as the exception, gated on the server through `IAuthorizationService`.
 
 ## The Management API seam
 
@@ -178,9 +185,12 @@ The limiter counts HTTP requests, not `IManagementApi` calls: one call can send 
 
 - **Where it runs:** a `DelegatingHandler` on the `"Auth0Management"` `HttpClient` acquires one token from the `TokenBucketRateLimiter` for each request to `/api/v2/*`,
   retries included. `/oauth/token` doesn't take one: the token is cached, and it's the Authentication API, with its own limits.
-- **The bucket** matches Auth0's own, from `PermitsPerSecond` and `Burst`. The limiter queues requests in order.
+- **The bucket** matches Auth0's own, from `PermitsPerSecond` and `Burst`. It queues requests in order: `QueueProcessingOrder.OldestFirst`, with a `QueueLimit` of
+  100 (the default, 0, would refuse at once instead of queueing).
 - **A timeout:** a request still waiting after `QueueTimeout` gets a 429 from the handler itself, with no `X-RateLimit-*` headers, and never reaches Auth0. It then goes
   through the SDK's retry and the adapter's mapping like Auth0's own 429, so the call fails with `ManagementApi.RateLimited`.
+  `QueueTimeout` is at most 4 s because the SDK's 10 s `Timeout` covers both attempts: two waits of 4 s plus the retry's backoff still end inside it, so the call fails
+  as `RateLimited` rather than as a timeout that throws.
 - **In tests:** the limiter is registered as a singleton `RateLimiter`, so a test can replace it with one built with `AutoReplenishment = false` and replenish it by hand.
 
 ### Options
@@ -194,7 +204,7 @@ The limiter counts HTTP requests, not `IManagementApi` calls: one call can send 
 | `ClientSecret` | `[Required]` | none |
 | `PermitsPerSecond` | `[Range(1, 100)]` | 2 (the Free tier) |
 | `Burst` | `[Range(1, 100)]` | 2 |
-| `QueueTimeout` | `[Range]` from 1 to 30 s | 5 s |
+| `QueueTimeout` | `[Range]` from 1 to 4 s | 4 s |
 
 These are never the sign-in application's `Auth0:*` credentials.
 
@@ -321,7 +331,8 @@ The adapter computes `EditableFields` from the User's identities, assuming Auth0
 
 ### Validation
 
-`UpdateProfileFieldsCommandValidator` trims every value first. A blank optional field means "clear it".
+`UpdateProfileFieldsCommandValidator` checks the change, not the whole profile. It trims every value first, and skips a `null` property, which leaves that field alone.
+So "Required" means a Name or Email that is sent can't be blank, and editing only the nickname of a User with no email passes. A blank optional field means "clear it".
 
 | Field | Rule | Code |
 | --- | --- | --- |
@@ -342,7 +353,8 @@ The 150 and 350 limits are Auth0's. The 2,048 and 254 caps are ours.
 - **Filling it in:** the form compares against the `UserDetails` it loaded and fills in only what the Admin edited. This diff is a pure function with its own unit tests.
 - **Each property of `ProfileFieldsChange`:** each of the six is a `string?`. `null` leaves the field alone, and `""` clears it. Clearing is allowed only for the optional
   fields.
-- **The adapter:** it leaves a `null` property out of the request, and turns `""` into the SDK's `null`.
+- **The adapter:** `UpdateUserRequestContent`'s fields are `Optional<string?>` ([SDK findings](../research/auth0-management-sdk.md#profile-fields-types)). The adapter
+  leaves a `null` property unset, so it's left out of the request, and sets `""` to the SDK's `null`, which sends an explicit `null` and clears the field.
 - **Email:**
   - It counts as changed only when it differs ignoring case.
   - A real change sends `Email` with `EmailVerified = false` and `VerifyEmail = false`. No verification email is sent.
@@ -381,6 +393,10 @@ It lives in `RemoveRoleHandler`, and applies only when the Role being removed is
 
 Removing your own `Admin` is allowed while another Admin exists. If the restore itself fails, the Tenant has no Admin until someone fixes it in the Auth0 Dashboard. The
 handler logs that at Critical.
+
+If the recount in step 4 fails, the removal has already happened and nobody knows whether an Admin remains. The handler doesn't restore the Role, which a 429 would
+likely refuse too. It logs at Critical that it couldn't confirm an Admin remains, and returns success, because the removal did happen. A recount that throws goes to
+the error boundary like any unexpected failure, after the same Critical log.
 
 ## Creating a Role
 
@@ -505,6 +521,7 @@ These tests run everywhere, the Sandcastle sandbox included.
   - `src/UI` gets no `InternalsVisibleTo`.
   - What they cover:
     - every status-code mapping in [the catalogue](#the-catalogue)
+    - clearing an optional Profile Field sends it as `null` in the request body, and a field left alone isn't sent
     - the Lucene query and its escaping, as sent, whitespace included
     - checkpoint paging, the member cap with `Truncated`, and a 429 partway through
     - `CountRoleMembersAsync` stopping at `atMost`, and `UserHoldsRoleAsync`
@@ -515,7 +532,7 @@ These tests run everywhere, the Sandcastle sandbox included.
   - Each handler's success path, and every code it can return.
   - A `[Theory]` for each validator rule.
   - The pure rules: the reachable page count, the changed-fields diff, `EditableFields` for each connection type, and the retry seconds.
-  - The last-Admin guard's refusal (with `Received(0)` on `RemoveRoleAsync`), its restore, and removing `Admin` from a User who doesn't hold it while only one Admin
+  - The last-Admin guard's refusal (with `Received(0)` on `RemoveRoleAsync`), its restore, a recount that fails after the removal, and removing `Admin` from a User who doesn't hold it while only one Admin
     exists, which succeeds without calling `RemoveRoleAsync`.
   - The change logs, checked with `FakeLogger` from `Microsoft.Extensions.Diagnostics.Testing`, a new test-only package: the log carries the `AdminId` and the field names, never
     a value.
@@ -528,7 +545,8 @@ These tests run everywhere, the Sandcastle sandbox included.
 - **`WebApplicationFactory` integration tests:**
   - `UiWebApplicationFactory` gains placeholder `Auth0:Management:*` settings, and the tests substitute `IManagementApi`.
   - On `/admin/users` and `/admin/roles`, a Visitor is redirected to sign in, a User without `Admin` gets 403, and an Admin gets 200.
-  - `/admin` returns 200 for everyone, with counts only for an Admin.
+  - `/admin` returns 200 for everyone, with counts only for an Admin. For a Visitor or a non-Admin, `IManagementApi` receives no calls.
+  - With an `IManagementApi` that returns `ManagementApi.RateLimited`, `/admin` shows the rate-limit `Alert` and "—" in place of the counts.
   - With an `IManagementApi` that throws, `/admin` returns 200 for an Admin, showing the error boundary's message and its Try again link to `/admin`.
   - With any one `Auth0:Management:*` setting missing, the host fails to start.
   - `IManagementApi` resolves to `CachedManagementApi`, registered once when both slice registrations run.
@@ -555,7 +573,7 @@ The Tenant in the UI's user secrets is a private testing Tenant on the Free tier
   - What they cover:
     - search and paging return our records
     - `GetUserAsync` on the target User
-    - a nickname change, reverted in the cleanup
+    - a nickname change, and clearing the given name, each read back and reverted in the cleanup
     - assigning and removing the test Role on the target User
     - `ListRoleMembersAsync`, `CountRoleMembersAsync` and `UserHoldsRoleAsync`
     - a 404 for an unknown User id, mapped to `User.NotFound`
@@ -604,7 +622,7 @@ Decided in [How is the feature split into Sandcastle issues, and in what order?]
 | 7 | `feat(Users): Assign and remove a User's Roles` | 5 | [Roles on a User](#roles-on-a-user), its log lines |
 | 8 | `feat(Roles): List the Roles and the Users who hold them` | 1, 2 | [The Roles page](#the-roles-page-adminrolesroleid), [Moving between pages](#moving-between-pages)' tabs |
 | 9 | `feat(Roles): Create a Role` | 8 | [Creating a Role](#creating-a-role), its log line |
-| 10 | `feat(Admin): Turn /admin into the management landing page` | 4, 8 | [The landing page](#the-landing-page-admin), the Admin nav link, the `CONTEXT.md` change, the Visitor landing E2E test |
+| 10 | `feat(Admin): Turn /admin into the management landing page` | 4, 8 | [The landing page](#the-landing-page-admin), the Admin nav link, the `CONTEXT.md` and `CLAUDE.md` changes, the Visitor landing E2E test |
 | 11 | `test(ManagementApi): Test against the testing Tenant` | 6, 7, 9 | [Against the testing Tenant](#against-the-testing-tenant), and the `Auth0:Testing:*` settings in the README |
 | 12 | `chore: Set up the testing Tenant's fixtures and TEST_ENV` (manual, never labelled `Sandcastle`) | none | [Testing Tenant setup](#testing-tenant-setup) |
 
