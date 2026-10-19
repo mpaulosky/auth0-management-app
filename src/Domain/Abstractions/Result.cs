@@ -44,7 +44,12 @@ public enum ResultErrorCode
 	/// <summary>
 	///   Indicates that the caller is not authorized to complete the operation.
 	/// </summary>
-	Unauthorized = 5
+	Unauthorized = 5,
+
+	/// <summary>
+	///   Indicates that an upstream service is rate limiting the caller, so the operation can be tried again later.
+	/// </summary>
+	RateLimited = 6
 }
 
 /// <summary>
