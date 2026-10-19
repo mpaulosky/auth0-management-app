@@ -199,6 +199,7 @@ User on one and a missing Role on another), so each call maps its own codes:
 | `Users.UpdateAsync` | 400 | Split by `ex.ErrorCode` and the message (see below) |
 | `Users.UpdateAsync` | 409 | `User.EmailInUse`, if a duplicate email returns 409 (see [Not verified](#not-verified)) |
 | `Roles.CreateAsync` | 409 | `Role.AlreadyExists` |
+| `Roles.CreateAsync` | 400 | `Role.Invalid`, carrying Auth0's message |
 | `Roles.Users.ListAsync` | 404 | `Role.NotFound` |
 | Any call | 429 | `ManagementApi.RateLimited`, with `ex.RateLimit`, once the SDK's retries run out |
 

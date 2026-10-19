@@ -130,6 +130,9 @@ public sealed class WebAppFixture : IAsyncLifetime
 			builder.Configuration["Auth0:Domain"] ??= PlaceholderAuth0Domain;
 			builder.Configuration["Auth0:ClientId"] ??= "placeholder-client-id";
 			builder.Configuration["Auth0:ClientSecret"] ??= "placeholder-client-secret";
+			builder.Configuration["Auth0:Management:Domain"] ??= "management.placeholder.invalid";
+			builder.Configuration["Auth0:Management:ClientId"] ??= "placeholder-management-client-id";
+			builder.Configuration["Auth0:Management:ClientSecret"] ??= "placeholder-management-client-secret";
 			Auth0Domain = builder.Configuration["Auth0:Domain"] ?? PlaceholderAuth0Domain;
 			UsesPlaceholderAuth0 = Auth0Domain == PlaceholderAuth0Domain;
 

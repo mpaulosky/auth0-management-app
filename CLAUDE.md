@@ -9,12 +9,12 @@ don't write docs or code for "apps generated from it".
 Today it holds the Shared Kernel (`src/Domain/`), the Blazor Web App (`src/UI/`, with a Home page, the Tailwind build,
 the Auth0 sign-in and sign-out in the `Authentication` slice, a User's claims in the `Profile` slice, the Admin-only page
 in the `Admin` slice, the Theme control in the `Themes` slice and the Palette menu in the `Palettes` slice), the Aspire
-AppHost and ServiceDefaults, and their tests. User and Role management isn't built yet.
-The slices will call the Management API through one deep interface, `IManagementApi` in `src/UI/ManagementApi/`, that
-returns `Result` and our own records, with the SDK, the cached client-credentials token and settings under
-`Auth0:Management:*` behind it, and a token bucket that throttles every call to stay under Auth0's rate limits
-(see `docs/adr/0009-one-deep-management-api-seam.md`). `mpaulosky/Articles`
-(`src/Web/Components/Features/UserManagement/`) is a reference for the SDK calls, not for that seam.
+AppHost and ServiceDefaults, and their tests. User and Role management isn't built yet, but its Management API seam is:
+the slices will call the Management API through one deep interface, `IManagementApi` in `src/UI/ManagementApi/`
+(registered by `AddManagementApi()`, which no slice calls yet), that returns `Result` and our own records, with the
+SDK, the cached client-credentials token and settings under `Auth0:Management:*` behind it, and a token bucket that
+throttles every call to stay under Auth0's rate limits (see `docs/adr/0009-one-deep-management-api-seam.md`).
+`mpaulosky/Articles` (`src/Web/Components/Features/UserManagement/`) is a reference for the SDK calls, not for that seam.
 
 ## Auth0 Management API
 

@@ -37,6 +37,9 @@ public class AppHostTests : IAsyncLifetime
 		builder.Configuration["Auth0:Domain"] ??= "auth0.placeholder.invalid";
 		builder.Configuration["Auth0:ClientId"] ??= "placeholder-client-id";
 		builder.Configuration["Auth0:ClientSecret"] ??= "placeholder-client-secret";
+		builder.Configuration["Auth0:Management:Domain"] ??= "management.placeholder.invalid";
+		builder.Configuration["Auth0:Management:ClientId"] ??= "placeholder-management-client-id";
+		builder.Configuration["Auth0:Management:ClientSecret"] ??= "placeholder-management-client-secret";
 
 		_application = await builder.BuildAsync(startupTimeout.Token);
 
