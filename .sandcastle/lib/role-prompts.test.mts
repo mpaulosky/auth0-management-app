@@ -34,7 +34,7 @@ describe("developer roles across stacks", () => {
   it("gives the build and test commands for both .NET and Sandcastle's TypeScript in the shared rules", () => {
     const rules = read("roles/shared-rules.md");
 
-    assert.match(rules, /dotnet build Blazor-Server\.slnx/);
+    assert.match(rules, /dotnet build Auth0ManagementApp\.slnx/);
     assert.match(rules, /dotnet test --project/);
     assert.match(rules, /pnpm exec tsc --noEmit -p \.sandcastle/);
     assert.match(rules, /pnpm exec tsx --test/);

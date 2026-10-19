@@ -3,7 +3,7 @@
 // File Name :     CommitLabelTests.cs
 // Company :       mpaulosky
 // Author :        Teqslamer
-// Solution Name : Blazor-Server
+// Solution Name : Auth0ManagementApp
 // Project Name :  UI.Tests.Unit
 // =============================================
 
@@ -18,9 +18,9 @@ public class CommitLabelTests
 	// Refs #349: the Last Commit item shows the first 7 characters of the commit, linking to the full SHA's page,
 	// with a trailing ".git" or "/" stripped from the repository URL first.
 	[Theory]
-	[InlineData("https://github.com/mpaulosky/Blazor-Server")]
-	[InlineData("https://github.com/mpaulosky/Blazor-Server.git")]
-	[InlineData("https://github.com/mpaulosky/Blazor-Server/")]
+	[InlineData("https://github.com/mpaulosky/auth0-management-app")]
+	[InlineData("https://github.com/mpaulosky/auth0-management-app.git")]
+	[InlineData("https://github.com/mpaulosky/auth0-management-app/")]
 	public void FromCommit_HttpsRepositoryUrl_ReturnsShortShaLinkingToFullSha(string repositoryUrl)
 	{
 		// Arrange
@@ -30,15 +30,15 @@ public class CommitLabelTests
 
 		// Assert
 		label.Text.Should().Be("5cc1da2");
-		label.Link.Should().Be($"https://github.com/mpaulosky/Blazor-Server/commit/{Commit}");
+		label.Link.Should().Be($"https://github.com/mpaulosky/auth0-management-app/commit/{Commit}");
 	}
 
 	// Refs #349: with no repository URL, or one that isn't https:// (such as an SSH remote), the commit renders as
 	// plain text, so the link is empty.
 	[Theory]
 	[InlineData("")]
-	[InlineData("http://github.com/mpaulosky/Blazor-Server")]
-	[InlineData("git@github.com:mpaulosky/Blazor-Server.git")]
+	[InlineData("http://github.com/mpaulosky/auth0-management-app")]
+	[InlineData("git@github.com:mpaulosky/auth0-management-app.git")]
 	public void FromCommit_NoOrNonHttpsRepositoryUrl_ReturnsShortShaWithNoLink(string repositoryUrl)
 	{
 		// Arrange
@@ -55,14 +55,14 @@ public class CommitLabelTests
 	// and a commit shorter than 7 characters is shown whole rather than throwing.
 	[Theory]
 	[InlineData("", "", "")]
-	[InlineData("abc", "abc", "https://github.com/mpaulosky/Blazor-Server/commit/abc")]
+	[InlineData("abc", "abc", "https://github.com/mpaulosky/auth0-management-app/commit/abc")]
 	public void FromCommit_EmptyOrShortCommit_ReturnsCommitAsIs(string commit, string expectedText,
 		string expectedLink)
 	{
 		// Arrange
 
 		// Act
-		CommitLabel label = CommitLabel.FromCommit(commit, "https://github.com/mpaulosky/Blazor-Server");
+		CommitLabel label = CommitLabel.FromCommit(commit, "https://github.com/mpaulosky/auth0-management-app");
 
 		// Assert
 		label.Text.Should().Be(expectedText);

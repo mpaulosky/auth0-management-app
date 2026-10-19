@@ -3,7 +3,7 @@
 // File Name :     ReleaseLabelTests.cs
 // Company :       mpaulosky
 // Author :        Teqslamer
-// Solution Name : Blazor-Server
+// Solution Name : Auth0ManagementApp
 // Project Name :  UI.Tests.Unit
 // =============================================
 
@@ -13,18 +13,18 @@ namespace UI.Tests.Unit.Components.Layout;
 
 public class ReleaseLabelTests
 {
-	private const string RepositoryUrl = "https://github.com/mpaulosky/Blazor-Server";
+	private const string RepositoryUrl = "https://github.com/mpaulosky/auth0-management-app";
 
 	// Refs #348: covers every row of the issue's Release label table, including a hyphenated tag
 	// (v1.0.0-rc.1, parsed from the end so the tag's own hyphens aren't mistaken for the "-<count>-g<sha>" suffix)
 	// and the empty "no release" case.
 	[Theory]
-	[InlineData("v0.0.152-0-g5cc1da2", "v0.0.152", "https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.152")]
+	[InlineData("v0.0.152-0-g5cc1da2", "v0.0.152", "https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.152")]
 	[InlineData("v0.0.152-1-g5cc1da2", "v0.0.152 +1",
-		"https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.152")]
+		"https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.152")]
 	[InlineData("v1.0.0-rc.1-3-gabc1234", "v1.0.0-rc.1 +3",
-		"https://github.com/mpaulosky/Blazor-Server/releases/tag/v1.0.0-rc.1")]
-	[InlineData("", "no release", "https://github.com/mpaulosky/Blazor-Server/releases")]
+		"https://github.com/mpaulosky/auth0-management-app/releases/tag/v1.0.0-rc.1")]
+	[InlineData("", "no release", "https://github.com/mpaulosky/auth0-management-app/releases")]
 	public void FromDescribe_DescribeOutput_ReturnsExpectedLabelAndLink(string describeOutput, string expectedText,
 		string expectedLink)
 	{
@@ -44,10 +44,10 @@ public class ReleaseLabelTests
 	[Theory]
 	[InlineData("v0.0.152-0-g5cc1da2", "", "v0.0.152", "")]
 	[InlineData("", "", "no release", "")]
-	[InlineData("v0.0.152-0-g5cc1da2", "https://github.com/mpaulosky/Blazor-Server.git", "v0.0.152",
-		"https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.152")]
-	[InlineData("", "https://github.com/mpaulosky/Blazor-Server.git", "no release",
-		"https://github.com/mpaulosky/Blazor-Server/releases")]
+	[InlineData("v0.0.152-0-g5cc1da2", "https://github.com/mpaulosky/auth0-management-app.git", "v0.0.152",
+		"https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.152")]
+	[InlineData("", "https://github.com/mpaulosky/auth0-management-app.git", "no release",
+		"https://github.com/mpaulosky/auth0-management-app/releases")]
 	public void FromDescribe_EmptyOrGitSuffixedRepositoryUrl_ReturnsExpectedLink(string describeOutput,
 		string repositoryUrl, string expectedText, string expectedLink)
 	{
@@ -64,8 +64,8 @@ public class ReleaseLabelTests
 	// Refs #349: only https:// repository URLs produce links; an http:// or SSH remote leaves the label as plain
 	// text.
 	[Theory]
-	[InlineData("v0.0.152-0-g5cc1da2", "http://github.com/mpaulosky/Blazor-Server", "v0.0.152")]
-	[InlineData("", "git@github.com:mpaulosky/Blazor-Server.git", "no release")]
+	[InlineData("v0.0.152-0-g5cc1da2", "http://github.com/mpaulosky/auth0-management-app", "v0.0.152")]
+	[InlineData("", "git@github.com:mpaulosky/auth0-management-app.git", "no release")]
 	public void FromDescribe_NonHttpsRepositoryUrl_ReturnsLabelWithNoLink(string describeOutput, string repositoryUrl,
 		string expectedText)
 	{

@@ -446,7 +446,7 @@ jobs:
             // Why the head's required checks haven't all passed, or null when
             // they have. Required: what main's rulesets list (requiredNames),
             // and anything isRequired reports (checked live on
-            // Blazor-Server#183). One with no run on the head yet is pending.
+            // auth0-management-app#183). One with no run on the head yet is pending.
             function requiredChecksPending(pr, requiredNames) {
               const commit = headCommit(pr);
               if (!commit) {

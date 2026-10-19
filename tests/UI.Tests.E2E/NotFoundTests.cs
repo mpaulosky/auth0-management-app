@@ -3,7 +3,7 @@
 // File Name :     NotFoundTests.cs
 // Company :       mpaulosky
 // Author :        Teqslamer
-// Solution Name : Blazor-Server
+// Solution Name : Auth0ManagementApp
 // Project Name :  UI.Tests.E2E
 // =============================================
 

@@ -3,7 +3,7 @@
 // File Name :     ApplicationConstants.cs
 // Company :       mpaulosky
 // Author :        Teqslamer
-// Solution Name : Blazor-Server
+// Solution Name : Auth0ManagementApp
 // Project Name :  Domain
 // =============================================
 
@@ -46,5 +46,5 @@ public static class ApplicationConstants
 	/// <summary>
 	///   The app's brand name, shown in the nav, the footer and Home's heading. A Generated App changes it to rebrand.
 	/// </summary>
-	public const string AppName = "Blazor Server";
+	public const string AppName = "Auth0 Management App";
 }

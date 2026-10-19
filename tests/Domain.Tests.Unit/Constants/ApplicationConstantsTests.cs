@@ -3,7 +3,7 @@
 // File Name :     ApplicationConstantsTests.cs
 // Company :       mpaulosky
 // Author :        Teqslamer
-// Solution Name : Blazor-Server
+// Solution Name : Auth0ManagementApp
 // Project Name :  Domain.Tests.Unit
 // =============================================
 
@@ -19,7 +19,7 @@ public class ApplicationConstantsTests
 	[InlineData(ApplicationConstants.ThemeCookie, "theme")]
 	[InlineData(ApplicationConstants.PaletteCookie, "palette")]
 	[InlineData(ApplicationConstants.Website, "WebApp")]
-	[InlineData(ApplicationConstants.AppName, "Blazor Server")]
+	[InlineData(ApplicationConstants.AppName, "Auth0 Management App")]
 	public void ApplicationConstants_Member_HasExpectedValue(string actual, string expected)
 	{
 		// Arrange

@@ -1,21 +1,21 @@
-# Blazor Server Template
+# Auth0 Management App
 
-[![Build and Test Suite](https://github.com/mpaulosky/Blazor-Server/actions/workflows/ci.yml/badge.svg)](https://github.com/mpaulosky/Blazor-Server/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/mpaulosky/Blazor-Server/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/mpaulosky/Blazor-Server/actions/workflows/codeql-analysis.yml)
-[![.NET code metrics](https://github.com/mpaulosky/Blazor-Server/actions/workflows/code-metrics.yml/badge.svg)](https://github.com/mpaulosky/Blazor-Server/actions/workflows/code-metrics.yml)
-[![Lint Markdown](https://github.com/mpaulosky/Blazor-Server/actions/workflows/lint-markdown.yml/badge.svg)](https://github.com/mpaulosky/Blazor-Server/actions/workflows/lint-markdown.yml)
-[![Lint YAML](https://github.com/mpaulosky/Blazor-Server/actions/workflows/lint-yaml.yml/badge.svg)](https://github.com/mpaulosky/Blazor-Server/actions/workflows/lint-yaml.yml)
+[![Build and Test Suite](https://github.com/mpaulosky/auth0-management-app/actions/workflows/ci.yml/badge.svg)](https://github.com/mpaulosky/auth0-management-app/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/mpaulosky/auth0-management-app/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/mpaulosky/auth0-management-app/actions/workflows/codeql-analysis.yml)
+[![.NET code metrics](https://github.com/mpaulosky/auth0-management-app/actions/workflows/code-metrics.yml/badge.svg)](https://github.com/mpaulosky/auth0-management-app/actions/workflows/code-metrics.yml)
+[![Lint Markdown](https://github.com/mpaulosky/auth0-management-app/actions/workflows/lint-markdown.yml/badge.svg)](https://github.com/mpaulosky/auth0-management-app/actions/workflows/lint-markdown.yml)
+[![Lint YAML](https://github.com/mpaulosky/auth0-management-app/actions/workflows/lint-yaml.yml/badge.svg)](https://github.com/mpaulosky/auth0-management-app/actions/workflows/lint-yaml.yml)
 
-[![Codecov](https://img.shields.io/codecov/c/github/mpaulosky/Blazor-Server?logo=codecov)](https://codecov.io/gh/mpaulosky/Blazor-Server)
-[![Latest release](https://img.shields.io/github/v/release/mpaulosky/Blazor-Server)](https://github.com/mpaulosky/Blazor-Server/releases/latest)
-[![License](https://img.shields.io/github/license/mpaulosky/Blazor-Server)](https://github.com/mpaulosky/Blazor-Server/blob/main/LICENSE)
+[![Codecov](https://img.shields.io/codecov/c/github/mpaulosky/auth0-management-app?logo=codecov)](https://codecov.io/gh/mpaulosky/auth0-management-app)
+[![Latest release](https://img.shields.io/github/v/release/mpaulosky/auth0-management-app)](https://github.com/mpaulosky/auth0-management-app/releases/latest)
+[![License](https://img.shields.io/github/license/mpaulosky/auth0-management-app)](https://github.com/mpaulosky/auth0-management-app/blob/main/LICENSE)
 [![.NET 10](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet)](https://dotnet.microsoft.com/download/dotnet/10.0)
 
-[![Open issues](https://img.shields.io/github/issues/mpaulosky/Blazor-Server)](https://github.com/mpaulosky/Blazor-Server/issues)
-[![Closed issues](https://img.shields.io/github/issues-closed/mpaulosky/Blazor-Server)](https://github.com/mpaulosky/Blazor-Server/issues?q=is%3Aissue+is%3Aclosed)
-[![Open PRs](https://img.shields.io/github/issues-pr/mpaulosky/Blazor-Server)](https://github.com/mpaulosky/Blazor-Server/pulls)
-[![Closed PRs](https://img.shields.io/github/issues-pr-closed/mpaulosky/Blazor-Server)](https://github.com/mpaulosky/Blazor-Server/pulls?q=is%3Apr+is%3Aclosed)
-[![Stars](https://img.shields.io/github/stars/mpaulosky/Blazor-Server)](https://github.com/mpaulosky/Blazor-Server/stargazers)
+[![Open issues](https://img.shields.io/github/issues/mpaulosky/auth0-management-app)](https://github.com/mpaulosky/auth0-management-app/issues)
+[![Closed issues](https://img.shields.io/github/issues-closed/mpaulosky/auth0-management-app)](https://github.com/mpaulosky/auth0-management-app/issues?q=is%3Aissue+is%3Aclosed)
+[![Open PRs](https://img.shields.io/github/issues-pr/mpaulosky/auth0-management-app)](https://github.com/mpaulosky/auth0-management-app/pulls)
+[![Closed PRs](https://img.shields.io/github/issues-pr-closed/mpaulosky/auth0-management-app)](https://github.com/mpaulosky/auth0-management-app/pulls?q=is%3Apr+is%3Aclosed)
+[![Stars](https://img.shields.io/github/stars/mpaulosky/auth0-management-app)](https://github.com/mpaulosky/auth0-management-app/stargazers)
 
 ## About
 
@@ -31,7 +31,7 @@ The Template is intended to give every Generated App:
 - Auth0 authentication and authorization, distinguishing a **Visitor** (unauthenticated), a **User** (authenticated)
   and an **Admin** (a User with the Admin role).
 
-See [CONTEXT.md](https://github.com/mpaulosky/Blazor-Server/blob/main/CONTEXT.md) for the exact meaning of these terms.
+See [CONTEXT.md](https://github.com/mpaulosky/auth0-management-app/blob/main/CONTEXT.md) for the exact meaning of these terms.
 
 **Status:** early stage. The Template currently contains the **Shared Kernel** (`src/Domain`), the Blazor Web App
 scaffold (`src/UI`: a Home page, a nav menu, a NotFound page and the Tailwind CSS v4 build), sign-in and sign-out through
@@ -56,24 +56,14 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
-| [v0.0.178](https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.178) | 2026-10-19 | fix(sandcastle): Let the critique see overlap-held issues, and don't fail the run on a comments read | [Post](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/blogs/2026-10-19-pr-429-fix-sandcastle-let-the-critique-see-overlap-held-issues-and-don-t-fail-the-run-on-a-comments-read.md) |
-| [v0.0.177](https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.177) | 2026-10-19 | fix(sandcastle): Fix the same-file overlap check's review findings | [Post](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/blogs/2026-10-19-pr-426-fix-sandcastle-fix-the-same-file-overlap-check-s-review-findings.md) |
-| [v0.0.176](https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.176) | 2026-10-19 | feat(sandcastle): Don't build two issues at once that change the same file | [Post](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/blogs/2026-10-19-pr-423-feat-sandcastle-don-t-build-two-issues-at-once-that-change-the-same-file.md) |
-| [v0.0.175](https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.175) | 2026-10-19 | fix(sandcastle): Give the sandbox the host's git identity before the follow-up pass merges main | [Post](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/blogs/2026-10-19-pr-420-fix-sandcastle-give-the-sandbox-the-host-s-git-identity-before-the-follow-up-pass-merges-main.md) |
-| [v0.0.174](https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.174) | 2026-10-18 | chore: Re-apply the repo-ci-baseline Template | [Post](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/blogs/2026-10-18-pr-417-chore-re-apply-the-repo-ci-baseline-template.md) |
-| [v0.0.173](https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.173) | 2026-10-18 | chore(deps): Have Dependabot ignore claude-code-action | [Post](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/blogs/2026-10-18-pr-414-chore-deps-have-dependabot-ignore-claude-code-action.md) |
-| [v0.0.172](https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.172) | 2026-10-18 | fix(sandcastle): Use Claude Sonnet 5.5, not Sonnet 5 | [Post](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/blogs/2026-10-18-pr-412-fix-sandcastle-use-claude-sonnet-5-5-not-sonnet-5.md) |
-| [v0.0.171](https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.171) | 2026-10-18 | fix(UI): Install the pnpm packages on a local build when the Tailwind CLI is missing (#409) | [Post](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/blogs/2026-10-18-pr-410-fix-ui-install-the-pnpm-packages-on-a-local-build-when-the-tailwind-cli-is-missing-409.md) |
-| [v0.0.170](https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.170) | 2026-10-18 | chore: Re-apply the repo-ci-baseline Template | [Post](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/blogs/2026-10-18-pr-405-chore-re-apply-the-repo-ci-baseline-template.md) |
-| [v0.0.169](https://github.com/mpaulosky/Blazor-Server/releases/tag/v0.0.169) | 2026-10-18 | chore: Re-apply the repo-ci-baseline Template | [Post](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/blogs/2026-10-18-pr-403-chore-re-apply-the-repo-ci-baseline-template.md) |
 
 <!-- RELEASES_END -->
 
-[All releases →](https://github.com/mpaulosky/Blazor-Server/releases)
+[All releases →](https://github.com/mpaulosky/auth0-management-app/releases)
 
 ## Getting started
 
-1. Select **Use this template** on the [repository page](https://github.com/mpaulosky/Blazor-Server) to create your
+1. Select **Use this template** on the [repository page](https://github.com/mpaulosky/auth0-management-app) to create your
    own repository, then clone it:
 
    ```bash
@@ -83,7 +73,7 @@ Blue, the default, renders no attribute.
 
 2. Install the prerequisites:
 
-   - The .NET SDK `10.0.401`, as pinned in [global.json](https://github.com/mpaulosky/Blazor-Server/blob/main/global.json) (later 10.0 feature bands are accepted).
+   - The .NET SDK `10.0.401`, as pinned in [global.json](https://github.com/mpaulosky/auth0-management-app/blob/main/global.json) (later 10.0 feature bands are accepted).
    - Node.js and pnpm (`corepack enable`), used by the Tailwind CSS build, the git hooks and the lint tools. The repo refuses `npm install`.
    - [yamllint](https://yamllint.readthedocs.io/), which the pre-push hook runs on changed YAML files.
 
@@ -91,7 +81,7 @@ Blue, the default, renders no attribute.
 
    ```bash
    pnpm install
-   dotnet build Blazor-Server.slnx
+   dotnet build Auth0ManagementApp.slnx
    (for project in tests/*/*.csproj; do dotnet test --project "$project" || exit 1; done)
    ```
 
@@ -153,7 +143,7 @@ The app won't start without an Auth0 tenant's settings: it validates `Auth0:Doma
 
    ```javascript
    exports.onExecutePostLogin = async (event, api) => {
-     api.idToken.setCustomClaim('https://blazor-server-template/roles', event.authorization?.roles ?? []);
+     api.idToken.setCustomClaim('https://auth0-management-app/roles', event.authorization?.roles ?? []);
    };
    ```
 
@@ -170,7 +160,7 @@ The app won't start without an Auth0 tenant's settings: it validates `Auth0:Doma
    `Auth0__Domain`, `Auth0__ClientId` and `Auth0__ClientSecret`. When one is missing, the Aspire dashboard asks for it.
    Outside Development, set those environment variables instead.
 
-`Auth0:RoleClaimType` names the claim the roles arrive in. It defaults to `https://blazor-server-template/roles`, the
+`Auth0:RoleClaimType` names the claim the roles arrive in. It defaults to `https://auth0-management-app/roles`, the
 claim the Action above sets; change both together. The app maps each role in that claim to a .NET role, so an `Admin`
 there satisfies the Admin policy.
 
@@ -181,13 +171,13 @@ there satisfies the Admin policy.
   `src/AppHost/AppHost.csproj` with one new GUID (for example from `uuidgen`). Otherwise every app made from this
   template reads and writes the same `Auth0:*` secrets on your machine.
 - Repoint the badges at your own repository, or remove them.
-- Decide whether to keep the release automation: [release.yml](https://github.com/mpaulosky/Blazor-Server/blob/main/.github/workflows/release.yml) tags a release and
+- Decide whether to keep the release automation: [release.yml](https://github.com/mpaulosky/auth0-management-app/blob/main/.github/workflows/release.yml) tags a release and
   opens a release-notes PR for every merged PR, which also copies `README.md` to `docs/README.md`. Delete it if you don't want it.
-- The release-notes PR adds a blog post written by [release_post.py](https://github.com/mpaulosky/Blazor-Server/blob/main/.github/scripts/release_post.py).
+- The release-notes PR adds a blog post written by [release_post.py](https://github.com/mpaulosky/auth0-management-app/blob/main/.github/scripts/release_post.py).
   Add an `ANTHROPIC_API_KEY` repository secret to open each post with a short AI summary; without it, posts skip the summary.
-  Run [backfill-blog-posts.yml](https://github.com/mpaulosky/Blazor-Server/blob/main/.github/workflows/backfill-blog-posts.yml) by hand to write posts for
+  Run [backfill-blog-posts.yml](https://github.com/mpaulosky/auth0-management-app/blob/main/.github/workflows/backfill-blog-posts.yml) by hand to write posts for
   past releases that lack one, or set `regenerate` to rewrite them all. It opens one PR and never creates tags or Releases.
-- [docs/index.html](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/index.html) is the GitHub Pages home page. Repoint its header links at your
+- [docs/index.html](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/index.html) is the GitHub Pages home page. Repoint its header links at your
   repository, or delete it and `docs/.nojekyll` if you don't publish Pages.
 
 ## Project layout
@@ -221,9 +211,9 @@ CLAUDE.md, .claude/              -- Claude Code instructions, rules and skills
 - Name branches `feature/{issue}-{slug}` for issue work, `fix/{issue}-{slug}` for bug fixes, `hotfix/{issue}-{slug}` for
   urgent fixes, or `chore/{slug}` for maintenance with no issue, for example `feature/14-add-root-readme`.
 - Issues labelled `Sandcastle` are worked by Sandcastle agents, which open a pull request for review.
-- Read [CONTRIBUTING.md](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/CONTRIBUTING.md), the [Code of Conduct](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/CODE_OF_CONDUCT.md)
-  and the [Security Policy](https://github.com/mpaulosky/Blazor-Server/blob/main/docs/SECURITY.md) before contributing.
+- Read [CONTRIBUTING.md](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/CONTRIBUTING.md), the [Code of Conduct](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/CODE_OF_CONDUCT.md)
+  and the [Security Policy](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/SECURITY.md) before contributing.
 
 ## License
 
-Licensed under the [MIT License](https://github.com/mpaulosky/Blazor-Server/blob/main/LICENSE).
+Licensed under the [MIT License](https://github.com/mpaulosky/auth0-management-app/blob/main/LICENSE).

@@ -136,7 +136,7 @@ This means one of several types of contributions:
 
 ### Create an Issue
 
-Create a [New Issue Here](https://github.com/mpaulosky/Blazor-Server/issues).
+Create a [New Issue Here](https://github.com/mpaulosky/auth0-management-app/issues).
 
 1. If you are reporting a `Bug` that you have found. Be sure to add the `Bug` label so that we can triage and track it.
 1. If you are reporting an `Enhancement` that you think would improve the project. Be sure to add the `Enhancement`
@@ -146,7 +146,7 @@ Please provide as much detail as possible, including steps to reproduce, expecte
 
 ### Respond to an Issue
 
-[Fork the Repository to your account](https://github.com/mpaulosky/Blazor-Server/fork).
+[Fork the Repository to your account](https://github.com/mpaulosky/auth0-management-app/fork).
 
 1. Leave an issue labelled `sandcastle:building` alone: Sandcastle is building it right now, and two people or agents editing the same files would race to publish.
    The label clears when the build ends.

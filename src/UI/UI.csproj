@@ -35,7 +35,7 @@
 	</ItemGroup>
 
 	<!-- A fresh clone or worktree has no node_modules, so a local build installs the workspace's packages from the
-	     root lockfile before the CLI runs (mpaulosky/Blazor-Server#409). CI installs them in .github/ci/prepare.sh,
+	     root lockfile before the CLI runs (mpaulosky/auth0-management-app#409). CI installs them in .github/ci/prepare.sh,
 	     and design-time builds have no pnpm, so both skip this. -->
 	<Target
 		Name="EnsurePnpmPackages"

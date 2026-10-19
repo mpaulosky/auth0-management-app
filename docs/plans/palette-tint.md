@@ -3,7 +3,7 @@
 This is the spec for tinting the Generated App's surfaces with the **Palette**: the page, cards, nav, footer, borders and hover fills take the visitor's hue in both
 Themes, and a few more places carry the accent. Text stays neutral.
 
-It was charted on the map [Map: Tint the Generated App's surfaces with the Palette](https://github.com/mpaulosky/Blazor-Server/issues/382). Each section links the ticket
+It was charted on the map [Map: Tint the Generated App's surfaces with the Palette](https://github.com/mpaulosky/auth0-management-app/issues/382). Each section links the ticket
 that holds the reasoning; this document says *what* to build, and the tickets say *why*. It changes the colour classes that [UI Restyle](ui-restyle.md) and
 [Theme and Palette](theme-and-palette.md) set, and [ADR 0008](../adr/0008-the-palette-tints-the-surfaces.md) records why. The work is split into the issues in
 [Implementation issues](#implementation-issues).
@@ -14,7 +14,7 @@ that holds the reasoning; this document says *what* to build, and the tickets sa
   so every surface follows the hue with no new CSS.
 - **Text stays neutral.** Body and secondary text keep `slate-*`, so reading doesn't change colour with the hue.
 - **Every pair meets WCAG AA for all 17 hues, in both Themes**, checked with the research script from
-  [Research: Which Palette tints keep WCAG AA for neutral text and the accent, in both Themes?](https://github.com/mpaulosky/Blazor-Server/issues/383).
+  [Research: Which Palette tints keep WCAG AA for neutral text and the accent, in both Themes?](https://github.com/mpaulosky/auth0-management-app/issues/383).
 - **One exception:** the Palette menu's panel and tiles stay slate, so each swatch reads true.
 - **The domain terms.** **Palette** is the hue that tints the accent and the surfaces; **Theme** is Light, Dark or System. `CONTEXT.md` is updated to match.
 
@@ -22,8 +22,8 @@ Out of scope: a Neutral or Slate Palette that tints nothing, and screenshot or v
 
 ## The surfaces
 
-Decided in [Prototype: How strong the Palette tint is on surfaces and borders, in Light and Dark](https://github.com/mpaulosky/Blazor-Server/issues/384) (variant I, on the
-throwaway branch `chore/prototype-palette-tint`) and [Decide: How the surface tint reaches the markup](https://github.com/mpaulosky/Blazor-Server/issues/386).
+Decided in [Prototype: How strong the Palette tint is on surfaces and borders, in Light and Dark](https://github.com/mpaulosky/auth0-management-app/issues/384) (variant I, on the
+throwaway branch `chore/prototype-palette-tint`) and [Decide: How the surface tint reaches the markup](https://github.com/mpaulosky/auth0-management-app/issues/386).
 
 Every `slate-*` class on a background, border, divider, ring or gradient stop changes as this table says, in every `.razor` file under `src/UI` except `PaletteMenu.razor`'s
 panel and tiles. Opacity suffixes stay as they are (`dark:bg-slate-900/70` becomes `dark:bg-accent-900/70`).
@@ -57,7 +57,7 @@ dark:ring-white dark:ring-offset-slate-900`) stay slate. A comment above the pan
 
 ## The text
 
-Decided in the spec task, [Task: Write the Palette tint spec and file the implementation issues](https://github.com/mpaulosky/Blazor-Server/issues/387), from the contrast
+Decided in the spec task, [Task: Write the Palette tint spec and file the implementation issues](https://github.com/mpaulosky/auth0-management-app/issues/387), from the contrast
 check of the chosen surfaces.
 
 - **Light secondary text moves from `slate-500` to `slate-600`** everywhere. On `accent-100` `slate-500` fails AA for every hue (3.87:1 on Indigo); `slate-600` passes with at least 5.07:1
@@ -75,7 +75,7 @@ ring misses 3:1 for Amber, Yellow, Lime and Green; `accent-300` passes for every
 
 ## The accent touches
 
-Decided in [Prototype: Where else the accent should show across the UI](https://github.com/mpaulosky/Blazor-Server/issues/385). They live in the shared components, so every
+Decided in [Prototype: Where else the accent should show across the UI](https://github.com/mpaulosky/auth0-management-app/issues/385). They live in the shared components, so every
 page gets them, except the table header, which lives in the Profile slice.
 
 - **PageHeader's `<h1>`** gains a gradient text fill:
@@ -106,7 +106,7 @@ Rejected in the prototype: card headings and the bold list terms in the hue, an 
 
 ## The rule and its guard
 
-Decided in [Decide: How the surface tint reaches the markup](https://github.com/mpaulosky/Blazor-Server/issues/386).
+Decided in [Decide: How the surface tint reaches the markup](https://github.com/mpaulosky/auth0-management-app/issues/386).
 
 `docs/CODING_STANDARDS.md` (Blazor) and `.claude/rules/blazor.md` gain the rule, in this spec's PR:
 
@@ -146,5 +146,5 @@ Filed with native "blocked by" links. They don't carry `Sandcastle` yet: the own
 
 | Issue | Blocked by |
 | --- | --- |
-| [Tint the surfaces with the Palette, and guard them](https://github.com/mpaulosky/Blazor-Server/issues/388) | this spec |
-| [Add the accent touches: the title gradient, StatTile, the Profile table header and the browser chrome](https://github.com/mpaulosky/Blazor-Server/issues/389) | #388 |
+| [Tint the surfaces with the Palette, and guard them](https://github.com/mpaulosky/auth0-management-app/issues/388) | this spec |
+| [Add the accent touches: the title gradient, StatTile, the Profile table header and the browser chrome](https://github.com/mpaulosky/auth0-management-app/issues/389) | #388 |

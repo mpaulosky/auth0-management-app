@@ -3,7 +3,7 @@
 This is the spec for the **Theme** control and cookie and the **Palette** menu: a visitor picks Light, Dark or System, and one of 17 accent hues, from the Generated App's
 nav, and the choice survives every page and reload.
 
-It was charted on the map [Map: Theme toggle and cookie, and the Palette picker](https://github.com/mpaulosky/Blazor-Server/issues/353). Each section links the ticket that holds
+It was charted on the map [Map: Theme toggle and cookie, and the Palette picker](https://github.com/mpaulosky/auth0-management-app/issues/353). Each section links the ticket that holds
 the reasoning; this document says *what* to build, and the tickets say *why*. The work is split into the `Sandcastle` issues in [Implementation issues](#implementation-issues).
 It builds on the tokens the restyle added ([UI Restyle](ui-restyle.md#tokens)): the `dark` variant that follows `data-theme`, and the `--color-accent-*` token.
 
@@ -30,7 +30,7 @@ namespace (CS0118). The tests mirror the plural folders.
 
 ## Value types
 
-Decided in [Decide: How the Theme and Palette controls reach the server, and how App.razor reads the cookies](https://github.com/mpaulosky/Blazor-Server/issues/356).
+Decided in [Decide: How the Theme and Palette controls reach the server, and how App.razor reads the cookies](https://github.com/mpaulosky/auth0-management-app/issues/356).
 
 ### Theme
 
@@ -81,8 +81,8 @@ A `null` value omits the attribute. `App.razor` sits outside every slice, so it 
 
 ## Writing: the endpoints
 
-Decided in [Decide: How the Theme and Palette controls reach the server, and how App.razor reads the cookies](https://github.com/mpaulosky/Blazor-Server/issues/356) and
-[Research: Does an enhanced form post with a redirect re-sync the html attributes?](https://github.com/mpaulosky/Blazor-Server/issues/354).
+Decided in [Decide: How the Theme and Palette controls reach the server, and how App.razor reads the cookies](https://github.com/mpaulosky/auth0-management-app/issues/356) and
+[Research: Does an enhanced form post with a redirect re-sync the html attributes?](https://github.com/mpaulosky/auth0-management-app/issues/354).
 
 `Features/Themes/ThemeEndpoints.cs` and `Features/Palettes/PaletteEndpoints.cs`, each a static class with the path constant and a `Map<Feature>Endpoints()` extension, mapped
 in `Program.cs` after `MapAuthenticationEndpoints()`. Each copies the Log out pattern in `AuthenticationEndpoints`:
@@ -127,7 +127,7 @@ The return type is `Results<RedirectHttpResult, ProblemHttpResult>`.
 
 ## The controls
 
-Decided in [Prototype: The Theme and Palette controls in light and dark, on desktop and mobile](https://github.com/mpaulosky/Blazor-Server/issues/357): the prototype's variant B
+Decided in [Prototype: The Theme and Palette controls in light and dark, on desktop and mobile](https://github.com/mpaulosky/auth0-management-app/issues/357): the prototype's variant B
 for the Theme and variant C for the Palette, on the throwaway branch `chore/prototype-theme-palette`.
 
 Both are statically rendered components in their slice, with a `[Parameter] public bool Mobile { get; set; }` for the `<details>` menu, the cascading `HttpContext` to read
@@ -201,7 +201,7 @@ The Theme buttons stay in place on desktop, so focus usually stays on the presse
 
 ## The Palette rules
 
-Decided in [Research: Which Tailwind hues meet WCAG AA as an accent in both Themes?](https://github.com/mpaulosky/Blazor-Server/issues/355).
+Decided in [Research: Which Tailwind hues meet WCAG AA as an accent in both Themes?](https://github.com/mpaulosky/auth0-management-app/issues/355).
 
 `src/UI/Styles/app.tailwind.css` gains one rule per hue except Blue, in `@layer base` after the `@theme` block, each setting all 11 stops:
 
@@ -254,8 +254,8 @@ parallel: they touch different files.
 
 | Issue | Blocked by |
 | --- | --- |
-| [Move LocalReturnUrl to a cross-cutting UI.Security](https://github.com/mpaulosky/Blazor-Server/issues/362) | this spec |
-| [Add the Themes slice, its cookie and data-theme](https://github.com/mpaulosky/Blazor-Server/issues/363) | #362 |
-| [Add the Theme control to the nav](https://github.com/mpaulosky/Blazor-Server/issues/364) | #363 |
-| [Add the Palettes slice, its cookie, data-palette and the hue rules](https://github.com/mpaulosky/Blazor-Server/issues/365) | #363 |
-| [Add the Palette menu to the nav](https://github.com/mpaulosky/Blazor-Server/issues/366) | #364, #365 |
+| [Move LocalReturnUrl to a cross-cutting UI.Security](https://github.com/mpaulosky/auth0-management-app/issues/362) | this spec |
+| [Add the Themes slice, its cookie and data-theme](https://github.com/mpaulosky/auth0-management-app/issues/363) | #362 |
+| [Add the Theme control to the nav](https://github.com/mpaulosky/auth0-management-app/issues/364) | #363 |
+| [Add the Palettes slice, its cookie, data-palette and the hue rules](https://github.com/mpaulosky/auth0-management-app/issues/365) | #363 |
+| [Add the Palette menu to the nav](https://github.com/mpaulosky/auth0-management-app/issues/366) | #364, #365 |
