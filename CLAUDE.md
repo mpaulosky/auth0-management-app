@@ -124,3 +124,20 @@ Claude reviews a PR only when it has the `review:claude` label. Add the label to
 the PRs it opens itself. Add it by hand to a PR the run report lists under **Pull requests without `review:claude`**, and
 to any open Sandcastle PR that has never had it: one opened before Sandcastle labelled its PRs, or one whose run stopped
 between creating it and labelling it.
+
+Watch every PR you open until it merges: Sandcastle's follow-up sweep acts only on the PRs Sandcastle opened itself, so
+nothing else answers a hand-opened PR's review threads or fixes its red checks, and PR Auto-Merge holds it on every
+unresolved thread. Run `scripts/watch-pr.sh <n>` in the background after opening the PR and after every push. It
+exits with the reason it woke you: the PR closed, it conflicts with or is behind `main`, a check failed, a review thread
+or other feedback is waiting on you, or nothing changed for 30 minutes. Act on it, then run it again:
+
+- Merge `origin/main` into the branch in its worktree when it conflicts or is behind, and fix each red check.
+- On a thread you agree with, fix it and reply saying what changed; then resolve it if Claude Review or Copilot opened
+  it, and leave a person's thread for them to resolve. On a thread you decline, reply with why and leave it unresolved,
+  so the hold keeps it for the owner.
+- End every reply and comment you post with `<!-- claude-session -->`. The script tells your comments from the owner's by
+  that marker, not by login, because a local session posts with the owner's token.
+- Push from the branch's worktree and update the description if the change moved.
+
+Stop when the PR has merged or closed, when only threads waiting on a person or a check you can't fix remain, or when it
+has sat 30 minutes with nothing to act on, and tell the owner which.
