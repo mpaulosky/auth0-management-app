@@ -119,6 +119,27 @@ public class ErrorMappingTests
 		result.Success.Should().BeTrue();
 	}
 
+	[Fact]
+	public async Task ListRolesAsync_Auth0Returns5xxOnTheRetryAfterA429_ReturnsRateLimited()
+	{
+		// Arrange
+		using ManagementApiHarness harness = ManagementApiHarness.Create();
+		long resetSoon = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 1;
+		int attempts = 0;
+		harness.Handler.Respond(_ => Interlocked.Increment(ref attempts) == 1
+			? Auth0Responses.RateLimited(resetSoon)
+			: Auth0Responses.Error(HttpStatusCode.InternalServerError, "Internal server error"));
+
+		// Act
+		Result result = await harness.Api.ListRolesAsync(Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Success.Should().BeFalse("a 5xx on a call that met a 429 is Auth0 shedding load, not an outage");
+		result.ErrorCode.Should().Be(ResultErrorCode.RateLimited);
+		result.Details.Should().Be("ManagementApi.RateLimited");
+		harness.Handler.ManagementRequests.Should().HaveCount(2);
+	}
+
 	[Theory]
 	[InlineData("GetUser", 400)]
 	[InlineData("ListRoles", 400)]
