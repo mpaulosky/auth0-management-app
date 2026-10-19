@@ -193,7 +193,7 @@ The limiter counts HTTP requests, not `IManagementApi` calls: one call can send 
 - **When the SDK's timeout wins:** the SDK's 10 s `Timeout` covers both attempts, Auth0's round trips and the backoff, so it can fire first. The handler marks the call,
   in an `AsyncLocal` the adapter sets up for each call, whenever it answers with its own 429 or passes on one from Auth0. If the SDK's timeout then cancels a marked
   call, the adapter returns `ManagementApi.RateLimited`. An unmarked timeout still throws. `QueueTimeout` is at most 4 s to keep each wait well inside the 10 s.
-- **In tests:** the limiter is registered as a singleton `RateLimiter`, so a test can replace it with one built with `AutoReplenishment = false` and replenish it by hand.
+- **In tests:** the limiter is registered as a singleton `RateLimiter` keyed `"Auth0Management"`, so a test can replace it with one built with `AutoReplenishment = false` and replenish it by hand.
 
 ### Options
 
@@ -446,6 +446,7 @@ throws.
 | List Roles | none of its own | | |
 | Create a Role | `Role.NameRequired`, `Role.NameTooLong`, `Role.DescriptionTooLong` | Validation | the validator |
 | | `Role.AlreadyExists` | Conflict | 409 |
+| | `Role.Invalid` | Validation | any other 400, carrying Auth0's message |
 | List or count a Role's members | `Role.NotFound` | NotFound | 404 |
 | Check whether a User holds a Role | `User.NotFound` | NotFound | 404 |
 

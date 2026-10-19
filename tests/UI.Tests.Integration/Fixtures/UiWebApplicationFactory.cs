@@ -40,6 +40,22 @@ public class UiWebApplicationFactory : WebApplicationFactory<Program>
 	/// </summary>
 	public const string PlaceholderClientSecret = "placeholder-client-secret";
 
+	/// <summary>
+	///   The placeholder Management API domain, for the Machine to Machine application's <c>Auth0:Management:*</c>
+	///   settings. A slice that registers the Management API seam refuses to start without them.
+	/// </summary>
+	public const string PlaceholderManagementDomain = "management.placeholder.invalid";
+
+	/// <summary>
+	///   The placeholder Management API client ID.
+	/// </summary>
+	public const string PlaceholderManagementClientId = "placeholder-management-client-id";
+
+	/// <summary>
+	///   The placeholder Management API client secret.
+	/// </summary>
+	public const string PlaceholderManagementClientSecret = "placeholder-management-client-secret";
+
 	/// <inheritdoc />
 	protected override void ConfigureWebHost(IWebHostBuilder builder)
 	{
@@ -51,6 +67,9 @@ public class UiWebApplicationFactory : WebApplicationFactory<Program>
 		builder.UseSetting("Auth0:Domain", PlaceholderDomain);
 		builder.UseSetting("Auth0:ClientId", PlaceholderClientId);
 		builder.UseSetting("Auth0:ClientSecret", PlaceholderClientSecret);
+		builder.UseSetting("Auth0:Management:Domain", PlaceholderManagementDomain);
+		builder.UseSetting("Auth0:Management:ClientId", PlaceholderManagementClientId);
+		builder.UseSetting("Auth0:Management:ClientSecret", PlaceholderManagementClientSecret);
 
 		builder.ConfigureTestServices(services =>
 		{
