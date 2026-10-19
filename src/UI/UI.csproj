@@ -2,7 +2,7 @@
 
 	<PropertyGroup>
 		<BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
-		<UserSecretsId>94491f6e-auth0-values-3ff40da38702</UserSecretsId>
+		<UserSecretsId>786426a9-2984-4860-8484-790023527e28</UserSecretsId>
 	</PropertyGroup>
 
 	<ItemGroup>
