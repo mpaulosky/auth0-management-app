@@ -3,7 +3,8 @@
 The Users and Roles slices reach the Management API through one interface of our own, `IManagementApi`, in `src/UI/ManagementApi/` (`UI.ManagementApi`). It has one method
 per use case (search Users, get a User, update their Profile Fields, assign or remove a Role, list Roles, create a Role, list the Users who hold a Role). Each method returns a
 `Result` or `Result<T>` and carries records of our own, never the `Auth0.ManagementApi` SDK's types. Expected failures (not found, a Role that already exists, a field Auth0 won't
-change) come back as a failed `Result` with a stable code in `Details`; failures that shouldn't happen, such as a failed token exchange or a 5xx after the retries, throw.
+change, and a 429 still refused after the SDK's retries, as `ManagementApi.RateLimited`) come back as a failed `Result` with a stable code in `Details`; failures that shouldn't
+happen, such as a failed token exchange or a 5xx after the retries, throw.
 
 Everything else sits behind that interface and is `internal`: the SDK's `ClientCredentialsTokenProvider` as a singleton, a typed `HttpClient`, a `ManagementClient` built for
 each call, the adapter that translates SDK calls, paging and exceptions, and a `CachedManagementApi` decorator in front of it that clears what a write makes stale.
@@ -18,7 +19,7 @@ This departs from `mpaulosky/Articles`, the reference `CLAUDE.md` points to, who
 
 - **A factory that hands out the SDK client (Articles' shape)**: a small interface but a shallow one. Every handler would page, map exceptions and pick fields out of SDK types
   itself, and every handler test would substitute the SDK. That is awkward: its `WithRawResponseTask<T>` is a struct, so an unconfigured NSubstitute call throws, and its
-  `Pager<T>` needs a hand-written `IAsyncEnumerable` ([SDK findings](https://github.com/mpaulosky/auth0-management-app/blob/research/auth0-management-sdk/docs/research/auth0-management-sdk.md)).
+  `Pager<T>` needs a hand-written `IAsyncEnumerable` ([SDK findings](../research/auth0-management-sdk.md)).
   Deleting the factory would remove nothing: the complexity is already in the callers.
 - **Two interfaces, one per slice (`IUserDirectory`, `IRoleDirectory`)**: each slice would depend on less, but one adapter would sit behind both, and the Role calls the Users
   slice also needs would sit awkwardly between them.
@@ -32,5 +33,7 @@ This departs from `mpaulosky/Articles`, the reference `CLAUDE.md` points to, who
 - Handler tests substitute `IManagementApi`, and only the adapter's tests touch the SDK, offline, through a stub `HttpMessageHandler` and a `DelegateTokenProvider`.
 - Adding a use case adds a method and its records to `IManagementApi`, its adapter and the cache decorator.
 - Which Users hold which Roles comes from listing each Role's members, one request per Role, not from fetching each User's Roles, so `UserSummary` carries no Roles.
+  The adapter runs those requests a few at a time, bounded by a `ManagementApiOptions` setting that defaults to 2 (the Free tier's burst), so a Tenant with many Roles stays
+  under Auth0's rate limits, and the cache decorator keeps the result until a Role change clears it.
 - As [ADR 0007](0007-cross-cutting-code-outside-the-slices.md) requires of a cross-cutting folder, an architecture test checks that `UI.ManagementApi` depends on no slice.
 - `CLAUDE.md`'s paragraph that names `IManagementApiClientFactory` as the pattern to follow changes to point here.
