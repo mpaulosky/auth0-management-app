@@ -10,9 +10,11 @@ Today it holds the Shared Kernel (`src/Domain/`), the Blazor Web App (`src/UI/`,
 the Auth0 sign-in and sign-out in the `Authentication` slice, a User's claims in the `Profile` slice, the Admin-only page
 in the `Admin` slice, the Theme control in the `Themes` slice and the Palette menu in the `Palettes` slice), the Aspire
 AppHost and ServiceDefaults, and their tests. User and Role management isn't built yet.
-`mpaulosky/Articles` (`src/Web/Components/Features/UserManagement/`) is the reference for how it calls the Management API:
-a cached client-credentials token provider behind an `IManagementApiClientFactory`, settings under `Auth0:Management:*`,
-and a bounded fan-out when fetching each User's Roles, to stay under Auth0's rate limits.
+The slices will call the Management API through one deep interface, `IManagementApi` in `src/UI/ManagementApi/`, that
+returns `Result` and our own records, with the SDK, the cached client-credentials token and settings under
+`Auth0:Management:*` behind it, and a token bucket that throttles every call to stay under Auth0's rate limits
+(see `docs/adr/0009-one-deep-management-api-seam.md`). `mpaulosky/Articles`
+(`src/Web/Components/Features/UserManagement/`) is a reference for the SDK calls, not for that seam.
 
 ## Auth0 Management API
 
@@ -20,7 +22,8 @@ and a bounded fan-out when fetching each User's Roles, to stay under Auth0's rat
   Management API with a second (Machine to Machine, `Auth0:Management:Domain`, `:ClientId`, `:ClientSecret`). Never reuse
   the sign-in application's credentials for the Management API.
 - Grant the Machine to Machine application only `read:users`, `update:users`, `read:roles`, `create:roles`,
-  `create:role_members` and `delete:role_members`. A feature that needs another scope adds it to `README.md`'s table.
+  `read:role_members`, `create:role_members` and `delete:role_members`. A feature that needs another scope adds it to
+  `README.md`'s table.
 - Management API calls happen on the server, inside a slice's handler, behind an interface so tests substitute it. The
   Management API token never reaches the browser or the logs.
 - Every page and endpoint that reads or changes Users or Roles requires the Admin policy (`[Authorize]` with it, not
