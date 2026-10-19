@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-10-19 | [feat(ManagementApi): Add the Management API seam](2026-10-19-pr-47-feat-managementapi-add-the-management-api-seam.md) | release,automation |
 | 2026-10-19 | [feat(UI): Add the Alert and the Management API error boundary](2026-10-19-pr-44-feat-ui-add-the-alert-and-the-management-api-error-boundary.md) | release,automation |
 | 2026-10-19 | [docs: Specify User and Role management](2026-10-19-pr-30-docs-specify-user-and-role-management.md) | release,automation |
 | 2026-10-19 | [chore(ui): Point the UI at the Auth0 user secrets store](2026-10-19-pr-25-chore-ui-point-the-ui-at-the-auth0-user-secrets-store.md) | release,automation |
