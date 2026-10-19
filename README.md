@@ -195,7 +195,8 @@ A Role you add to or remove from yourself takes effect at your next sign-in, whe
 
 ### Management API application
 
-User and Role management isn't built yet; these are the settings it will need.
+The app needs these settings to start, since the Users page calls the Management API. Under the AppHost, they're
+read from the same user secrets and passed on to WebApp.
 
 1. Create an application of type **Machine to Machine** and authorize it for the **Auth0 Management API**.
 2. Grant it only these permissions:
