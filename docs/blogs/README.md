@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-10-19 | [docs: Specify User and Role management](2026-10-19-pr-30-docs-specify-user-and-role-management.md) | release,automation |
 | 2026-10-19 | [chore(ui): Point the UI at the Auth0 user secrets store](2026-10-19-pr-25-chore-ui-point-the-ui-at-the-auth0-user-secrets-store.md) | release,automation |
 | 2026-10-19 | [docs(research): Record Auth0 user search and rate limit findings](2026-10-19-pr-24-docs-research-record-auth0-user-search-and-rate-limit-findings.md) | release,automation |
 | 2026-10-19 | [docs(research): Record the Auth0 Management SDK findings](2026-10-19-pr-23-docs-research-record-the-auth0-management-sdk-findings.md) | release,automation |
