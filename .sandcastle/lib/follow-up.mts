@@ -261,7 +261,11 @@ export function sweepSkipReason(
   return undefined;
 }
 
-// What every PR in one sweep is judged against, read once (#65).
+// What every PR in one sweep is judged against, read once: the host's login,
+// the in-scope issues, their numbers, the ones labelled sandcastle:building
+// and whether this run follows hand-offs. sweepPullRequests and the status
+// command (lib/status.mts, #65) both read it through sweepContext, so they
+// judge each PR against the same things.
 export type SweepContext = {
   host: string;
   issues: { number: number; labels: string[] }[];
@@ -272,24 +276,57 @@ export type SweepContext = {
 
 // Reads the host's login, the in-scope issues and whether this run follows
 // hand-offs, in that order, for sweepPullRequests and the status command (#65).
-export function sweepContext(_github: Pick<FollowUpGitHub, "hostLogin" | "inScopeIssues" | "followsHandOffs">): SweepContext {
-  throw new Error("Not implemented");
+export function sweepContext(github: Pick<FollowUpGitHub, "hostLogin" | "inScopeIssues" | "followsHandOffs">): SweepContext {
+  const host = github.hostLogin();
+  const issues = github.inScopeIssues();
+  const inScope = new Set(issues.map((issue) => issue.number));
+  const building = new Set(issues.filter((issue) => hasLabel(issue, BUILDING_LABEL)).map((issue) => issue.number));
+  const handOffs = github.followsHandOffs();
+  return { host, issues, inScope, building, handOffs };
 }
 
-// Whether the sweep goes on to `decide` about a PR, without writing anything (#65).
+// Whether the sweep goes on to `decide` about a PR, without writing anything
+// (#65): "swept" with what it follows the PR up as, "skipped" with why
+// (`unknown` when an owner check couldn't answer, so a follow-up run ends
+// red), or "restore" when a stranger removed the PR's hand-back label and the
+// sweep puts it back, leaving the PR alone this round.
 export type SweepAdmission =
   | { kind: "swept"; subject: SweepSubject }
   | { kind: "skipped"; reason: string; unknown: boolean }
   | { kind: "restore"; label: string; reason: string };
 
-// The checks sweepPullRequests makes before `decide`: sweepSkipReason, the
-// subject, the hand-off approval and the needs-human origin check (#65).
+// The checks sweepPullRequests makes before `decide`, in its order:
+// sweepSkipReason, the subject, the hand-off approval and the needs-human
+// origin check. Taken out of the sweep's loop so the status command (#65)
+// gives the sweep's own answer; it only reads, and the sweep carries out a
+// restore itself. Events are read once, and body edits only for a hand-off PR.
 export function admitToSweep(
-  _pr: SweepPullRequest,
-  _context: SweepContext,
-  _github: Pick<FollowUpGitHub, "isOwner" | "pullRequestEvents" | "pullRequestBodyEdits">,
+  pr: SweepPullRequest,
+  context: SweepContext,
+  github: Pick<FollowUpGitHub, "isOwner" | "pullRequestEvents" | "pullRequestBodyEdits">,
 ): SweepAdmission {
-  throw new Error("Not implemented");
+  const { inScope, host, building, handOffs } = context;
+  const skip = sweepSkipReason(pr, inScope, host, building, handOffs);
+  if (skip !== undefined) return { kind: "skipped", reason: skip, unknown: false };
+  const subject = sweepSubject(pr, inScope, host, handOffs);
+  if (subject === undefined) throw new Error(`PR #${pr.number} passed the sweep's checks with nothing to follow it up as`);
+  const events = github.pullRequestEvents(pr.number);
+  // Only the owner's own label, on a PR nobody else has renamed or edited
+  // since, hands a PR to the sweep (#58), as the Sandcastle label does an
+  // issue. A stranger's is reported and written to nowhere.
+  if (subject.kind === "pull-request") {
+    const approved = approval(FOLLOW_UP_LABEL, events, github.pullRequestBodyEdits(pr.number), github.isOwner);
+    if (!approved.approved) return { kind: "skipped", reason: approved.reason, unknown: approved.unknown === true };
+  }
+  // A stranger's removal of the PR's hand-back label isn't a re-queue
+  // (#146): the sweep puts the label back and leaves the PR alone this round.
+  const origin = labelOriginFixes(pr.labels, events, github.isOwner, PR_LABEL_RULES);
+  if (origin.unknown.length > 0) {
+    return { kind: "skipped", reason: `couldn't check whether the repository owner removed ${NEEDS_HUMAN}`, unknown: true };
+  }
+  const restore = origin.fixes.find((fix) => fix.action === "restore");
+  if (restore !== undefined) return { kind: "restore", label: restore.label, reason: restore.reason };
+  return { kind: "swept", subject };
 }
 
 // What the sweep does about one PR, decided by `decide`.
@@ -514,11 +551,8 @@ export function sweepPullRequests(
   handBackClosed: boolean = true,
   onPrError: (pr: number, error: unknown) => void = () => {},
 ): SweepResult {
-  const host = github.hostLogin();
-  const issues = github.inScopeIssues();
-  const inScope = new Set(issues.map((issue) => issue.number));
-  const building = new Set(issues.filter((issue) => hasLabel(issue, BUILDING_LABEL)).map((issue) => issue.number));
-  const handOffs = github.followsHandOffs();
+  const context = sweepContext(github);
+  const { host, issues } = context;
   const openPrs = github.openPullRequests();
   const needsPass: number[] = [];
   const passes: PassTarget[] = [];
@@ -526,42 +560,19 @@ export function sweepPullRequests(
 
   for (const pr of openPrs) {
     try {
-      const skip = sweepSkipReason(pr, inScope, host, building, handOffs);
-      if (skip !== undefined) {
-        log(`  · PR #${pr.number} isn't swept: ${skip}.`);
-        continue;
-      }
-      const subject = sweepSubject(pr, inScope, host, handOffs);
-      if (subject === undefined) throw new Error(`PR #${pr.number} passed the sweep's checks with nothing to follow it up as`);
-      const events = github.pullRequestEvents(pr.number);
-      // Only the owner's own label, on a PR nobody else has renamed or edited
-      // since, hands a PR to the sweep (#58), as the Sandcastle label does an
-      // issue. A stranger's is logged and written to nowhere.
-      if (subject.kind === "pull-request") {
-        const approved = approval(FOLLOW_UP_LABEL, events, github.pullRequestBodyEdits(pr.number), github.isOwner);
-        if (!approved.approved) {
-          log(`  · PR #${pr.number} isn't swept: ${approved.reason}.`);
-          // A follow-up run has no next round to sweep it again, so it ends red.
-          if (approved.unknown === true) onPrError(pr.number, new Error(approved.reason));
-          continue;
-        }
-      }
-      // A stranger's removal of the PR's hand-back label isn't a re-queue
-      // (#146): put the label back and leave the PR alone this round.
-      const origin = labelOriginFixes(pr.labels, events, github.isOwner, PR_LABEL_RULES);
-      if (origin.unknown.length > 0) {
-        const reason = `couldn't check whether the repository owner removed ${NEEDS_HUMAN}`;
-        log(`  · PR #${pr.number} isn't swept: ${reason}.`);
+      const admission = admitToSweep(pr, context, github);
+      if (admission.kind === "skipped") {
+        log(`  · PR #${pr.number} isn't swept: ${admission.reason}.`);
         // A follow-up run has no next round to sweep it again, so it ends red.
-        onPrError(pr.number, new Error(reason));
+        if (admission.unknown) onPrError(pr.number, new Error(admission.reason));
         continue;
       }
-      const restore = origin.fixes.find((fix) => fix.action === "restore");
-      if (restore !== undefined) {
-        github.addPullRequestLabel(pr.number, restore.label);
-        log(`  ✋ PR #${pr.number}: ${restore.reason}, so it isn't swept.`);
+      if (admission.kind === "restore") {
+        github.addPullRequestLabel(pr.number, admission.label);
+        log(`  ✋ PR #${pr.number}: ${admission.reason}, so it isn't swept.`);
         continue;
       }
+      const { subject } = admission;
       labelForReview(pr, github, log, unlabelled, carried);
       // Not a bot's and not confirmed as the repository owner's: an owner
       // thread is the follow-up role's to answer (threadsForRole, and now
