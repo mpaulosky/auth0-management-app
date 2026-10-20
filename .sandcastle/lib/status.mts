@@ -9,11 +9,31 @@
 // here writes to GitHub.
 // ---------------------------------------------------------------------------
 
-import type { CheckState, FollowUpGitHub, SweepAdmission, SweepDecision, SweepPullRequest } from "./follow-up.mts";
-import type { CommentReads, WorkflowRun } from "./github.mts";
-import type { IsOwner, QueueGitHub } from "./queue.mts";
+import { FOLLOW_UP_LABEL, FOLLOW_UP_MARKER, FOLLOW_UP_PASS_CAP, REVIEW_LABEL } from "./config.mts";
+import {
+  admitToSweep,
+  answeredByHost,
+  decide,
+  isSandcastlePullRequest,
+  issueNumberOf,
+  liveFollowUpGitHub,
+  NEEDS_HUMAN,
+  sweepContext,
+  sweepSubject,
+  type CheckState,
+  type FollowUpGitHub,
+  type SweepAdmission,
+  type SweepDecision,
+  type SweepPullRequest,
+} from "./follow-up.mts";
+import { hasLabel, markerCommentReads, markerCommentsSince, sandcastleWorkflowRuns, type CommentReads, type WorkflowRun } from "./github.mts";
+import { activeQueueScope, liveQueueGitHub, loadQueue, type IsOwner, type QueueGitHub } from "./queue.mts";
 
-// What the status reads; every member is a read. Tests pass a stub that also carries FollowUpGitHub's writes, which throw.
+// What the status reads; every member is a read. The sweep's reads come from
+// FollowUpGitHub, so the status reads what the sweep does; passComments is
+// what the pass counts its passes from, and workflowRuns the Sandcastle
+// workflow's unfinished runs. Tests pass a stub that also carries
+// FollowUpGitHub's writes, which throw.
 export type StatusGitHub = Pick<
   FollowUpGitHub,
   "hostLogin" | "openPullRequests" | "inScopeIssues" | "isOwner" | "pullRequestEvents" | "pullRequestBodyEdits" | "followsHandOffs"
@@ -22,21 +42,35 @@ export type StatusGitHub = Pick<
   workflowRuns(): WorkflowRun[];
 };
 
-// Unresolved review threads, by who opened them.
+// A PR's unresolved review threads, by who opened them: a bot, the repository
+// owner, someone else, or someone whose owner check couldn't answer.
+// `answered` counts the bot and owner threads the host already replied to
+// (answeredByHost), which `decide` doesn't count as needing a pass.
 export type ThreadCounts = { bot: number; owner: number; others: number; unknown: number; answered: number };
+
+// A PR head's checks: how many, how many are still running, and the names of
+// the completed red ones.
 export type CheckSummary = { total: number; running: number; red: string[] };
 
+// Why a PR is held: the sweep skips it (sweepSkipReason or an admission
+// check), puts back a hand-back label a stranger removed, or decides about it
+// with `decide`. `handsBack` says the next pass hands the PR back, because it
+// needs a pass and has used FOLLOW_UP_PASS_CAP of them.
 export type HeldReason =
   | { kind: "skipped"; reason: string }
   | { kind: "restore"; label: string; reason: string }
   | { kind: "decided"; decision: SweepDecision; handsBack: boolean };
 
+// One open Sandcastle PR's entry in the status, or the error that stopped one
+// of its reads: one PR's failure doesn't hide the others.
 export type PullRequestStatus =
   | {
       number: number;
       title: string;
       url: string;
+      // The issue the PR's branch names (issueNumberOf), if any.
       issueNumber: number | undefined;
+      // Handed to Sandcastle with sandcastle:follow-up rather than opened by it (#58).
       handOff: boolean;
       passesUsed: number;
       held: HeldReason;
@@ -48,85 +82,246 @@ export type PullRequestStatus =
     }
   | { number: number; title: string; url: string; error: string };
 
+// Everything the status command prints: the Sandcastle PRs by number, how
+// many other open PRs into main there are, and the workflow's unfinished
+// runs, or why they couldn't be read.
 export type StatusReport = {
   pullRequests: PullRequestStatus[];
   othersOpen: number;
   runs: { running: WorkflowRun[]; queued: WorkflowRun[] } | { error: string };
 };
 
-// How many follow-up passes the PR has used: the host's FOLLOW_UP_MARKER comments since needs-human was last removed.
-export function followUpPassesUsed(_reads: CommentReads, _hostLogin: string): number {
-  throw new Error("Not implemented");
+// How many follow-up passes the PR has used: the host's FOLLOW_UP_MARKER
+// comments since sandcastle:needs-human was last removed, counted by
+// markerCommentsSince as the pass counts them (livePassHost.passCount), so a
+// PR handed back and picked up again shows its new count, not its total.
+export function followUpPassesUsed(reads: CommentReads, hostLogin: string): number {
+  return markerCommentsSince(reads.comments, reads.timeline, NEEDS_HUMAN, FOLLOW_UP_MARKER, reads.createdAt, hostLogin).length;
 }
 
-// The PR's unresolved threads, split by who opened them.
-export function threadCounts(_pr: SweepPullRequest, _isOwner: IsOwner, _hostLogin: string): ThreadCounts {
-  throw new Error("Not implemented");
+// The PR's unresolved threads, split by who opened them, the way `decide`
+// and the run report tell them apart: a bot's, the owner's (isOwner true),
+// someone else's (false) and unchecked (undefined).
+export function threadCounts(pr: SweepPullRequest, isOwner: IsOwner, hostLogin: string): ThreadCounts {
+  const counts: ThreadCounts = { bot: 0, owner: 0, others: 0, unknown: 0, answered: 0 };
+  for (const thread of pr.threads.filter((candidate) => !candidate.resolved)) {
+    const owner = thread.byBot ? undefined : isOwner(thread.author);
+    if (thread.byBot) counts.bot++;
+    else if (owner === true) counts.owner++;
+    else if (owner === false) counts.others++;
+    else counts.unknown++;
+    // Only the threads `decide` would count can be waiting on the host's answer.
+    if ((thread.byBot || owner === true) && answeredByHost(thread, isOwner, hostLogin)) counts.answered++;
+  }
+  return counts;
 }
 
-// The head's checks, counted.
-export function checkSummary(_checks: readonly CheckState[]): CheckSummary {
-  throw new Error("Not implemented");
+// The head's checks, counted for the PR's entry.
+export function checkSummary(checks: readonly CheckState[]): CheckSummary {
+  return {
+    total: checks.length,
+    running: checks.filter((check) => !check.completed).length,
+    red: checks.filter((check) => check.completed && !check.green).map((check) => check.name),
+  };
 }
 
-// Why the PR is held, from the sweep's own admission and `decide`.
+// Why the PR is held, from the sweep's own admission and, for a PR it
+// sweeps, `decide`. A PR that needs a pass with its passes used up is handed
+// back by the next pass (lib/follow-up-pass.mts); that pass reads fresh
+// threads and checks first, so this is a forecast, not a promise.
 export function heldReason(
-  _admission: SweepAdmission,
-  _pr: SweepPullRequest,
-  _now: number,
-  _isOwner: IsOwner,
-  _host: string,
-  _passesUsed: number,
+  admission: SweepAdmission,
+  pr: SweepPullRequest,
+  now: number,
+  isOwner: IsOwner,
+  host: string,
+  passesUsed: number,
 ): HeldReason {
-  throw new Error("Not implemented");
+  switch (admission.kind) {
+    case "skipped":
+      return { kind: "skipped", reason: admission.reason };
+    case "restore":
+      return { kind: "restore", label: admission.label, reason: admission.reason };
+    case "swept": {
+      const decision = decide(pr, now, isOwner, host);
+      return { kind: "decided", decision, handsBack: decision.action === "needs-pass" && passesUsed >= FOLLOW_UP_PASS_CAP };
+    }
+  }
 }
 
-// Reads every Sandcastle PR's status and the workflow's runs.
-export function buildStatus(_github: StatusGitHub, _now: number): StatusReport {
-  throw new Error("Not implemented");
+// Reads every open Sandcastle PR's status and the workflow's runs. The
+// Sandcastle PRs are the host's own and the ones labelled sandcastle:follow-up,
+// each listed even when the sweep skips it, with the reason. A failure of the
+// sweep's context or of the open PRs throws; one PR's failure becomes its
+// entry's error, and the runs' becomes the report's.
+export function buildStatus(github: StatusGitHub, now: number): StatusReport {
+  const context = sweepContext(github);
+  const { host, inScope, handOffs } = context;
+  const open = github.openPullRequests();
+  const listed = open
+    .filter((pr) => isSandcastlePullRequest(pr, host) || hasLabel(pr, FOLLOW_UP_LABEL))
+    .sort((a, b) => a.number - b.number);
+  const pullRequests = listed.map((pr): PullRequestStatus => {
+    try {
+      const admission = admitToSweep(pr, context, github);
+      const passesUsed = followUpPassesUsed(github.passComments(pr.number), host);
+      const subject = sweepSubject(pr, inScope, host, handOffs);
+      return {
+        number: pr.number,
+        title: pr.title,
+        url: pr.url,
+        issueNumber: issueNumberOf(pr.headRefName),
+        handOff: subject === undefined ? hasLabel(pr, FOLLOW_UP_LABEL) : subject.kind === "pull-request",
+        passesUsed,
+        held: heldReason(admission, pr, now, github.isOwner, host, passesUsed),
+        threads: threadCounts(pr, github.isOwner, host),
+        mergeStateStatus: pr.mergeStateStatus,
+        checks: checkSummary(pr.checks),
+        needsHuman: hasLabel(pr, NEEDS_HUMAN),
+        reviewLabel: hasLabel(pr, REVIEW_LABEL),
+      };
+    } catch (error) {
+      return { number: pr.number, title: pr.title, url: pr.url, error: messageOf(error) };
+    }
+  });
+  let runs: StatusReport["runs"];
+  try {
+    const all = github.workflowRuns();
+    runs = { running: all.filter((run) => run.status === "in_progress"), queued: all.filter((run) => run.status !== "in_progress") };
+  } catch (error) {
+    runs = { error: messageOf(error) };
+  }
+  return { pullRequests, othersOpen: open.length - listed.length, runs };
 }
 
-// The report as text.
-export function renderStatus(_report: StatusReport): string {
-  throw new Error("Not implemented");
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-// Prints the status; returns the exit code.
-export function statusCommand(_github?: StatusGitHub, _now?: number, _out?: (text: string) => void): number {
-  throw new Error("Not implemented");
+// The report as text: the workflow's runs first, then one block per PR, then
+// the count of other open PRs.
+export function renderStatus(report: StatusReport): string {
+  const lines = ["Sandcastle workflow"];
+  if ("error" in report.runs) {
+    lines.push(`  Couldn't read the Sandcastle workflow's runs: ${report.runs.error}`);
+  } else {
+    const { running, queued } = report.runs;
+    if (running.length === 0) lines.push("  No Sandcastle run is in progress.");
+    for (const run of running) lines.push(`  Running: ${runLine(run)}`);
+    if (queued.length === 0) lines.push("  No Sandcastle run is queued.");
+    for (const run of queued) lines.push(`  Queued: ${runLine(run)}`);
+  }
+  if (report.pullRequests.length === 0) lines.push("", "No open Sandcastle PR into main.");
+  for (const status of report.pullRequests) lines.push("", ...pullRequestLines(status));
+  lines.push("", `${report.othersOpen} other open PRs into main aren't Sandcastle's.`);
+  return lines.join("\n");
 }
 
-// A QueueGitHub whose label writes do nothing, so loadQueue's fixes never reach GitHub.
-export function withoutLabelWrites(_github: QueueGitHub): QueueGitHub {
-  throw new Error("Not implemented");
+// A run's line: its id, the event and title that started it, its branch when
+// that isn't main, when it was created and its page.
+function runLine(run: WorkflowRun): string {
+  const branch = run.headBranch === null || run.headBranch === "main" ? "" : `, on ${run.headBranch}`;
+  return `run ${run.id} (${run.event}: ${JSON.stringify(run.displayTitle)}${branch}), since ${run.createdAt}  ${run.url}`;
 }
 
+function pullRequestLines(status: PullRequestStatus): string[] {
+  if ("error" in status) return [`PR #${status.number} ${status.title}: couldn't read its status: ${status.error}`];
+  const issue = status.issueNumber === undefined ? "" : ` (issue #${status.issueNumber})`;
+  const { threads, held } = status;
+  const threadParts = [`${threads.bot} bot`, `${threads.owner} owner`, `${threads.others} waiting on someone else`];
+  if (threads.unknown > 0) threadParts.push(`${threads.unknown} whose author couldn't be checked`);
+  if (threads.answered > 0) threadParts.push(`${threads.answered} answered by Sandcastle and waiting on the owner`);
+  // A BEHIND PR the sweep doesn't update is left behind on purpose (#59 on 2026-10-20 looked stuck).
+  const behind = status.mergeStateStatus === "BEHIND" && !(held.kind === "decided" && held.decision.action === "update-branch");
+  const mergeState = `${status.mergeStateStatus}${behind ? " (left behind main until nothing else holds it)" : ""}`;
+  return [
+    `PR #${status.number} ${status.title}${issue}${status.handOff ? " (handed off with sandcastle:follow-up)" : ""}`,
+    `  ${status.url}`,
+    `  Follow-up passes: ${status.passesUsed} of ${FOLLOW_UP_PASS_CAP}`,
+    `  Held: ${heldText(held)}`,
+    `  Threads: ${threadParts.join(", ")}`,
+    `  Merge state: ${mergeState} · Checks: ${checksText(status.checks)} · ${NEEDS_HUMAN}: ${yesNo(status.needsHuman)} · ${REVIEW_LABEL}: ${yesNo(status.reviewLabel)}`,
+  ];
+}
+
+function heldText(held: HeldReason): string {
+  switch (held.kind) {
+    case "skipped":
+      return `the sweep skips it: ${held.reason}`;
+    case "restore":
+      return `the next sweep puts ${held.label} back (${held.reason}), and leaves the PR alone this round`;
+    case "decided":
+      switch (held.decision.action) {
+        case "needs-pass": {
+          const handsBack = held.handsBack
+            ? `; its ${FOLLOW_UP_PASS_CAP} follow-up passes are used up, so the next pass hands it back with ${NEEDS_HUMAN}`
+            : "";
+          return `needs a follow-up pass: ${held.decision.reasons.join("; ")}${handsBack}`;
+        }
+        case "wait":
+          return `waits: ${held.decision.reason}`;
+        case "request-review":
+          return "the next sweep asks Copilot again to review its head";
+        case "update-branch":
+          return "only behind main: the next sweep updates its branch";
+        case "leave":
+          return `left alone: ${held.decision.reason}`;
+      }
+  }
+}
+
+function checksText(checks: CheckSummary): string {
+  if (checks.total === 0) return "none reported";
+  const parts: string[] = [];
+  if (checks.running > 0) parts.push(`${checks.running} of ${checks.total} running`);
+  if (checks.red.length > 0) parts.push(`red: ${checks.red.join(", ")}`);
+  return parts.length === 0 ? `all ${checks.total} green` : parts.join(", ");
+}
+
+function yesNo(value: boolean): string {
+  return value ? "yes" : "no";
+}
+
+// Prints the status and returns the exit code: 1 when the status, a PR's
+// entry or the runs couldn't be read, so a script can tell a partial status
+// from a whole one; 0 otherwise.
+export function statusCommand(
+  github: StatusGitHub = liveStatusGitHub,
+  now: number = Date.now(),
+  out: (text: string) => void = console.log,
+): number {
+  let report: StatusReport;
+  try {
+    report = buildStatus(github, now);
+  } catch (error) {
+    out(`Couldn't read Sandcastle's status: ${messageOf(error)}`);
+    return 1;
+  }
+  out(renderStatus(report));
+  return report.pullRequests.some((status) => "error" in status) || "error" in report.runs ? 1 : 0;
+}
+
+// A QueueGitHub whose label writes do nothing, so loadQueue's fixes (removing
+// an untrusted sandcastle:ready, restoring a hand-back label a stranger
+// removed) never reach GitHub, while it still returns the labels the sweep
+// would see after them.
+export function withoutLabelWrites(github: QueueGitHub): QueueGitHub {
+  return { ...github, removeLabel: () => {}, addLabel: () => {} };
+}
+
+// The live StatusGitHub: the sweep's own reads, except the in-scope issues.
+// The sweep reads those through loadQueue, which writes its label fixes, so
+// the status runs it with those writes removed, and drops its log,
+// whose lines would claim writes that never happened.
 export const liveStatusGitHub: StatusGitHub = {
-  hostLogin: () => {
-    throw new Error("Not implemented");
-  },
-  openPullRequests: () => {
-    throw new Error("Not implemented");
-  },
-  inScopeIssues: () => {
-    throw new Error("Not implemented");
-  },
-  isOwner: () => {
-    throw new Error("Not implemented");
-  },
-  pullRequestEvents: () => {
-    throw new Error("Not implemented");
-  },
-  pullRequestBodyEdits: () => {
-    throw new Error("Not implemented");
-  },
-  followsHandOffs: () => {
-    throw new Error("Not implemented");
-  },
-  passComments: () => {
-    throw new Error("Not implemented");
-  },
-  workflowRuns: () => {
-    throw new Error("Not implemented");
-  },
+  hostLogin: () => liveFollowUpGitHub.hostLogin(),
+  openPullRequests: () => liveFollowUpGitHub.openPullRequests(),
+  inScopeIssues: () =>
+    loadQueue(activeQueueScope(), withoutLabelWrites(liveQueueGitHub()), () => {}).map(({ number, labels }) => ({ number, labels })),
+  isOwner: (login) => liveFollowUpGitHub.isOwner(login),
+  pullRequestEvents: (number) => liveFollowUpGitHub.pullRequestEvents(number),
+  pullRequestBodyEdits: (number) => liveFollowUpGitHub.pullRequestBodyEdits(number),
+  followsHandOffs: () => liveFollowUpGitHub.followsHandOffs(),
+  passComments: (number) => markerCommentReads(number),
+  workflowRuns: () => sandcastleWorkflowRuns(),
 };

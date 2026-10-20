@@ -2,6 +2,15 @@
 //
 // Usage: pnpm run sandcastle:status
 //
-// Read-only: it posts no comment, changes no label and starts no sandbox. It needs only an authenticated gh.
+// Read-only: it posts no comment, changes no label, pushes nothing, starts no sandbox and calls no model. It needs only an authenticated gh.
+// It always reports what GitHub Actions' sweep would do, so it reads the default Sandcastle queue scope whatever the environment asks for.
 
-throw new Error("Not implemented");
+import { QUEUE_LABEL } from "./lib/config.mts";
+import { protectHostGit } from "./lib/host-safety.mts";
+import { useQueueScope } from "./lib/queue.mts";
+import { statusCommand } from "./lib/status.mts";
+
+// gh reads git remotes, and the main checkout's .git is shared with agents, so git is pinned before the first gh call, as main.mts does.
+protectHostGit();
+useQueueScope({ kind: "label", label: QUEUE_LABEL });
+process.exitCode = statusCommand();
