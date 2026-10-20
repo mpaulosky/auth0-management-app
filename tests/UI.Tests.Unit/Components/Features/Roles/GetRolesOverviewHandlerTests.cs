@@ -183,10 +183,40 @@ public class GetRolesOverviewHandlerTests
 		result.Details.Should().Be("Role.NotFound");
 	}
 
+	[Fact]
+	public async Task HandleAsync_ARoleWhoseMembersComeBackNotFound_LeavesThatRoleOut()
+	{
+		// Arrange
+		_api.ListRoleMembersAsync(EditorRole.Id, Arg.Any<CancellationToken>()).Returns(RoleNotFound<RoleMembers>());
+
+		// Act
+		Result<RolesOverview> result = await _sut.HandleAsync(new GetRolesOverviewQuery(null), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Success.Should().BeTrue();
+		result.Value!.Tiles.Select(tile => tile.Role.Id).Should().Equal(AdminRole.Id, ViewerRole.Id);
+		result.Value.Rows.Should().HaveCount(3);
+		result.Value.Rows.Should().OnlyContain(row => row.Holdings.Count == 2);
+	}
+
+	[Fact]
+	public async Task HandleAsync_PickedRoleWhoseMembersComeBackNotFound_FailsWithRoleNotFound()
+	{
+		// Arrange
+		_api.ListRoleMembersAsync(EditorRole.Id, Arg.Any<CancellationToken>()).Returns(RoleNotFound<RoleMembers>());
+
+		// Act
+		Result<RolesOverview> result = await _sut.HandleAsync(new GetRolesOverviewQuery(EditorRole.Id), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Failure.Should().BeTrue();
+		result.ErrorCode.Should().Be(ResultErrorCode.NotFound);
+		result.Details.Should().Be("Role.NotFound");
+	}
+
 	[Theory]
 	[InlineData("ListRoles", "ManagementApi.RateLimited")]
 	[InlineData("ListRoleMembers", "ManagementApi.RateLimited")]
-	[InlineData("ListRoleMembers", "Role.NotFound")]
 	[InlineData("Search", "ManagementApi.RateLimited")]
 	public async Task HandleAsync_ManagementApiFails_ReturnsThatFailureUnchanged(string failingCall, string code)
 	{

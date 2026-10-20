@@ -64,6 +64,13 @@ public sealed class GetRolesOverviewHandler
 		{
 			Result<RoleMembers> roleMembers =
 				await _managementApi.ListRoleMembersAsync(role.Id, cancellationToken).ConfigureAwait(false);
+			// The cached Role list can outlive a Role deleted in the Auth0 dashboard: skip it, so one gone Role doesn't
+			// fail the page. A picked Role that is gone fails below, as Role.NotFound.
+			if (roleMembers.Failure && roleMembers.ErrorCode == ResultErrorCode.NotFound)
+			{
+				continue;
+			}
+
 			if (roleMembers.Failure)
 			{
 				return FailedAs(roleMembers);
