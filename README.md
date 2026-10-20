@@ -70,6 +70,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.16](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.16) | 2026-10-20 | feat(sandcastle): Label every Sandcastle PR that never had review:claude | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-55-feat-sandcastle-label-every-sandcastle-pr-that-never-had-review-claude.md) |
 | [v0.0.15](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.15) | 2026-10-19 | chore(scripts): Watch every hand-opened PR until it merges | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-54-chore-scripts-watch-every-hand-opened-pr-until-it-merges.md) |
 | [v0.0.14](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.14) | 2026-10-19 | ci(sandcastle): Start a follow-up pass when Claude Review completes | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-46-ci-sandcastle-start-a-follow-up-pass-when-claude-review-completes.md) |
 | [v0.0.13](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.13) | 2026-10-19 | feat(sandcastle): Label each PR Sandcastle opens review:claude | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-45-feat-sandcastle-label-each-pr-sandcastle-opens-review-claude.md) |
@@ -79,7 +80,6 @@ Blue, the default, renders no attribute.
 | [v0.0.9](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.9) | 2026-10-19 | chore(ui): Point the UI at the Auth0 user secrets store | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-25-chore-ui-point-the-ui-at-the-auth0-user-secrets-store.md) |
 | [v0.0.8](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.8) | 2026-10-19 | docs(research): Record Auth0 user search and rate limit findings | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-24-docs-research-record-auth0-user-search-and-rate-limit-findings.md) |
 | [v0.0.7](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.7) | 2026-10-19 | docs(research): Record the Auth0 Management SDK findings | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-23-docs-research-record-the-auth0-management-sdk-findings.md) |
-| [v0.0.6](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.6) | 2026-10-19 | docs: Grant the Management API application read:role_members | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-26-docs-grant-the-management-api-application-read-role-members.md) |
 
 <!-- RELEASES_END -->
 

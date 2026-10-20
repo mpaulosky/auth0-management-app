@@ -286,6 +286,16 @@ export const PR_MARKER = "<!-- sandcastle:pr -->";
 // Sandcastle PR is reviewed without anyone adding it by hand.
 export const REVIEW_LABEL = "review:claude";
 
+// REVIEW_LABEL as the host creates it at startup when the repository lacks it
+// (lib/github.mts#ensureHostLabels). Kept out of SANDCASTLE_LABELS: that list
+// also decides which labels queueScopeFrom refuses and which ones the
+// follow-up sweep restores, and REVIEW_LABEL is neither.
+export const REVIEW_LABEL_DEFINITION: SandcastleLabel = {
+  name: REVIEW_LABEL,
+  color: "8957e5",
+  description: "Ask Claude to review this PR",
+};
+
 // The login requestReviewsByLogin takes for Copilot's code review
 // (lib/follow-up.mts#sweepPullRequests).
 export const COPILOT_REVIEWER = "copilot-pull-request-reviewer[bot]";

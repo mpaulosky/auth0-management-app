@@ -120,9 +120,9 @@ Don't start work on an issue labelled `sandcastle:building`: a Sandcastle run is
 that build ends. Check before running `/implement-spec` or opening a branch for an issue.
 
 Claude reviews a PR only when it has the `review:claude` label. Add the label to every PR you open. Sandcastle adds it to
-the PRs it opens itself. Add it by hand to a PR the run report lists under **Pull requests without `review:claude`**, and
-to any open Sandcastle PR that has never had it: one opened before Sandcastle labelled its PRs, or one whose run stopped
-between creating it and labelling it.
+the PRs it opens itself, and its follow-up sweep adds it to any open Sandcastle PR it sweeps that has never had it, such as
+one whose run stopped between creating it and labelling it. A run that couldn't add the label ends red: add it by hand to
+each PR the run report lists under **Pull requests without `review:claude`**.
 
 Watch every PR you open until it merges: Sandcastle's follow-up sweep acts only on the PRs Sandcastle opened itself, so
 nothing else answers a hand-opened PR's review threads or fixes its red checks, and PR Auto-Merge holds it on every

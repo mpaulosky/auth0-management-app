@@ -9,6 +9,8 @@ import {
   QUEUE_SCOPE_USAGE,
   ROLE_AGENTS,
   QueueScopeError,
+  REVIEW_LABEL,
+  SANDCASTLE_LABELS,
   budgetMinutesFrom,
   queueScopeFrom,
 } from "./config.mts";
@@ -152,5 +154,13 @@ describe("budgetMinutesFrom", () => {
   // GitHub Actions too.
   it("accepts the variable when GITHUB_ACTIONS is set", () => {
     assert.equal(budgetMinutesFrom({ GITHUB_ACTIONS: "true", SANDCASTLE_BUDGET_MINUTES: "90" }), 90);
+  });
+});
+
+// #51: SANDCASTLE_LABELS also decides which labels queueScopeFrom refuses and
+// which ones the follow-up sweep restores, so review:claude stays out of it.
+describe("SANDCASTLE_LABELS", () => {
+  it("doesn't include review:claude, which the host creates separately", () => {
+    assert.ok(!SANDCASTLE_LABELS.some((label) => label.name.toLowerCase() === REVIEW_LABEL.toLowerCase()));
   });
 });

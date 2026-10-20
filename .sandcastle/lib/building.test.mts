@@ -331,10 +331,10 @@ describe("main.mts's sandcastle:building wiring", () => {
     return index;
   };
 
-  it("installs the release on exit and clears stale labels after ensureLabels, before the first round", () => {
+  it("installs the release on exit and clears stale labels after ensureHostLabels, before the first round", () => {
     const loop = at("for (let iteration = 1;");
 
-    assert.ok(at("ensureLabels();") < at("clearStaleBuildingLabels()"));
+    assert.ok(at("ensureHostLabels();") < at("clearStaleBuildingLabels()"));
     assert.ok(at("installBuildingLabelRelease(") < loop);
     assert.ok(at("clearStaleBuildingLabels()") < loop);
   });
