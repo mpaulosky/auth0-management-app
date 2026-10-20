@@ -23,6 +23,7 @@ import {
   type CheckState,
   type FollowUpGitHub,
   type SweepAdmission,
+  type SweepContext,
   type SweepDecision,
   type SweepPullRequest,
 } from "./follow-up.mts";
@@ -156,42 +157,55 @@ export function heldReason(
 // entry's error, and the runs' becomes the report's.
 export function buildStatus(github: StatusGitHub, now: number): StatusReport {
   const context = sweepContext(github);
-  const { host, inScope, handOffs } = context;
   const open = github.openPullRequests();
   const listed = open
-    .filter((pr) => isSandcastlePullRequest(pr, host) || hasLabel(pr, FOLLOW_UP_LABEL))
+    .filter((pr) => isSandcastlePullRequest(pr, context.host) || hasLabel(pr, FOLLOW_UP_LABEL))
     .sort((a, b) => a.number - b.number);
-  const pullRequests = listed.map((pr): PullRequestStatus => {
-    try {
-      const admission = admitToSweep(pr, context, github);
-      const passesUsed = followUpPassesUsed(github.passComments(pr.number), host);
-      const subject = sweepSubject(pr, inScope, host, handOffs);
-      return {
-        number: pr.number,
-        title: pr.title,
-        url: pr.url,
-        issueNumber: issueNumberOf(pr.headRefName),
-        handOff: subject === undefined ? hasLabel(pr, FOLLOW_UP_LABEL) : subject.kind === "pull-request",
-        passesUsed,
-        held: heldReason(admission, pr, now, github.isOwner, host, passesUsed),
-        threads: threadCounts(pr, github.isOwner, host),
-        mergeStateStatus: pr.mergeStateStatus,
-        checks: checkSummary(pr.checks),
-        needsHuman: hasLabel(pr, NEEDS_HUMAN),
-        reviewLabel: hasLabel(pr, REVIEW_LABEL),
-      };
-    } catch (error) {
-      return { number: pr.number, title: pr.title, url: pr.url, error: messageOf(error) };
-    }
-  });
-  let runs: StatusReport["runs"];
+  return {
+    pullRequests: listed.map((pr) => pullRequestStatus(pr, context, github, now)),
+    othersOpen: open.length - listed.length,
+    runs: workflowRunsStatus(github),
+  };
+}
+
+// One listed PR's entry, or its error entry when one of its reads throws.
+function pullRequestStatus(pr: SweepPullRequest, context: SweepContext, github: StatusGitHub, now: number): PullRequestStatus {
+  const { host, inScope, handOffs } = context;
   try {
-    const all = github.workflowRuns();
-    runs = { running: all.filter((run) => run.status === "in_progress"), queued: all.filter((run) => run.status !== "in_progress") };
+    const admission = admitToSweep(pr, context, github);
+    const passesUsed = followUpPassesUsed(github.passComments(pr.number), host);
+    const subject = sweepSubject(pr, inScope, host, handOffs);
+    return {
+      number: pr.number,
+      title: pr.title,
+      url: pr.url,
+      issueNumber: issueNumberOf(pr.headRefName),
+      handOff: subject === undefined ? hasLabel(pr, FOLLOW_UP_LABEL) : subject.kind === "pull-request",
+      passesUsed,
+      held: heldReason(admission, pr, now, github.isOwner, host, passesUsed),
+      threads: threadCounts(pr, github.isOwner, host),
+      mergeStateStatus: pr.mergeStateStatus,
+      checks: checkSummary(pr.checks),
+      needsHuman: hasLabel(pr, NEEDS_HUMAN),
+      reviewLabel: hasLabel(pr, REVIEW_LABEL),
+    };
   } catch (error) {
-    runs = { error: messageOf(error) };
+    return { number: pr.number, title: pr.title, url: pr.url, error: messageOf(error) };
   }
-  return { pullRequests, othersOpen: open.length - listed.length, runs };
+}
+
+// The workflow's unfinished runs, split into the one in progress and the
+// queued ones, or why they couldn't be read.
+function workflowRunsStatus(github: StatusGitHub): StatusReport["runs"] {
+  try {
+    const runs = github.workflowRuns();
+    return {
+      running: runs.filter((run) => run.status === "in_progress"),
+      queued: runs.filter((run) => run.status !== "in_progress"),
+    };
+  } catch (error) {
+    return { error: messageOf(error) };
+  }
 }
 
 function messageOf(error: unknown): string {

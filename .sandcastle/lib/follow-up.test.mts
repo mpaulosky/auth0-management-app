@@ -4,8 +4,8 @@ import type { BranchRefs } from "./branches.mts";
 import { BUILDING_LABEL, COPILOT_REVIEWER, FOLLOW_UP_LABEL, FOLLOW_UP_REPLY_MARKER, PR_MARKER, REVIEW_LABEL, SESSION_REPLY_MARKER } from "./config.mts";
 import { HeadMovedError, type ClosedPullRequest, type ContentEdit, type IssueEvent, type PullRequestIdentity, type TimelineLabelEvent } from "./github.mts";
 import {
-  closedPrHandBackComment,
   admitToSweep,
+  closedPrHandBackComment,
   closedWithoutMerging,
   decide,
   followsHandOffs,
