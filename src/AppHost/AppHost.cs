@@ -19,6 +19,15 @@ IResourceBuilder<ParameterResource> auth0ClientId =
 IResourceBuilder<ParameterResource> auth0ClientSecret =
 	builder.AddParameterFromConfiguration("auth0-client-secret", "Auth0:ClientSecret", secret: true);
 
+// The Machine to Machine application the Management API seam calls with, never the sign-in application above.
+IResourceBuilder<ParameterResource> auth0ManagementDomain =
+	builder.AddParameterFromConfiguration("auth0-management-domain", "Auth0:Management:Domain");
+IResourceBuilder<ParameterResource> auth0ManagementClientId =
+	builder.AddParameterFromConfiguration("auth0-management-client-id", "Auth0:Management:ClientId");
+IResourceBuilder<ParameterResource> auth0ManagementClientSecret =
+	builder.AddParameterFromConfiguration("auth0-management-client-secret", "Auth0:Management:ClientSecret",
+		secret: true);
+
 // With no launch profile named, Aspire starts the UI with its launch profile of the same name as the AppHost's: https
 // for local development, http where there's no developer certificate (CI, the Sandcastle sandbox), which the tests pick
 // with DOTNET_LAUNCH_PROFILE. The health check holds WebApp back from "healthy" until it answers /health, which it
@@ -27,7 +36,10 @@ IResourceBuilder<ProjectResource> webApp = builder.AddProject<Projects.UI>(Appli
 	.WithHttpHealthCheck("/health")
 	.WithEnvironment("Auth0__Domain", auth0Domain)
 	.WithEnvironment("Auth0__ClientId", auth0ClientId)
-	.WithEnvironment("Auth0__ClientSecret", auth0ClientSecret);
+	.WithEnvironment("Auth0__ClientSecret", auth0ClientSecret)
+	.WithEnvironment("Auth0__Management__Domain", auth0ManagementDomain)
+	.WithEnvironment("Auth0__Management__ClientId", auth0ManagementClientId)
+	.WithEnvironment("Auth0__Management__ClientSecret", auth0ManagementClientSecret);
 
 // The role claim type is optional and WebApp has its own default, so it's passed on only when it's set.
 string? auth0RoleClaimType = builder.Configuration["Auth0:RoleClaimType"];

@@ -221,7 +221,8 @@ User and Role management isn't built yet; these are the settings it will need.
    ```
 
    Outside Development, set `Auth0__Management__Domain`, `Auth0__Management__ClientId` and
-   `Auth0__Management__ClientSecret` instead.
+   `Auth0__Management__ClientSecret` instead. `aspire run` passes these to `WebApp` the same way it passes the sign-in
+   settings, and the app won't start without them.
 
 Auth0 lets the app change a User's Profile Fields only where Auth0 owns them: Users in a database connection, or Users
 from a social or enterprise connection whose profile isn't synced at each login. Otherwise the identity provider
