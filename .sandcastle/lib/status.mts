@@ -16,6 +16,7 @@ import {
   decide,
   isSandcastlePullRequest,
   issueNumberOf,
+  lastJudgingComment,
   liveFollowUpGitHub,
   NEEDS_HUMAN,
   sweepContext,
@@ -51,7 +52,10 @@ export type StatusGitHub = Pick<
 // owner, someone else, or someone whose owner check couldn't answer.
 // `answered` counts the bot and owner threads the host already replied to
 // (answeredByHost), which `decide` doesn't count as needing a pass.
-export type ThreadCounts = { bot: number; owner: number; others: number; unknown: number; answered: number };
+// `replyUnknown` counts the answered threads where someone replied after the
+// host and an owner check on them couldn't answer: they might be the owner's
+// "still wrong", so the thread may not be answered after all.
+export type ThreadCounts = { bot: number; owner: number; others: number; unknown: number; answered: number; replyUnknown: number };
 
 // A PR head's checks: how many, how many are still running, and the names of
 // the completed red ones.
@@ -113,7 +117,7 @@ export function followUpPassesUsed(reads: CommentReads, hostLogin: string): numb
 // and the run report tell them apart: a bot's, the owner's (isOwner true),
 // someone else's (false) and unchecked (undefined).
 export function threadCounts(pr: SweepPullRequest, isOwner: IsOwner, hostLogin: string): ThreadCounts {
-  const counts: ThreadCounts = { bot: 0, owner: 0, others: 0, unknown: 0, answered: 0 };
+  const counts: ThreadCounts = { bot: 0, owner: 0, others: 0, unknown: 0, answered: 0, replyUnknown: 0 };
   for (const thread of pr.threads.filter((candidate) => !candidate.resolved)) {
     const owner = thread.byBot ? undefined : isOwner(thread.author);
     if (thread.byBot) counts.bot++;
@@ -121,9 +125,23 @@ export function threadCounts(pr: SweepPullRequest, isOwner: IsOwner, hostLogin: 
     else if (owner === false) counts.others++;
     else counts.unknown++;
     // Only the threads `decide` would count can be waiting on the host's answer.
-    if ((thread.byBot || owner === true) && answeredByHost(thread, isOwner, hostLogin)) counts.answered++;
+    if ((thread.byBot || owner === true) && answeredByHost(thread, isOwner, hostLogin)) {
+      counts.answered++;
+      if (repliedAfterHostUnchecked(thread, isOwner, hostLogin)) counts.replyUnknown++;
+    }
   }
   return counts;
+}
+
+// Whether a human commented on the thread after the host's answer and the
+// owner check on them couldn't answer. lastJudgingComment skips such a comment
+// as a stranger's, so the thread would read as answered when it may not be.
+function repliedAfterHostUnchecked(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string): boolean {
+  const comments = thread.recentComments ?? [];
+  const last = lastJudgingComment(thread, isOwner, hostLogin);
+  return comments
+    .slice(last === undefined ? 0 : comments.lastIndexOf(last) + 1)
+    .some((comment) => !comment.byBot && comment.author !== hostLogin && isOwner(comment.author) === undefined);
 }
 
 // The head's checks, counted for the PR's entry.
@@ -258,6 +276,7 @@ function pullRequestLines(status: PullRequestStatus): string[] {
   const { threads, held } = status;
   const threadParts = [`${threads.bot} bot`, `${threads.owner} owner`, `${threads.others} waiting on someone else`];
   if (threads.unknown > 0) threadParts.push(`${threads.unknown} whose author couldn't be checked`);
+  if (threads.replyUnknown > 0) threadParts.push(`${threads.replyUnknown} with a reply whose author couldn't be checked`);
   if (threads.answered > 0) threadParts.push(`${threads.answered} answered by Sandcastle and waiting on the owner`);
   // A BEHIND PR the sweep doesn't update is left behind on purpose (#59 on 2026-10-20 looked stuck).
   const behind = status.mergeStateStatus === "BEHIND" && !(held.kind === "decided" && held.decision.action === "update-branch");
@@ -311,11 +330,12 @@ function yesNo(value: boolean): string {
 }
 
 // Whether an owner check failed for the PR: its admission was skipped for
-// want of an answer, or an unresolved thread's author couldn't be checked.
-// The sweep ends a follow-up run red for the first, and `decide` doesn't count
-// the second, so the entry is incomplete.
+// want of an answer, an unresolved thread's author couldn't be checked, or an
+// answered thread has a later reply whose author couldn't be. The sweep ends a
+// follow-up run red for the first, and `decide` doesn't count the others, so
+// the entry is incomplete.
 function ownerCheckFailed(status: PullRequestStatus): boolean {
-  return "held" in status && ((status.held.kind === "skipped" && status.held.unknown) || status.threads.unknown > 0);
+  return "held" in status && ((status.held.kind === "skipped" && status.held.unknown) || status.threads.unknown > 0 || status.threads.replyUnknown > 0);
 }
 
 // Prints the status and returns the exit code: 1 when the status, a PR's

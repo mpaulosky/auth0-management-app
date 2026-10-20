@@ -279,7 +279,7 @@ describe("threadCounts", () => {
       HOST,
     );
 
-    assert.deepEqual(counts, { bot: 1, owner: 1, others: 1, unknown: 1, answered: 0 });
+    assert.deepEqual(counts, { bot: 1, owner: 1, others: 1, unknown: 1, answered: 0, replyUnknown: 0 });
   });
 
   it("counts a null author, a deleted account, as someone else's", () => {
@@ -294,7 +294,7 @@ describe("threadCounts", () => {
       ],
     });
 
-    assert.deepEqual(threadCounts(pr({ threads: [answered] }), isOwner, HOST), { bot: 1, owner: 0, others: 0, unknown: 0, answered: 1 });
+    assert.deepEqual(threadCounts(pr({ threads: [answered] }), isOwner, HOST), { bot: 1, owner: 0, others: 0, unknown: 0, answered: 1, replyUnknown: 0 });
   });
 
   it("counts an owner thread the host answered as answered", () => {
@@ -305,7 +305,7 @@ describe("threadCounts", () => {
       ],
     });
 
-    assert.deepEqual(threadCounts(pr({ threads: [answered] }), isOwner, HOST), { bot: 0, owner: 1, others: 0, unknown: 0, answered: 1 });
+    assert.deepEqual(threadCounts(pr({ threads: [answered] }), isOwner, HOST), { bot: 0, owner: 1, others: 0, unknown: 0, answered: 1, replyUnknown: 0 });
   });
 
   it("doesn't count a bot thread as answered when a bot commented after the host", () => {
@@ -330,8 +330,30 @@ describe("threadCounts", () => {
     assert.equal(threadCounts(pr({ threads: [answered] }), isOwner, HOST).answered, 1);
   });
 
+  it("counts an answered thread whose later replier couldn't be checked under replyUnknown", () => {
+    const answered = botThread({
+      recentComments: [
+        { author: HOST, byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nDeclined.` },
+        { author: "ghost", byBot: false, body: "still wrong" },
+      ],
+    });
+
+    assert.deepEqual(threadCounts(pr({ threads: [answered] }), isOwner, HOST), { bot: 1, owner: 0, others: 0, unknown: 0, answered: 1, replyUnknown: 1 });
+  });
+
+  it("doesn't count an unchecked replier who commented before the host's answer", () => {
+    const answered = botThread({
+      recentComments: [
+        { author: "ghost", byBot: false, body: "hm" },
+        { author: HOST, byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nDeclined.` },
+      ],
+    });
+
+    assert.equal(threadCounts(pr({ threads: [answered] }), isOwner, HOST).replyUnknown, 0);
+  });
+
   it("counts no threads for a PR without any", () => {
-    assert.deepEqual(threadCounts(pr(), isOwner, HOST), { bot: 0, owner: 0, others: 0, unknown: 0, answered: 0 });
+    assert.deepEqual(threadCounts(pr(), isOwner, HOST), { bot: 0, owner: 0, others: 0, unknown: 0, answered: 0, replyUnknown: 0 });
   });
 });
 
@@ -463,7 +485,7 @@ describe("buildStatus' list of Sandcastle PRs", () => {
     });
 
     const status = entry(report, 101);
-    assert.deepEqual(status.threads, { bot: 1, owner: 0, others: 1, unknown: 0, answered: 0 });
+    assert.deepEqual(status.threads, { bot: 1, owner: 0, others: 1, unknown: 0, answered: 0, replyUnknown: 0 });
     assert.equal(status.mergeStateStatus, "BLOCKED");
     assert.deepEqual(status.checks, { total: 1, running: 0, red: [] });
     assert.equal(status.reviewLabel, true);
@@ -822,6 +844,22 @@ describe("statusCommand", () => {
     const code = statusCommand({ ...github, isOwner: () => undefined }, NOW, () => {});
 
     assert.equal(code, 1);
+  });
+
+  it("exits 1 and says so when a reply after the host's answer came from an author that couldn't be checked", () => {
+    const answered = botThread({
+      recentComments: [
+        { author: HOST, byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nDeclined.` },
+        { author: "ghost", byBot: false, body: "still wrong" },
+      ],
+    });
+    const { github } = stub({ prs: [pr({ threads: [answered] })] });
+    const out: string[] = [];
+
+    const code = statusCommand(github, NOW, (text) => void out.push(text));
+
+    assert.equal(code, 1);
+    assert.ok(out.join("\n").includes("1 with a reply whose author couldn't be checked"), out.join("\n"));
   });
 
   it("exits 1 when a thread's author couldn't be checked", () => {

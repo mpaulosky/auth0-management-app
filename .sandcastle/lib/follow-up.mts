@@ -168,7 +168,9 @@ export function answeredByHost(thread: SweepPullRequest["threads"][number], isOw
   return isHostReply(lastJudgingComment(thread, isOwner, hostLogin), hostLogin);
 }
 
-function lastJudgingComment(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string | undefined) {
+// The newest comment `answeredByHost` judges a thread by (see there), or
+// undefined when recentComments holds none.
+export function lastJudgingComment(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string | undefined) {
   return thread.recentComments?.findLast(
     (comment) => (thread.byBot && comment.byBot) || comment.author === hostLogin || isOwner(comment.author) === true,
   );
