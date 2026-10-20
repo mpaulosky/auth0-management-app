@@ -453,7 +453,6 @@ The sweep reads `sandcastle:building` once, before its per-PR reads, and reads t
 claim made meanwhile stops the write. A follow-up run ends red when the sweep couldn't follow up a PR, including one whose owner check couldn't finish, since it has no next
 round. Three gaps remain:
 
-
 - **The claim's race.** The claim reads the issue's labels, then adds the label. Two runs that do that within one round trip both think they hold it. A pass pushes plain,
   never `--force`, so the second push is rejected and posts nothing; only when neither pushes can both post a reply and a pass marker.
 - **The re-read's window.** A claim made between the sweep's fresh read and its write isn't seen. If the pass pushes first, `update-branch` gets a 422 on
