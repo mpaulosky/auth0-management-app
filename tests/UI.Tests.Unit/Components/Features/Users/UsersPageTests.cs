@@ -424,6 +424,54 @@ public class UsersPageTests : BunitContext
 	}
 
 	[Fact]
+	public void Render_PageBeyondTheLastPageAndTheSearchFinishesAfterTheFirstRender_WritesTheLastReachablePageBackToTheUrl()
+	{
+		// Arrange
+		Open("?q=jane&page=9");
+		TaskCompletionSource<Result<UserPage>> overshot = new();
+		_api.SearchUsersAsync(Arg.Is<UserSearch>(search => search.Page == 9), Arg.Any<CancellationToken>())
+			.Returns(overshot.Task);
+		_api.SearchUsersAsync(Arg.Is<UserSearch>(search => search.Page == 3), Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Ok(new UserPage(People(10), 60))));
+		IRenderedComponent<UsersPage> cut = RenderPage();
+
+		// Act
+		overshot.SetResult(Result.Ok(new UserPage([], 60)));
+
+		// Assert
+		cut.WaitForAssertion(() => WrittenQuery()["page"].ToString().Should().Be("3"));
+		WrittenQuery()["q"].ToString().Should().Be("jane");
+	}
+
+	[Fact]
+	public void Type_ThenDeletesItAgainWhileANextPageIsInFlight_KeepsTheNextPageSearch()
+	{
+		// Arrange
+		Open("?q=jane");
+		ReturnPage(People(25), 60);
+		IRenderedComponent<UsersPage> cut = RenderPage();
+		List<CancellationToken> tokens = [];
+		TaskCompletionSource<Result<UserPage>> nextPage = new();
+		_api.SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>()).Returns(call =>
+		{
+			tokens.Add(call.Arg<CancellationToken>());
+
+			return nextPage.Task;
+		});
+		ButtonWithText(cut, "Next").Click();
+		cut.WaitForAssertion(() => tokens.Should().HaveCount(1));
+
+		// Act
+		cut.Find(SearchBox).Input("janex");
+		cut.Find(SearchBox).Input("jane");
+		nextPage.SetResult(Result.Ok(new UserPage(People(25), 60)));
+
+		// Assert
+		tokens[0].IsCancellationRequested.Should().BeFalse();
+		cut.WaitForAssertion(() => TextOf(cut).Should().Contain("Page 2 of 3"));
+	}
+
+	[Fact]
 	public void Type_ThenWaitsLessThanFourHundredMilliseconds_DoesNotSearchYet()
 	{
 		// Arrange

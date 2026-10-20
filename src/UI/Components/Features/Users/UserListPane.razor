@@ -86,6 +86,14 @@
 
 	private CancellationTokenSource? _search;
 
+	// The search the debounce started, while it is still the current one. Deleting back to the applied text cancels only
+	// this one, not a page the Admin asked for with Next, Prev or Enter.
+	private CancellationTokenSource? _delayedSearch;
+
+	// The handler clamped the page, so the URL still names a page the pane doesn't show. It is written once the pane is
+	// interactive, however late the search finished.
+	private bool _urlNeedsWriting;
+
 	private string _text = string.Empty;
 
 	private string? _appliedQuery;
@@ -123,19 +131,23 @@
 		if (PersistedState.TryTakeFromJson(ListKey, out UserListPage? restored) && restored is not null)
 		{
 			_list = restored;
+			_urlNeedsWriting = restored.Page != State.Page;
 
 			return;
 		}
 
 		await SearchAsync(_appliedQuery, State.Page, notify: false);
+		_urlNeedsWriting = _list is not null && _list.Page != State.Page;
 	}
 
 	// JS interop can't run during the prerender, so a page the handler clamped is written back to the URL once the pane is
-	// interactive. State follows too, so a Try again doesn't ask for the page that overshot.
+	// interactive. When the live session runs the search itself, it can finish after the first render, so every render checks.
+	// State follows too, so a Try again doesn't ask for the page that overshot.
 	protected override async Task OnAfterRenderAsync(bool firstRender)
 	{
-		if (firstRender && _list is not null && _list.Page != State.Page)
+		if (_urlNeedsWriting && _list is not null)
 		{
+			_urlNeedsWriting = false;
 			await OnStateChanged.InvokeAsync(CurrentState());
 		}
 	}
@@ -158,10 +170,14 @@
 
 		// Typing a letter and deleting it again leaves the applied search as it was, so it keeps the Admin on their page.
 		// Enter still searches again. After a failed search nothing is applied, so the same text is worth another try.
-		// A search the debounce already started is cancelled too, or it would apply the text the Admin just deleted.
+		// A search the debounce already started is cancelled too, or it would apply the text the Admin just deleted. A page
+		// the Admin asked for with Next, Prev or Enter is not the debounce's, so it carries on.
 		if (_list is not null && _error is null && string.Equals(_text.Trim(), _appliedQuery?.Trim() ?? string.Empty, StringComparison.Ordinal))
 		{
-			_search?.Cancel();
+			if (_delayedSearch is not null && ReferenceEquals(_delayedSearch, _search))
+			{
+				_search.Cancel();
+			}
 
 			return;
 		}
@@ -208,7 +224,7 @@
 					return;
 				}
 
-				await SearchAsync(text, 1, notify: true);
+				await SearchAsync(text, 1, notify: true, fromDebounce: true);
 				StateHasChanged();
 			});
 		}
@@ -225,12 +241,13 @@
 #pragma warning restore CA1031
 	}
 
-	private async Task SearchAsync(string? text, int page, bool notify)
+	private async Task SearchAsync(string? text, int page, bool notify, bool fromDebounce = false)
 	{
 		_search?.Cancel();
 		_search?.Dispose();
 		CancellationTokenSource source = new();
 		_search = source;
+		_delayedSearch = fromDebounce ? source : null;
 		CancellationToken token = source.Token;
 
 		Result<UserListPage> result;
