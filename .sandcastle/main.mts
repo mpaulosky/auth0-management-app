@@ -252,8 +252,8 @@ try {
   // Every git command this process starts, Sandcastle's included, runs with hooks
   // off and its config pinned to this repository's .git: agents can write hooks
   // and files that point git elsewhere. Throws if .git/commondir exists. See
-  // lib/host-safety.mts, which also keeps .git/config and .git/hooks read-only in
-  // every sandbox.
+  // lib/host-safety.mts, which also keeps .git/config and .git/hooks read-only,
+  // and .git/review hidden, in every sandbox.
   protectHostGit();
   forgetGatedHead();
 

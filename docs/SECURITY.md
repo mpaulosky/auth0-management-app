@@ -48,8 +48,15 @@ If you discover a security vulnerability in Auth0 Management App, please report 
 
 ### How to Report
 
+Report it in a [private vulnerability report](https://github.com/mpaulosky/auth0-management-app/security/advisories/new)
+(the repository's **Security** tab, **Report a vulnerability**), which only the maintainers can see, or by email:
+
 **Email:** <matthew.paulosky@outlook.com>  
 **Subject:** [SECURITY] Auth0 Management App Vulnerability Report
+
+This includes a security finding the local review (`/pre-push-review`) raised that you accepted rather than fixed: report
+it before you push, naming your branch. Report each weakness once per branch: when a later review raises it again and you
+accept it again, it needs no new report. The Review notes in your PR only count such findings.
 
 **Please do NOT open a public GitHub issue for security vulnerabilities.**
 

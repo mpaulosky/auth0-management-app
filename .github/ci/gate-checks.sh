@@ -6,7 +6,9 @@
 #   gate-checks.sh <merge-base>
 #
 # <merge-base> is where this branch left origin/main, or empty when there is
-# no origin/main; then every check runs. Exit non-zero to fail the gate.
+# no origin/main. Then the local review can't be checked, so the gate fails
+# unless GATE_SKIP_REVIEW=1, in which case every other check runs. Exit
+# non-zero to fail the gate.
 #
 # scripts/gate.sh is Owned by the repo-ci-baseline Template and is overwritten
 # on every Apply; this file is Seed, so it belongs to the repo.
@@ -30,6 +32,23 @@ run_clean() {
   env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX "$@"
 }
 
+# The local review (/pre-push-review) must have passed this branch's diff:
+# every finding fixed, dismissed or accepted. First, so a push it would refuse
+# doesn't wait for the build. GATE_SKIP_REVIEW=1 (that value only) skips it:
+# the skill sets it on its own gate runs, and Sandcastle on every gate in its
+# sandbox (.sandcastle/lib/skills.mts) until its reviewer runs the same review.
+# The check itself also passes a Baseline re-Apply on chore/reapply-baseline
+# that changes only Owned files (checkReview in review-ledger.mts).
+echo -e "${CYAN}🔎 Local review...${RESET}"
+if [[ "${GATE_SKIP_REVIEW:-}" == "1" ]]; then
+  echo -e "${GREEN}✅ Local review check skipped (GATE_SKIP_REVIEW=1).${RESET}"
+elif [[ -z "$base" ]]; then
+  echo "❌ No origin/main to diff against, so the review can't be checked: run git fetch origin main." >&2
+  exit 1
+else
+  run_clean scripts/review.sh check "$base"
+fi
+
 # .github/copilot-instructions.md is generated from the code-review skill, so
 # GitHub's Copilot review and Claude Code review against the same rules.
 if changed .claude/skills/code-review/SKILL.md .github/copilot-instructions.md scripts/sync-copilot-review.sh; then
@@ -50,10 +69,15 @@ else
 fi
 
 # branches.test.mts checks Sandcastle's branch names against the branch
-# standard, code-review-skill.test.mts checks the code-review skill, and
+# standard, code-review-skill.test.mts checks the code-review skill,
 # dockerfile.test.mts checks the sandbox image's linters against the versions
-# gate.sh pins, so a change to any of them reruns them.
-if changed .sandcastle package.json ':(glob)pnpm-*.yaml' scripts/check-branch-name.sh .claude/skills/code-review scripts/gate.sh; then
+# gate.sh pins, review-ledger.test.mts and gate-checks.test.mts check the
+# local review's ledger (and its Owned list against .claude/rules/baseline.md)
+# and this file, and pre-push-review-skill.test.mts checks that the review's
+# reviewers are read-only, so a change to any of them reruns them.
+if changed .sandcastle package.json ':(glob)pnpm-*.yaml' scripts/check-branch-name.sh .claude/skills/code-review scripts/gate.sh \
+  scripts/review.sh .github/ci/gate-checks.sh .claude/rules/baseline.md .claude/agents .claude/skills/pre-push-review \
+  .claude/settings.json; then
   echo -e "${CYAN}🏰 Sandcastle TypeScript check...${RESET}"
   run_clean pnpm run check:sandcastle
 else

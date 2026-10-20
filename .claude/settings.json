@@ -1,4 +1,9 @@
 {
+	"permissions": {
+		"deny": [
+			"Read(**/.git/review/**)"
+		]
+	},
 	"hooks": {
 		"SessionStart": [
 			{

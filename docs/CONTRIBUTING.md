@@ -32,11 +32,17 @@ Please report unwanted behavior to [Project Maintainer](mailto:matthew.paulosky@
 
 ## Quick Start
 
-1. Fork the repository and clone your fork.
-2. Follow [PROCESS.md](PROCESS.md): the one-time hook setup, a branch named to the standard in its own worktree,
+1. Install [Claude Code](https://claude.com/claude-code), which runs every branch's local review before it's pushed, and
+   git 2.38 or later, which the review's check needs.
+2. Fork the repository and clone your fork.
+3. Follow [PROCESS.md](PROCESS.md): the one-time hook setup, a branch named to the standard in its own worktree,
    commit and PR title format, the PR description, and how checks, review, merging and releases work.
-3. Make your changes, following the code style and guidelines below, with tests.
-4. Push your branch and open a Pull Request to `main` using the template.
+4. Make your changes, following the code style and guidelines below, with tests.
+5. Sync your fork's `main` with this repository's (GitHub's **Sync fork**, or `gh repo sync`) and run
+   `git fetch origin main`, then run `/pre-push-review` in Claude Code before every push (see
+   [Review Process](#review-process)). The review diffs against your fork's `main`, so a stale one makes it review
+   changes you didn't make.
+6. Push your branch and open a Pull Request to `main` using the template.
 
 ## What should I know before I get started
 
@@ -155,11 +161,13 @@ Please provide as much detail as possible, including steps to reproduce, expecte
 1. Create a branch in its own worktree, named for the existing Issue number (`feature/{issue}-{slug}` or `fix/{issue}-{slug}`); see [PROCESS.md](PROCESS.md#branches-and-worktrees).
 1. Work on the issue.
 1. Create Unit, Integration tests for any code that require them. We use xUnit v3, FluentAssertions, NSubstitute, bUnit, and Playwright to test our code and components.
-1. When you are done, create a Pull Request from your branch to `main`.
+1. When you are done, review the branch before pushing it (see [Review Process](#review-process)), then create a Pull
+   Request from your branch to `main`.
 1. Submit the Pull Request.
 1. To hand a PR you opened to Sandcastle when you stop watching it, the repository owner adds the `sandcastle:follow-up` label.
    Sandcastle then answers its review threads, fixes red checks and catches the branch up with `main`; push nothing more to the branch while the label is on.
-   Remove the label to take the PR back.
+   Remove the label to take the PR back. Don't hand off a PR whose local review has an accepted security finding:
+   Sandcastle's follow-up can't see the acceptance.
 
 **Note:** Pull requests without unit tests will be delayed until tests are added. All new features and bug fixes must
 include appropriate tests.
@@ -185,6 +193,17 @@ Any code that is written to support a component or new functionality are require
 Pull requests without unit tests will be delayed and asked for unit tests to prove their functionality.
 
 ### Review Process
+
+Contributing needs [Claude Code](https://claude.com/claude-code). Every branch passes the local review before each push:
+run `/pre-push-review` in your branch's worktree. It reviews the whole branch, fixes what it finds behind regression tests,
+and leaves any finding that needs a decision for you to fix or to accept with `scripts/review.sh accept <id> "<reason>"`.
+Your acceptances appear in your PR's `## Review notes`, and the maintainer reviews them before merging. An accepted
+security finding is never listed there, and never goes in a commit message or a thread reply: report it privately, as
+[SECURITY.md](SECURITY.md#how-to-report) describes, before you push, naming your branch. Report each weakness once: a
+later review raises it again for you to accept for the new code, and that needs no new report. The maintainer won't merge
+your PR until the report has arrived.
+The pre-push gate refuses a branch whose diff the review hasn't passed, so keep the git hooks on, and don't skip them or
+push with `GATE_SKIP_REVIEW` set.
 
 Every PR is reviewed by Copilot on each push, and merges once its required checks pass and every review thread is
 resolved: a same-repo PR merges on its own, and the maintainer merges a fork's. The details are in
