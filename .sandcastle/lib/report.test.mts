@@ -152,6 +152,16 @@ describe("UnlabelledPrReport", () => {
 
     assert.deepEqual(report.items(), [{ pr: 10, url: "https://github.com/o/r/pull/10" }]);
   });
+
+  it("keeps only the PRs still open when told which are", () => {
+    const report = new UnlabelledPrReport();
+    report.record({ pr: 9, url: "https://github.com/o/r/pull/9" });
+    report.record({ pr: 10, url: "https://github.com/o/r/pull/10" });
+
+    report.retain(new Set([10, 11]));
+
+    assert.deepEqual(report.items(), [{ pr: 10, url: "https://github.com/o/r/pull/10" }]);
+  });
 });
 
 // #51: a PR left without review:claude must end the run red, since the owner's

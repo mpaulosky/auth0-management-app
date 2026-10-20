@@ -1381,6 +1381,17 @@ describe("sweepPullRequests' review label", () => {
     assert.deepEqual(unlabelled.items().map((entry) => entry.pr), [101]);
   });
 
+  it("takes a PR out of unlabelledPrReport once it's no longer open, and keeps an open one the sweep skips", () => {
+    const unlabelled = new UnlabelledPrReport();
+    unlabelled.record({ pr: 100, url: "https://github.com/o/r/pull/100" });
+    unlabelled.record({ pr: 101, url: "https://github.com/o/r/pull/101" });
+    const { github } = stubGithub({ prs: [pr({ labels: [], author: "a-collaborator" })] });
+
+    run(github, unlabelled);
+
+    assert.deepEqual(unlabelled.items().map((entry) => entry.pr), [101]);
+  });
+
   it("takes a PR back out of unlabelledPrReport once a later sweep finds it has carried the label", () => {
     const unlabelled = new UnlabelledPrReport();
     unlabelled.record({ pr: 101, url: "https://github.com/o/r/pull/101" });

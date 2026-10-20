@@ -299,7 +299,7 @@ const carriedReviewLabel = new Set<number>();
 // `decide` with unresolved threads opened by someone other than the
 // repository owner or a bot (the same test lib/follow-up-pass.mts#threadsForRole
 // uses) replaces `waiting`'s list, so the run report shows the latest sweep's
-// view. Once that's done, hands
+// view, and `unlabelled` drops every PR no longer open. Once that's done, hands
 // back any in-scope issue, not labelled sandcastle:needs-human and with no
 // open PR, whose latest Sandcastle PR closed without merging
 // (closedWithoutMerging), each in its own try/catch too. Every swept PR
@@ -311,7 +311,7 @@ export function sweepPullRequests(
   now: number = Date.now(),
   outcomes: OutcomeReport = outcomeReport,
   waiting: WaitingPrReport = waitingPrReport,
-  unlabelled: Pick<UnlabelledPrReport, "record" | "resolve"> = unlabelledPrReport,
+  unlabelled: Pick<UnlabelledPrReport, "record" | "resolve" | "retain"> = unlabelledPrReport,
   carried: Set<number> = carriedReviewLabel,
 ): SweepResult {
   const host = github.hostLogin();
@@ -360,6 +360,7 @@ export function sweepPullRequests(
     }
   }
   waiting.replace(waitingPrs);
+  unlabelled.retain(new Set(openPrs.map((pr) => pr.number)));
 
   // Any same-repo open PR on an issue's branch, the host's or not, means the
   // issue isn't waiting on a closed one.

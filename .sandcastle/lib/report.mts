@@ -163,7 +163,8 @@ export type UnlabelledPrEntry = { pr: number; url: string };
 
 // Every such PR this run left, once each, so the run report names them. A
 // later round's sweep that labels the PR, or finds it has carried the label,
-// resolves it, so the run ends red only for the PRs still unlabelled.
+// resolves it, and one that finds it no longer open drops it, so the run ends
+// red only for the open PRs still unlabelled.
 export class UnlabelledPrReport {
   private readonly entries = new Map<number, UnlabelledPrEntry>();
 
@@ -173,6 +174,14 @@ export class UnlabelledPrReport {
 
   resolve(pr: number): void {
     this.entries.delete(pr);
+  }
+
+  // Drops every PR not in `open`: one merged or closed since it was recorded
+  // is never swept again, so nothing else would resolve it.
+  retain(open: ReadonlySet<number>): void {
+    for (const pr of this.entries.keys()) {
+      if (!open.has(pr)) this.entries.delete(pr);
+    }
   }
 
   items(): readonly UnlabelledPrEntry[] {

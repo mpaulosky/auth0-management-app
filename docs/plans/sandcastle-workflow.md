@@ -314,7 +314,7 @@ a PR that has had the label is never labelled again. A failure to add the label,
 only warns, so the PR is still published or followed up. The run report lists the PR under **Pull requests without `review:claude`**, the run ends red once the report is
 written, and the owner adds the label by hand. A failed read in the sweep only warns and lists nothing, since the sweep reads every PR the review cap unlabelled each round, and
 telling the owner to label one by hand would get round that cap. Neither failure is retried within the round; the next round's sweep tries again, and a PR it labels, or finds
-has carried the label, leaves the report, so the run ends red only for the PRs still unlabelled.
+has carried the label, or no longer finds open, leaves the report, so the run ends red only for the open PRs still unlabelled.
 
 A push or `gh pr create` that fails with a GitHub server error (a `5xx` or `Internal Server Error` in git's or gh's output) is retried with backoff, up to
 `PUBLISH_RETRY_ATTEMPTS` attempts in all. Any other failure, such as a push that doesn't fast-forward, isn't retried. When publishing still fails, the issue gets a comment with
