@@ -421,12 +421,16 @@ describe("decide", () => {
 
 describe("decide's host-answered bot threads", () => {
   const answered = { author: HOST, body: `${FOLLOW_UP_REPLY_MARKER}\nDeclined: out of scope.` };
-  const botThread = (lastComment: { author: string | null; body: string } | null) => ({
+  type Recent = { author: string | null; body: string; byBot?: boolean };
+  const recent = (comments: Recent[]) => comments.map((comment) => ({ byBot: false, ...comment }));
+  const botThread = (...comments: Recent[]) => ({
     resolved: false,
     byBot: true,
     author: "copilot-pull-request-reviewer",
-    lastComment,
+    recentComments: recent(comments),
   });
+  const ownerThread = (...comments: Recent[]) => ({ resolved: false, byBot: false, author: "owner", recentComments: recent(comments) });
+  const isOwnerLogin = (login: string | null) => login === "owner";
 
   it("updates a behind PR whose only open bot thread the host already answered", () => {
     const result = decide(pr({ mergeStateStatus: "BEHIND", threads: [botThread(answered)] }), NOW, () => false, HOST);
@@ -442,7 +446,7 @@ describe("decide's host-answered bot threads", () => {
 
   it("counts a bot thread whose newest comment is the bot's own", () => {
     const result = decide(
-      pr({ mergeStateStatus: "BEHIND", threads: [botThread({ author: "copilot-pull-request-reviewer", body: "Still wrong." })] }),
+      pr({ mergeStateStatus: "BEHIND", threads: [botThread(answered, { author: "copilot-pull-request-reviewer", body: "Still wrong.", byBot: true })] }),
       NOW,
       () => false,
       HOST,
@@ -456,6 +460,45 @@ describe("decide's host-answered bot threads", () => {
       pr({ mergeStateStatus: "BEHIND", threads: [botThread({ author: "stranger", body: answered.body })] }),
       NOW,
       () => false,
+      HOST,
+    );
+
+    assert.equal(result.action, "needs-pass");
+  });
+
+  it("still treats a bot thread as answered when a stranger replied after the host", () => {
+    const result = decide(
+      pr({ mergeStateStatus: "BEHIND", threads: [botThread(answered, { author: "stranger", body: "me too" })] }),
+      NOW,
+      () => false,
+      HOST,
+    );
+
+    assert.deepEqual(result, { action: "update-branch" });
+  });
+
+  it("updates a behind PR whose only open owner thread the host already answered", () => {
+    const result = decide(pr({ mergeStateStatus: "BEHIND", threads: [ownerThread(answered)] }), NOW, isOwnerLogin, HOST);
+
+    assert.deepEqual(result, { action: "update-branch" });
+  });
+
+  it("still treats an owner thread as answered when a stranger replied after the host", () => {
+    const result = decide(
+      pr({ mergeStateStatus: "BEHIND", threads: [ownerThread(answered, { author: "stranger", body: "me too" })] }),
+      NOW,
+      isOwnerLogin,
+      HOST,
+    );
+
+    assert.deepEqual(result, { action: "update-branch" });
+  });
+
+  it("counts an owner thread the owner replied to after the host", () => {
+    const result = decide(
+      pr({ mergeStateStatus: "BEHIND", threads: [ownerThread(answered, { author: "owner", body: "Not good enough." })] }),
+      NOW,
+      isOwnerLogin,
       HOST,
     );
 
@@ -2029,7 +2072,7 @@ describe("sweepPullRequests' hand-offs", () => {
                 resolved: false,
                 byBot: true,
                 author: "copilot-pull-request-reviewer",
-                lastComment: { author: HOST, body: `${FOLLOW_UP_REPLY_MARKER}\nDeclined.` },
+                recentComments: [{ author: HOST, byBot: false, body: `${FOLLOW_UP_REPLY_MARKER}\nDeclined.` }],
               },
             ],
           }),

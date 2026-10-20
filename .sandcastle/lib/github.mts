@@ -382,7 +382,7 @@ query($owner: String!, $name: String!, $cursor: String) {
           nodes {
             isResolved
             comments(first: 1) { nodes { author { __typename login } } }
-            lastComments: comments(last: 1) { nodes { author { login } body } }
+            recentComments: comments(last: 10) { nodes { author { __typename login } body } }
           }
         }
         commits(last: 1) {
@@ -443,7 +443,7 @@ type SweepNode = {
   reviewThreads: Connection<{
     isResolved: boolean;
     comments: Connection<{ author?: { __typename?: string; login?: string } | null }>;
-    lastComments?: Connection<{ author?: Login; body?: string | null }>;
+    recentComments?: Connection<{ author?: { __typename?: string; login?: string } | null; body?: string | null }>;
   }>;
   commits: Connection<{ commit: { oid?: string; statusCheckRollup: { contexts: Connection<CheckContext> } | null } | null }>;
   timelineItems: Connection<{ createdAt?: string; requestedReviewer?: Login }>;
@@ -509,12 +509,15 @@ function sweepPullRequest(node: SweepNode): SweepPullRequest {
     threads: nodesOf(node.reviewThreads).map((thread) => {
       const first = nodesOf(thread.comments)[0];
       const author = first?.author;
-      const last = nodesOf(thread.lastComments)[0];
       return {
         resolved: thread.isResolved,
         byBot: author?.__typename === "Bot",
         author: authorLogin(author),
-        lastComment: last === undefined ? null : { author: authorLogin(last.author), body: last.body ?? "" },
+        recentComments: nodesOf(thread.recentComments).map((comment) => ({
+          author: authorLogin(comment.author),
+          byBot: comment.author?.__typename === "Bot",
+          body: comment.body ?? "",
+        })),
       };
     }),
     checks: nodesOf(contexts).filter((context) => !isSandcastleCheck(context)).map(checkState),

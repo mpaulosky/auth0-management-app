@@ -83,9 +83,14 @@ export type SweepPullRequest = PullRequestIdentity & {
   reviews: { author: string | null; commitOid: string | null }[];
   // byBot: whether the thread's first comment's author is a Bot. author: that
   // comment's login, for isOwner (null for a deleted account or no comment).
-  // lastComment: the thread's newest comment, so `decide` can tell a thread the
-  // host already answered from one still waiting on a pass.
-  threads: { resolved: boolean; byBot: boolean; author: string | null; lastComment?: { author: string | null; body: string } | null }[];
+  // recentComments: the thread's newest comments, oldest first, so `decide` can
+  // tell a thread the host already answered from one still waiting on a pass.
+  threads: {
+    resolved: boolean;
+    byBot: boolean;
+    author: string | null;
+    recentComments?: { author: string | null; byBot: boolean; body: string }[];
+  }[];
   checks: CheckState[];
   // review_requested timeline events naming Copilot, oldest first.
   copilotRequestedAt: string[];
@@ -144,6 +149,21 @@ export function isHostReply(comment: { author: string | null; body: string } | n
     comment.author === hostLogin &&
     (comment.body.startsWith(FOLLOW_UP_REPLY_MARKER) || comment.body.includes(SESSION_REPLY_MARKER))
   );
+}
+
+// Whether the host already answered `thread`, the way threadsForRole
+// (lib/follow-up-pass.mts) judges it: the newest comment by the host, the
+// repository owner or, on a bot thread, a bot is the host's own reply. A
+// stranger's comment after it doesn't count, so it can't put an answered thread
+// back on the PR's to-do list.
+function answeredByHost(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string | undefined): boolean {
+  if (hostLogin === undefined) {
+    return false;
+  }
+  const last = thread.recentComments?.findLast(
+    (comment) => (thread.byBot && comment.byBot) || comment.author === hostLogin || isOwner(comment.author) === true,
+  );
+  return isHostReply(last, hostLogin);
 }
 
 // How the sweep treats a PR it doesn't skip: a Sandcastle PR of an in-scope
@@ -242,10 +262,10 @@ export type SweepDecision =
 // settled PR that's only behind main, or leave a clean or merge-blocked one
 // alone. `isOwner` defaults to never-owner so a caller that doesn't pass it
 // (most tests) sees every non-bot thread as a human's, as before this
-// parameter existed. With `hostLogin`, a bot thread whose newest comment is the
-// host's own reply (isHostReply) isn't counted: the pass declined it and left it
-// open for a person, and counting it would hold the PR at needs-pass, which
-// no pass handles, so it would never be updated or re-reviewed.
+// parameter existed. With `hostLogin`, a bot or owner thread the host already
+// answered (answeredByHost) isn't counted: the pass declined it or replied and
+// left it open for a person, and counting it would hold the PR at needs-pass,
+// which no pass handles, so it would never be updated or re-reviewed.
 export function decide(
   pr: SweepPullRequest,
   now: number,
@@ -267,15 +287,15 @@ export function decide(
   // re-request (Copilot's review budget, ADR 0004), and every update-branch
   // makes a head Copilot hasn't seen, so waiting would hide them for good.
   const reasons = pr.checks.filter((check) => !check.green).map((check) => `check ${check.name} is red`);
-  const botThreads = pr.threads.filter(
-    (thread) => !thread.resolved && thread.byBot && !(hostLogin !== undefined && isHostReply(thread.lastComment, hostLogin)),
-  ).length;
+  const botThreads = pr.threads.filter((thread) => !thread.resolved && thread.byBot && !answeredByHost(thread, isOwner, hostLogin)).length;
   if (botThreads > 0) reasons.push(`${botThreads} unresolved bot thread(s)`);
   // A thread the repository owner opened is the follow-up role's to answer
   // (threadsForRole), not left waiting on a person forever: without this, a
   // settled PR whose only open thread is the owner's never needs a pass, so
   // nothing ever answers it (#81's follow-up review).
-  const ownerThreads = pr.threads.filter((thread) => !thread.resolved && !thread.byBot && isOwner(thread.author) === true).length;
+  const ownerThreads = pr.threads.filter(
+    (thread) => !thread.resolved && !thread.byBot && isOwner(thread.author) === true && !answeredByHost(thread, isOwner, hostLogin),
+  ).length;
   if (ownerThreads > 0) reasons.push(`${ownerThreads} unresolved owner thread(s)`);
   if (reasons.length > 0) return { action: "needs-pass", reasons };
 
