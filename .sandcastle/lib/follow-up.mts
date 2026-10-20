@@ -24,6 +24,7 @@ import {
   handBack,
   hasCarriedReviewLabel,
   hasLabel,
+  HeadMovedError,
   isCopilot,
   issueEvents,
   issueLabels,
@@ -523,7 +524,15 @@ function followUp(
       log(`  ↻ PR #${pr.number}: asked Copilot again to review ${pr.headRefOid.slice(0, 7)}`);
       return;
     case "update-branch":
-      github.updateBranch(pr.number, pr.headRefOid);
+      try {
+        github.updateBranch(pr.number, pr.headRefOid);
+      } catch (error) {
+        if (!(error instanceof HeadMovedError)) throw error;
+        // Another run, or a push, moved the head since the sweep read it:
+        // nothing is wrong, and that run's own sweep or pass has it.
+        log(`  · PR #${pr.number} isn't updated: its head moved since the sweep read it, so another run got there first.`);
+        return;
+      }
       outcomes.record({ kind: "pr", number: pr.number, outcome: "updated", detail: "was only behind main" });
       log(`  ⤴ PR #${pr.number} (${pr.headRefName}) was only behind main: updated it on GitHub`);
       return;

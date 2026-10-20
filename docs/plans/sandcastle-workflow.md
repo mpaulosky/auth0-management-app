@@ -84,7 +84,7 @@ Saved search for everything waiting on a human: `is:open label:sandcastle:needs-
 
 A follow-up run (`SANDCASTLE_MODE=follow-up`, see **Follow-up runs** in [Trigger and run environment](#trigger-and-run-environment)) does one sweep and the passes it
 finds, then exits, through `lib/follow-up-run.mts`: no umbrellas, intake, gate, plan, build or second round.
-It has no next round to sweep a PR again, so when the sweep couldn't follow up a PR, the run still does the other PRs' passes and then ends red.
+It has no next round to sweep a PR again, so when the sweep couldn't follow up a PR, the run still does the other PRs' passes, records the PR in the run report as `follow-up failed`, and exits 1 once the report is written (it isn't reported as a crash).
 
 The queue is the `Sandcastle` label in Actions. A local run must name its scope, either an issue number or a dev label such as `Sandcastle:dev` through an environment variable, so it
 never competes with Actions for work ([trigger decision](https://github.com/mpaulosky/Blazor-Server/issues/61)). Every phase works only on issues and PRs in that scope, and only on
@@ -455,8 +455,9 @@ round. Three gaps remain:
 
 - **The claim's race.** The claim reads the issue's labels, then adds the label. Two runs that do that within one round trip both think they hold it. A pass pushes plain,
   never `--force`, so the second push is rejected and posts nothing; only when neither pushes can both post a reply and a pass marker.
-- **The re-read's window.** A claim made between the sweep's fresh read and its write isn't seen. If the pass pushes first, `update-branch` gets a 422 on
-  `expected_head_sha`, which ends a follow-up run red with nothing actually wrong; a full run sweeps the PR again next round.
+- **The re-read's window.** A claim made between the sweep's fresh read and its write isn't seen. If the pass pushes first, or a second sweep updates the same BEHIND PR
+  first, `update-branch` gets a 422 on `expected_head_sha`. `updatePullRequestBranch` throws `HeadMovedError` for that refusal and the sweep logs it and skips the PR,
+  since the head moved and the other run has it; it isn't a failure, so it doesn't end a follow-up run red. Any other `update-branch` failure still does.
 - **A follow-up event can be dropped.** A follow-up run that finds a PR held by the full run skips it and exits. A review that landed after the full run's pass read its
   threads then waits for the full run's next round, the next CI completion or the scheduled run, as it did before follow-up runs.
 

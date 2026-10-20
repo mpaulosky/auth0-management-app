@@ -88,20 +88,28 @@ describe("followUpOnlyRun", () => {
     await assert.rejects(followUpOnlyRun(stub), UncountedStopError);
   });
 
-  it("rejects, naming the PRs, when the sweep couldn't follow up some, after the other PRs' passes", async () => {
+  it("returns the PRs the sweep couldn't follow up, after the other PRs' passes", async () => {
     const { stub, calls } = steps({ needsPass: [101], passes: [target(101)] }, undefined, [102]);
 
-    await assert.rejects(followUpOnlyRun(stub), /PR #102/);
+    const failed = await followUpOnlyRun(stub);
 
+    assert.deepEqual(failed, [102]);
     assert.deepEqual(calls, ["startRound", "sweep", "fetchMain", "queue", "passes"]);
   });
 
-  it("rejects when the sweep couldn't follow up a PR and none needs a pass, instead of exiting green", async () => {
+  it("returns the failed PRs when none needs a pass, rather than hiding them", async () => {
     const { stub, logs } = steps({ needsPass: [], passes: [] }, undefined, [102]);
 
-    await assert.rejects(followUpOnlyRun(stub), /PR #102/);
+    const failed = await followUpOnlyRun(stub);
 
+    assert.deepEqual(failed, [102]);
     assert.ok(logs.some((line) => line.includes("No open PR needs")), logs.join("\n"));
+  });
+
+  it("returns no failed PRs when the sweep followed up every PR", async () => {
+    const { stub } = steps({ needsPass: [101], passes: [target(101)] });
+
+    assert.deepEqual(await followUpOnlyRun(stub), []);
   });
 
   it("resolves when the passes settle with skipped or failed outcomes", async () => {

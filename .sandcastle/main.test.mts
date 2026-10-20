@@ -511,6 +511,14 @@ describe("main.mts's follow-up mode wiring", () => {
     assert.ok(followUpRun < loop, "main.mts doesn't run the follow-up run before the round loop");
   });
 
+  it("ends a follow-up run red, through the exit code and the report, for the PRs its sweep couldn't follow up", () => {
+    const mainMts = read(".sandcastle/main.mts");
+
+    assert.match(mainMts, /failedFollowUps = await followUpOnlyRun\(\)/);
+    assert.match(mainMts, /outcome: "follow-up failed"/);
+    assert.match(mainMts, /failedFollowUps\.length > 0 \? 1 : 0/);
+  });
+
   it("runs the round loop only in a full run", () => {
     const mainMts = read(".sandcastle/main.mts");
     const loop = mainMts.indexOf("for (let iteration = 1;");

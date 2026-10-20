@@ -568,18 +568,32 @@ export function requestCopilotReview(pullRequestId: string, run: typeof execFile
   ghWithStderr(run, ["api", "graphql", "-f", `query=${mutation}`, "-f", `pullRequestId=${pullRequestId}`]);
 }
 
+// Thrown by updatePullRequestBranch when GitHub refuses because the PR's head
+// moved since the sweep read it: another run, or a push, got there first.
+export class HeadMovedError extends Error {}
+
 // Updates a PR's branch from its base on GitHub's server
 // (lib/follow-up.mts#decide), for a settled PR whose only problem is being
 // behind main. expected_head_sha makes GitHub refuse (422) when the head
 // moved since the sweep read it, rather than merge into a head it never
-// judged.
+// judged. That refusal throws HeadMovedError, which the sweep treats as "the
+// head moved, another run got there first" and skips (#53); any other failure
+// throws as before. Other 422s, such as a merge conflict, aren't matched.
 export function updatePullRequestBranch(
   number: number,
   expectedHeadSha: string,
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
 ): void {
-  ghWithStderr(run, ["api", "--method", "PUT", `repos/${repo}/pulls/${number}/update-branch`, "-f", `expected_head_sha=${expectedHeadSha}`]);
+  try {
+    ghWithStderr(run, ["api", "--method", "PUT", `repos/${repo}/pulls/${number}/update-branch`, "-f", `expected_head_sha=${expectedHeadSha}`]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (/HTTP 422/.test(message) && /expected head sha|expected_head_sha|head branch was modified/i.test(message)) {
+      throw new HeadMovedError(`PR #${number}'s head moved since the sweep read it (${expectedHeadSha.slice(0, 7)})`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 // One comment in a review thread, first comment first (lib/github.mts#reviewThreadsOf).

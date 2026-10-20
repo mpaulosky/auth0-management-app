@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { BranchRefs } from "./branches.mts";
 import { BUILDING_LABEL, COPILOT_REVIEWER, PR_MARKER, REVIEW_LABEL } from "./config.mts";
-import type { ClosedPullRequest, IssueEvent, PullRequestIdentity, TimelineLabelEvent } from "./github.mts";
+import { HeadMovedError, type ClosedPullRequest, type IssueEvent, type PullRequestIdentity, type TimelineLabelEvent } from "./github.mts";
 import {
   closedPrHandBackComment,
   closedWithoutMerging,
@@ -491,6 +491,7 @@ function stubGithub({
   const handBacks: { issueNumber: number; reason: string; body: string }[] = [];
   const closedCalls: string[] = [];
   const addedPrLabels: { number: number; label: string }[] = [];
+  const labelReads: number[] = [];
   const github: FollowUpGitHub = {
     hostLogin: () => host,
     openPullRequests: () => prs,
@@ -499,7 +500,10 @@ function stubGithub({
       return closed;
     },
     inScopeIssues: () => issues,
-    issueLabels: (issueNumber) => labelsNow[issueNumber] ?? issues.find((issue) => issue.number === issueNumber)?.labels ?? [],
+    issueLabels: (issueNumber) => {
+      labelReads.push(issueNumber);
+      return labelsNow[issueNumber] ?? issues.find((issue) => issue.number === issueNumber)?.labels ?? [];
+    },
     labelTimeline: (issueNumber) => {
       if (failTimelineFor.includes(issueNumber)) throw new Error("gh api failed: HTTP 502");
       return timelines[issueNumber] ?? [];
@@ -514,7 +518,7 @@ function stubGithub({
       addedPrLabels.push({ number, label });
     },
   };
-  return { github, requestedReviews, updatedBranches, handBacks, closedCalls, addedPrLabels };
+  return { github, requestedReviews, updatedBranches, handBacks, closedCalls, addedPrLabels, labelReads };
 }
 
 describe("sweepPullRequests", () => {
@@ -1631,6 +1635,86 @@ describe("sweepPullRequests' re-read before a write", () => {
     run(github);
 
     assert.equal(updatedBranches.length, 1);
+  });
+
+  it("doesn't ask Copilot again for a PR whose issue was claimed after the sweep began", () => {
+    const lines: string[] = [];
+    const completedAt = new Date(NOW - 61 * 60 * 1000).toISOString();
+    const { github, requestedReviews } = stubGithub({
+      prs: [pr({ reviews: [], reviewRequests: [], checks: [{ name: "build", completed: true, green: true, completedAt }] })],
+      labelsNow: { 42: [BUILDING_LABEL] },
+    });
+
+    run(github, undefined, lines);
+
+    assert.deepEqual(requestedReviews, []);
+    assert.ok(lines.some((line) => /PR #101 isn't swept: .*sandcastle:building/.test(line)));
+  });
+
+  it("still asks Copilot again for a PR whose issue stays free", () => {
+    const completedAt = new Date(NOW - 61 * 60 * 1000).toISOString();
+    const { github, requestedReviews } = stubGithub({
+      prs: [pr({ reviews: [], reviewRequests: [], checks: [{ name: "build", completed: true, green: true, completedAt }] })],
+    });
+
+    run(github);
+
+    assert.deepEqual(requestedReviews, ["PR_101"]);
+  });
+
+  it("doesn't re-read the issue's labels for a PR that needs a pass, waits or is left alone", () => {
+    const { github, labelReads } = stubGithub({
+      prs: [
+        pr({ number: 101, mergeStateStatus: "DIRTY" }),
+        pr({ number: 102, headRefName: "feature/43-other", mergeStateStatus: "CLEAN", checks: [{ name: "build", completed: false, green: false, completedAt: null }] }),
+        pr({ number: 103, headRefName: "feature/44-third" }),
+      ],
+      issues: [
+        { number: 42, labels: [] },
+        { number: 43, labels: [] },
+        { number: 44, labels: [] },
+      ],
+    });
+    const outcomes: string[] = [];
+
+    sweepPullRequests(github, (line) => void outcomes.push(line), NOW, new OutcomeReport(), new WaitingPrReport(), new UnlabelledPrReport(), new Set<number>(), false);
+
+    assert.ok(outcomes.some((line) => line.includes("PR #101 needs a follow-up pass")), outcomes.join("\n"));
+    assert.deepEqual(labelReads, []);
+  });
+
+  it("skips, without reporting a failure, a branch update GitHub refused because the head moved", () => {
+    const lines: string[] = [];
+    const failed: number[] = [];
+    const outcomes = new OutcomeReport();
+    const { github } = stubGithub({ prs: [pr({ mergeStateStatus: "BEHIND" })] });
+    const moved: FollowUpGitHub = {
+      ...github,
+      updateBranch: () => {
+        throw new HeadMovedError("PR #101's head moved since the sweep read it");
+      },
+    };
+
+    sweepPullRequests(moved, (line) => void lines.push(line), NOW, outcomes, new WaitingPrReport(), new UnlabelledPrReport(), new Set<number>(), false, (pr) => void failed.push(pr));
+
+    assert.deepEqual(failed, []);
+    assert.deepEqual(outcomes.items(), []);
+    assert.ok(lines.some((line) => /PR #101 isn't updated: its head moved/.test(line)), lines.join("\n"));
+  });
+
+  it("still reports a branch update that failed for another reason", () => {
+    const failed: number[] = [];
+    const { github } = stubGithub({ prs: [pr({ mergeStateStatus: "BEHIND" })] });
+    const broken: FollowUpGitHub = {
+      ...github,
+      updateBranch: () => {
+        throw new Error("gh api failed: HTTP 502");
+      },
+    };
+
+    sweepPullRequests(broken, () => {}, NOW, new OutcomeReport(), new WaitingPrReport(), new UnlabelledPrReport(), new Set<number>(), false, (pr) => void failed.push(pr));
+
+    assert.deepEqual(failed, [101]);
   });
 
   it("reports a PR whose owner check couldn't finish to onPrError", () => {

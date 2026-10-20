@@ -35,7 +35,7 @@ export type FollowUpRunSteps = {
 // next round retries it, and this run has no next round, so a failure must
 // reach main.mts and end the run red rather than log "no PR needs a pass". The
 // sweep catches a failure on one PR itself, so the numbers of those PRs come
-// back in `failed` for followUpOnlyRun to end the run red on, after the passes.
+// back in `failed` for followUpOnlyRun to return, after the passes.
 export function followUpRunSteps(github: FollowUpGitHub): FollowUpRunSteps {
   return {
     startRound: () => startQueueRound(),
@@ -66,10 +66,10 @@ export const liveFollowUpRunSteps: FollowUpRunSteps = followUpRunSteps(liveFollo
 
 // The sweep, then the follow-up passes it found, once. An UncountedStopError
 // from the passes propagates, so main.mts's catch ends the run "stopped", as
-// it does a full run. A PR the sweep couldn't follow up isn't swept again by
-// this run, so once the passes for the others are done the run throws and ends
-// red, rather than logging "swept again next round" and ending green.
-export async function followUpOnlyRun(steps: FollowUpRunSteps = liveFollowUpRunSteps): Promise<void> {
+// it does a full run. Returns the PRs the sweep couldn't follow up: this run
+// has no next round to sweep them again, so main.mts records them in the run
+// report and ends the run red, rather than a throw that reads as a crash.
+export async function followUpOnlyRun(steps: FollowUpRunSteps = liveFollowUpRunSteps): Promise<readonly number[]> {
   steps.startRound();
   const { passes, failed } = steps.sweep();
   if (passes.length === 0) {
@@ -78,9 +78,5 @@ export async function followUpOnlyRun(steps: FollowUpRunSteps = liveFollowUpRunS
     const base = steps.fetchMain();
     await steps.passes(passes, steps.queue(), base);
   }
-  if (failed.length > 0) {
-    throw new Error(
-      `The sweep couldn't follow up ${failed.map((pr) => `PR #${pr}`).join(", ")}, and a follow-up run has no next round to sweep again.`,
-    );
-  }
+  return failed;
 }

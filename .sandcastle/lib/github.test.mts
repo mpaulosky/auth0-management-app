@@ -52,6 +52,7 @@ import {
   type TimelineLabelEvent,
   type TimestampedComment,
   updatePullRequestBranch,
+  HeadMovedError,
 } from "./github.mts";
 import { HandBackReport, targetUrl, UnlabelledPrReport } from "./report.mts";
 
@@ -1110,6 +1111,38 @@ describe("updatePullRequestBranch", () => {
     assert.deepEqual(calls[0]!.args, [
       "api", "--method", "PUT", "repos/o/r/pulls/42/update-branch", "-f", `expected_head_sha=${"a".repeat(40)}`,
     ]);
+  });
+});
+
+describe("updatePullRequestBranch's refusals", () => {
+  // A gh stub whose call fails with `stderr`, as gh api does for an HTTP error.
+  const failing = (stderr: string) =>
+    (() => {
+      throw Object.assign(new Error("Command failed"), { stderr });
+    }) as unknown as typeof execFileSync;
+
+  it("throws HeadMovedError on the 422 for a head that moved", () => {
+    const run = failing("gh: expected head sha didn't match current head ref. (HTTP 422)");
+
+    assert.throws(() => updatePullRequestBranch(42, "a".repeat(40), run, "o/r"), HeadMovedError);
+  });
+
+  it("throws the original error on another 422, such as a merge conflict", () => {
+    const run = failing("gh: merge conflict between base and head (HTTP 422)");
+
+    assert.throws(
+      () => updatePullRequestBranch(42, "a".repeat(40), run, "o/r"),
+      (error) => !(error instanceof HeadMovedError) && /merge conflict/.test((error as Error).message),
+    );
+  });
+
+  it("throws the original error on a failure that isn't a 422", () => {
+    const run = failing("gh: Bad gateway (HTTP 502)");
+
+    assert.throws(
+      () => updatePullRequestBranch(42, "a".repeat(40), run, "o/r"),
+      (error) => !(error instanceof HeadMovedError) && /HTTP 502/.test((error as Error).message),
+    );
   });
 });
 

@@ -229,6 +229,10 @@ let ending: RunEnding = { kind: "crashed" };
 // safe to use.
 let startedUp = false;
 
+// The PRs a follow-up run's sweep couldn't follow up (#53): the run has no next
+// round to sweep them again, so it ends red once the report is written.
+let failedFollowUps: readonly number[] = [];
+
 // An UncountedStopError from any phase (intake, the planner, the critique)
 // means the budget has passed or Claude's usage limit was hit: the catch below
 // ends the run cleanly rather than crash, since the next run picks the work up.
@@ -282,7 +286,12 @@ try {
   const overlapDeferred = new Map<number, OverlapHold>();
 
   // A follow-up run sweeps and passes once, then skips the round loop.
-  if (mode === "follow-up") await followUpOnlyRun();
+  if (mode === "follow-up") {
+    failedFollowUps = await followUpOnlyRun();
+    for (const pr of failedFollowUps) {
+      outcomeReport.record({ kind: "pr", number: pr, outcome: "follow-up failed", detail: "the sweep couldn't follow it up; see the run log" });
+    }
+  }
 
   for (let iteration = 1; mode === "full" && iteration <= MAX_ITERATIONS; iteration++) {
     // No new round once the budget has passed or the usage limit was hit.
@@ -569,7 +578,16 @@ try {
   if (unlabelledPrs.length > 0) {
     console.error(`\n✗ ${unlabelledPrs.length} pull request(s) left without ${REVIEW_LABEL}; see the run report.`);
   }
-  process.exitCode = Math.max(intakeStopExitCode(intakeStopReport.items()), unlabelledPrExitCode(unlabelledPrs));
+  if (failedFollowUps.length > 0) {
+    console.error(
+      `\n✗ The sweep couldn't follow up ${failedFollowUps.map((pr) => `PR #${pr}`).join(", ")}, and a follow-up run has no next round to sweep again; see the run report.`,
+    );
+  }
+  process.exitCode = Math.max(
+    intakeStopExitCode(intakeStopReport.items()),
+    unlabelledPrExitCode(unlabelledPrs),
+    failedFollowUps.length > 0 ? 1 : 0,
+  );
 }
 
 console.log("\nAll done.");
