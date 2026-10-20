@@ -382,7 +382,7 @@ query($owner: String!, $name: String!, $cursor: String) {
           nodes {
             isResolved
             comments(first: 1) { nodes { author { __typename login } } }
-            recentComments: comments(last: 10) { nodes { author { __typename login } body } }
+            recentComments: comments(last: 10) { pageInfo { hasPreviousPage } nodes { author { __typename login } body } }
           }
         }
         commits(last: 1) {
@@ -518,6 +518,7 @@ function sweepPullRequest(node: SweepNode): SweepPullRequest {
           byBot: comment.author?.__typename === "Bot",
           body: comment.body ?? "",
         })),
+        ...(thread.recentComments?.pageInfo?.hasPreviousPage === true ? { recentTruncated: true as const } : {}),
       };
     }),
     checks: nodesOf(contexts).filter((context) => !isSandcastleCheck(context)).map(checkState),

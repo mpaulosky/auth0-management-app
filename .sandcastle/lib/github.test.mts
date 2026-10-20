@@ -1293,6 +1293,18 @@ describe("openPullRequestsForSweep", () => {
     assert.equal(pr!.truncated, false);
   });
 
+  it("marks a thread whose newest comments leave older ones out", () => {
+    const withMore = page();
+    const threads = (withMore.data.repository.pullRequests.nodes[0] as { reviewThreads: { nodes: Record<string, unknown>[] } }).reviewThreads.nodes;
+    threads[0]!.recentComments = { pageInfo: { hasPreviousPage: true }, nodes: [] };
+    const { run } = recordingGh([JSON.stringify(withMore)]);
+
+    const [pr] = openPullRequestsForSweep(run, "o/r");
+
+    assert.equal(pr!.threads[0]!.recentTruncated, true);
+    assert.equal(pr!.threads[1]!.recentTruncated, undefined);
+  });
+
   // Each list is read from the end it pages from: reviews and timelineItems
   // with last:, so GitHub flags what's left with hasPreviousPage, and the
   // rest with first:, flagged by hasNextPage.

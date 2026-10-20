@@ -90,6 +90,8 @@ export type SweepPullRequest = PullRequestIdentity & {
     byBot: boolean;
     author: string | null;
     recentComments?: { author: string | null; byBot: boolean; body: string }[];
+    // Set when the thread has comments older than recentComments holds.
+    recentTruncated?: true;
   }[];
   checks: CheckState[];
   // review_requested timeline events naming Copilot, oldest first.
@@ -160,10 +162,22 @@ function answeredByHost(thread: SweepPullRequest["threads"][number], isOwner: Is
   if (hostLogin === undefined) {
     return false;
   }
-  const last = thread.recentComments?.findLast(
+  return isHostReply(lastJudgingComment(thread, isOwner, hostLogin), hostLogin);
+}
+
+function lastJudgingComment(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string | undefined) {
+  return thread.recentComments?.findLast(
     (comment) => (thread.byBot && comment.byBot) || comment.author === hostLogin || isOwner(comment.author) === true,
   );
-  return isHostReply(last, hostLogin);
+}
+
+// Whether `thread` can't be judged from recentComments: it has older comments
+// and the newest ones hold none by a bot, the host or the owner, so strangers'
+// replies may have pushed the host's answer out of the window. threadsForRole
+// reads the whole thread, so counting it here would send the PR to a pass that
+// drops the thread, every round.
+function unjudgeable(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string | undefined): boolean {
+  return thread.recentTruncated === true && lastJudgingComment(thread, isOwner, hostLogin) === undefined;
 }
 
 // How the sweep treats a PR it doesn't skip: a Sandcastle PR of an in-scope
@@ -287,17 +301,20 @@ export function decide(
   // re-request (Copilot's review budget, ADR 0004), and every update-branch
   // makes a head Copilot hasn't seen, so waiting would hide them for good.
   const reasons = pr.checks.filter((check) => !check.green).map((check) => `check ${check.name} is red`);
-  const botThreads = pr.threads.filter((thread) => !thread.resolved && thread.byBot && !answeredByHost(thread, isOwner, hostLogin)).length;
+  const open = pr.threads.filter((thread) => !thread.resolved && (thread.byBot || isOwner(thread.author) === true));
+  const unreadable = open.filter((thread) => unjudgeable(thread, isOwner, hostLogin)).length;
+  const botThreads = open.filter((thread) => thread.byBot && !unjudgeable(thread, isOwner, hostLogin) && !answeredByHost(thread, isOwner, hostLogin)).length;
   if (botThreads > 0) reasons.push(`${botThreads} unresolved bot thread(s)`);
   // A thread the repository owner opened is the follow-up role's to answer
   // (threadsForRole), not left waiting on a person forever: without this, a
   // settled PR whose only open thread is the owner's never needs a pass, so
   // nothing ever answers it (#81's follow-up review).
-  const ownerThreads = pr.threads.filter(
-    (thread) => !thread.resolved && !thread.byBot && isOwner(thread.author) === true && !answeredByHost(thread, isOwner, hostLogin),
+  const ownerThreads = open.filter(
+    (thread) => !thread.byBot && !unjudgeable(thread, isOwner, hostLogin) && !answeredByHost(thread, isOwner, hostLogin),
   ).length;
   if (ownerThreads > 0) reasons.push(`${ownerThreads} unresolved owner thread(s)`);
   if (reasons.length > 0) return { action: "needs-pass", reasons };
+  if (unreadable > 0) return { action: "wait", reason: `${unreadable} thread(s) have more comments than one read holds` };
 
   // A completed check with no time can't say when CI finished, so it leaves
   // ciDoneAt NaN and the PR is never re-requested on a guess.
@@ -527,11 +544,13 @@ export function sweepPullRequests(
       if (decision.action === "update-branch" || decision.action === "request-review") {
         // A hand-off PR on an issue's branch is claimed by a build of that
         // issue too, so both are read.
+        // The branch's number may be a PR's (fix/65-...), which gh issue view
+        // refuses, so both are read through the REST labels endpoint.
         const branchIssue = issueNumberOf(pr.headRefName);
         const claimLabels =
           subject.kind === "issue"
             ? github.issueLabels(subject.issueNumber)
-            : [...github.pullRequestLabels(pr.number), ...(branchIssue === undefined ? [] : github.issueLabels(branchIssue))];
+            : [...github.pullRequestLabels(pr.number), ...(branchIssue === undefined ? [] : github.pullRequestLabels(branchIssue))];
         if (hasLabel({ labels: claimLabels }, BUILDING_LABEL)) {
           const claimed = subject.kind === "issue" ? "its issue" : "it or its branch's issue";
           log(`  · PR #${pr.number} isn't swept: ${claimed} became labelled ${BUILDING_LABEL} since the sweep began, so another run is working on it.`);

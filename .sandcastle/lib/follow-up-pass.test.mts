@@ -2201,6 +2201,17 @@ describe("runPass on a hand-off PR", () => {
     assert.deepEqual(calls.unmarkBuilding, [9, PR_NUMBER]);
   });
 
+  it("claims the PR once when its branch names the PR's own number", async () => {
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    const outcome = await runPass(handOffTarget({ headRefName: `fix/${PR_NUMBER}-address-review` }), brief, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(calls.markBuilding, [PR_NUMBER]);
+    assert.deepEqual(calls.unmarkBuilding, [PR_NUMBER]);
+  });
+
   it("skips and releases the PR's claim when a build already claimed the branch's issue", async () => {
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
     passHost.markBuilding = (number) => {

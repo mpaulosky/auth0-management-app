@@ -811,7 +811,7 @@ export async function runPass(
   // that too, or the two runs never see each other.
   const claims = [claim];
   const branchIssue = brief.kind === "pull-request" ? issueNumberOf(target.headRefName) : undefined;
-  if (branchIssue !== undefined) claims.push(branchIssue);
+  if (branchIssue !== undefined && branchIssue !== claim) claims.push(branchIssue);
   const held: number[] = [];
   const release = () => {
     for (const number of held.reverse()) {

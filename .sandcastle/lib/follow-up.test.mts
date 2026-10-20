@@ -455,6 +455,26 @@ describe("decide's host-answered bot threads", () => {
     assert.equal(result.action, "needs-pass");
   });
 
+  it("waits rather than counting a thread strangers pushed the host's reply out of", () => {
+    const strangers = Array.from({ length: 10 }, () => ({ author: "stranger", body: "me too" }));
+    const thread = { ...botThread(...strangers), recentTruncated: true as const };
+
+    const result = decide(pr({ mergeStateStatus: "BEHIND", threads: [thread] }), NOW, () => false, HOST);
+
+    assert.equal(result.action, "wait");
+  });
+
+  it("counts a truncated thread whose window still holds the bot's own newest comment", () => {
+    const thread = {
+      ...botThread({ author: "copilot-pull-request-reviewer", body: "Still wrong.", byBot: true }),
+      recentTruncated: true as const,
+    };
+
+    const result = decide(pr({ mergeStateStatus: "BEHIND", threads: [thread] }), NOW, () => false, HOST);
+
+    assert.equal(result.action, "needs-pass");
+  });
+
   it("counts a thread where a stranger quotes the marker", () => {
     const result = decide(
       pr({ mergeStateStatus: "BEHIND", threads: [botThread({ author: "stranger", body: answered.body })] }),
@@ -2477,8 +2497,9 @@ describe("sweepPullRequests' hand-offs", () => {
       run(github);
 
       assert.equal(updatedBranches.length, 1);
-      assert.deepEqual(prLabelReads, [101]);
-      assert.deepEqual(labelReads, [9]);
+      // gh issue view refuses a PR's number, and the branch's number may be one.
+      assert.deepEqual(prLabelReads, [101, 9]);
+      assert.deepEqual(labelReads, []);
     });
 
     it("doesn't update a hand-off PR's branch when a build of its branch's issue claimed the issue since the sweep began", () => {
@@ -2487,7 +2508,7 @@ describe("sweepPullRequests' hand-offs", () => {
         prs: [handOff({ headRefName: "feature/9-other-thing", mergeStateStatus: "BEHIND" })],
         isOwner: isOwnerOrStranger,
         pullRequestEvents: () => [ownerAdd],
-        labelsNow: { 9: [BUILDING_LABEL] },
+        prLabelsNow: { 9: [BUILDING_LABEL] },
       });
 
       run(github, undefined, lines);
