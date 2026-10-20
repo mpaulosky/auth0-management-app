@@ -16,8 +16,9 @@ namespace UI.Components.Features.Users;
 /// </summary>
 public static class UserSearchQueryBuilder
 {
-	// Lucene's special characters. && and || are escaped one character at a time, which Lucene reads the same way.
-	private const string SpecialCharacters = "+-&|!(){}[]^\"~*?:\\/";
+	// Lucene's special characters, plus = which Elasticsearch's query_string reads as reserved. && and || are escaped one
+	// character at a time, which Lucene reads the same way.
+	private const string SpecialCharacters = "+-&|!(){}[]^\"~*?:\\/=";
 
 	/// <summary>
 	///   Builds the query for the text in the search box.
@@ -26,10 +27,12 @@ public static class UserSearchQueryBuilder
 	/// <returns>The Lucene query, or <see langword="null" /> when the box is empty and every User should list.</returns>
 	public static string? Build(string? input)
 	{
+		// < and > can't be escaped in Elasticsearch, and unescaped they open a range query instead of a prefix match, so
+		// they separate words like whitespace does.
 		// Auth0's normalized fields match regardless of case, but Lucene engines often skip normalizing a prefix term, so
 		// name:Jane* can miss where name:jane* matches. Lower case is what Auth0 compares against, not a round-trip key.
 #pragma warning disable CA1308
-		string text = input?.Trim().ToLowerInvariant() ?? string.Empty;
+		string text = input?.Replace('<', ' ').Replace('>', ' ').Trim().ToLowerInvariant() ?? string.Empty;
 #pragma warning restore CA1308
 		if (text.Length == 0)
 		{

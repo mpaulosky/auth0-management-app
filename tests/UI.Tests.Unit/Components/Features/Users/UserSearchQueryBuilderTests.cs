@@ -88,6 +88,7 @@ public class UserSearchQueryBuilderTests
 	[InlineData("a:b", @"a\:b")]
 	[InlineData(@"a\b", @"a\\b")]
 	[InlineData("a/b", @"a\/b")]
+	[InlineData("a=b", @"a\=b")]
 	public void Build_LuceneSpecialCharacter_IsEscapedWithBackslash(string input, string term)
 	{
 		// Arrange
@@ -97,6 +98,37 @@ public class UserSearchQueryBuilderTests
 
 		// Assert
 		query.Should().Be($"email:{term}* OR name:{term}* OR given_name:{term}* OR family_name:{term}*");
+	}
+
+	[Theory]
+	[InlineData(">a", "a")]
+	[InlineData("<a", "a")]
+	[InlineData("a>b", @"a\ b")]
+	[InlineData("a < b", @"a\ b")]
+	[InlineData("<>a<>", "a")]
+	public void Build_AngleBracket_SeparatesWordsInsteadOfOpeningARange(string input, string term)
+	{
+		// Arrange
+
+		// Act
+		string? query = UserSearchQueryBuilder.Build(input);
+
+		// Assert
+		query.Should().Be($"email:{term}* OR name:{term}* OR given_name:{term}* OR family_name:{term}*");
+	}
+
+	[Theory]
+	[InlineData("<")]
+	[InlineData(" > < ")]
+	public void Build_OnlyAngleBrackets_GivesNoQuery(string input)
+	{
+		// Arrange
+
+		// Act
+		string? query = UserSearchQueryBuilder.Build(input);
+
+		// Assert
+		query.Should().BeNull();
 	}
 
 	[Fact]
