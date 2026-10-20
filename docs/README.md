@@ -74,6 +74,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.23](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.23) | 2026-10-20 | chore(scripts): Skip Sandcastle's own comments in watch-pr.sh | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-72-chore-scripts-skip-sandcastle-s-own-comments-in-watch-pr-sh.md) |
 | [v0.0.22](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.22) | 2026-10-20 | feat(Roles): List the Roles and the Users who hold them | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-69-feat-roles-list-the-roles-and-the-users-who-hold-them.md) |
 | [v0.0.21](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.21) | 2026-10-20 | feat(sandcastle): Follow up on hand-opened PRs labelled for it | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-70-feat-sandcastle-follow-up-on-hand-opened-prs-labelled-for-it.md) |
 | [v0.0.20](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.20) | 2026-10-20 | feat(Users): List and search the Tenant's Users | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-59-feat-users-list-and-search-the-tenant-s-users.md) |
@@ -83,7 +84,6 @@ Blue, the default, renders no attribute.
 | [v0.0.16](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.16) | 2026-10-20 | feat(sandcastle): Label every Sandcastle PR that never had review:claude | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-55-feat-sandcastle-label-every-sandcastle-pr-that-never-had-review-claude.md) |
 | [v0.0.15](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.15) | 2026-10-19 | chore(scripts): Watch every hand-opened PR until it merges | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-54-chore-scripts-watch-every-hand-opened-pr-until-it-merges.md) |
 | [v0.0.14](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.14) | 2026-10-19 | ci(sandcastle): Start a follow-up pass when Claude Review completes | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-46-ci-sandcastle-start-a-follow-up-pass-when-claude-review-completes.md) |
-| [v0.0.13](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.13) | 2026-10-19 | feat(sandcastle): Label each PR Sandcastle opens review:claude | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-45-feat-sandcastle-label-each-pr-sandcastle-opens-review-claude.md) |
 
 <!-- RELEASES_END -->
 

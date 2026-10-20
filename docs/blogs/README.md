@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-10-20 | [chore(scripts): Skip Sandcastle's own comments in watch-pr.sh](2026-10-20-pr-72-chore-scripts-skip-sandcastle-s-own-comments-in-watch-pr-sh.md) | release,automation |
 | 2026-10-20 | [feat(Roles): List the Roles and the Users who hold them](2026-10-20-pr-69-feat-roles-list-the-roles-and-the-users-who-hold-them.md) | release,automation |
 | 2026-10-20 | [feat(sandcastle): Follow up on hand-opened PRs labelled for it](2026-10-20-pr-70-feat-sandcastle-follow-up-on-hand-opened-prs-labelled-for-it.md) | release,automation |
 | 2026-10-20 | [feat(Users): List and search the Tenant's Users](2026-10-20-pr-59-feat-users-list-and-search-the-tenant-s-users.md) | release,automation |
