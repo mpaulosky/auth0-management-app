@@ -21,6 +21,7 @@ import {
   queueScopeFrom,
   runModeFrom,
 } from "./config.mts";
+import * as config from "./config.mts";
 
 const opus = "claude-opus-5-5";
 const sonnet = "claude-sonnet-5-5";
@@ -205,6 +206,34 @@ describe("SANDCASTLE_WORKFLOW", () => {
     const workflow = readFileSync(new URL("../../.github/workflows/sandcastle.yml", import.meta.url), "utf8");
 
     assert.match(workflow, new RegExp(`^name: ${SANDCASTLE_WORKFLOW}$`, "m"));
+  });
+});
+
+// scripts/watch-pr.sh skips a comment that opens with SANDCASTLE_MARKER, a jq
+// regex, so the owner's watching session isn't woken by Sandcastle's own
+// comments posted with the owner's token: every marker here must match it.
+describe("scripts/watch-pr.sh's SANDCASTLE_MARKER", () => {
+  const script = readFileSync(new URL("../../scripts/watch-pr.sh", import.meta.url), "utf8");
+  const pattern = /^readonly SANDCASTLE_MARKER='([^']+)'$/m.exec(script)?.[1];
+  const markers = Object.entries(config).flatMap(([name, value]: [string, unknown]) =>
+    typeof value === "string" && value.startsWith("<!-- sandcastle:") ? [[name, value] as const] : [],
+  );
+
+  it("is anchored at the start of a comment", () => {
+    assert.ok(pattern?.startsWith("^"), `SANDCASTLE_MARKER in scripts/watch-pr.sh is ${pattern}`);
+  });
+
+  it("matches every sandcastle: marker in config.mts at the start of a comment", () => {
+    assert.ok(markers.length > 0);
+    for (const [name, marker] of markers) {
+      assert.match(`${marker}\nSandcastle's comment`, new RegExp(pattern!), name);
+    }
+  });
+
+  it("doesn't match a comment that only quotes a marker", () => {
+    for (const [name, marker] of markers) {
+      assert.doesNotMatch(`The \`${name} = "${marker}"\` constant is never used.`, new RegExp(pattern!), name);
+    }
   });
 });
 
