@@ -9,7 +9,7 @@
 // here writes to GitHub.
 // ---------------------------------------------------------------------------
 
-import { FOLLOW_UP_LABEL, FOLLOW_UP_MARKER, FOLLOW_UP_PASS_CAP, REVIEW_LABEL, type QueueScope } from "./config.mts";
+import { FOLLOW_UP_LABEL, FOLLOW_UP_MARKER, FOLLOW_UP_PASS_CAP, PR_MARKER, REVIEW_LABEL, type QueueScope } from "./config.mts";
 import {
   admitToSweep,
   answeredByHost,
@@ -97,8 +97,15 @@ export type PullRequestStatus =
 // many other open PRs into main there are, and the workflow's unfinished
 // runs, or why they couldn't be read.
 export type StatusReport = {
+  // The login every PR was judged against: whoever is signed in to gh here.
+  // The Actions sweep judges against its own login, so the two can differ.
+  host: string;
   pullRequests: PullRequestStatus[];
   othersOpen: number;
+  // Open PRs that carry PR_MARKER but weren't opened by `host`, so they aren't
+  // listed. If gh here isn't signed in as the account the Actions sweep
+  // publishes with, these are its PRs; the status is partial when any.
+  foreignMarked: { number: number; author: string | null }[];
   // Issues left out of the in-scope set for want of an owner check, so a PR on
   // one may be listed as an ordinary skip; the status is partial when any.
   uncheckedIssues: string[];
@@ -190,8 +197,12 @@ export function buildStatus(github: StatusGitHub, now: number): StatusReport {
     .filter((pr) => isSandcastlePullRequest(pr, context.host) || hasLabel(pr, FOLLOW_UP_LABEL))
     .sort((a, b) => a.number - b.number);
   return {
+    host: context.host,
     pullRequests: listed.map((pr) => pullRequestStatus(pr, context, github, now)),
     othersOpen: open.length - listed.length,
+    foreignMarked: open
+      .filter((pr) => !listed.includes(pr) && pr.body.includes(PR_MARKER) && pr.author !== context.host)
+      .map((pr) => ({ number: pr.number, author: pr.author })),
     uncheckedIssues,
     runs: workflowRunsStatus(github),
   };
@@ -244,7 +255,7 @@ function messageOf(error: unknown): string {
 // The report as text: the workflow's runs first, then one block per PR, then
 // the count of other open PRs.
 export function renderStatus(report: StatusReport): string {
-  const lines = ["Sandcastle workflow"];
+  const lines = [`Judged against the host login ${report.host}, the account signed in to gh here.`, "", "Sandcastle workflow"];
   if ("error" in report.runs) {
     lines.push(`  Couldn't read the Sandcastle workflow's runs: ${report.runs.error}`);
   } else {
@@ -258,6 +269,14 @@ export function renderStatus(report: StatusReport): string {
   for (const status of report.pullRequests) lines.push("", ...pullRequestLines(status));
   if (report.uncheckedIssues.length > 0) {
     lines.push("", "Issues whose owner check couldn't answer, so this status is partial:", ...report.uncheckedIssues.map((line) => `  ${line.trim()}`));
+  }
+  if (report.foreignMarked.length > 0) {
+    lines.push(
+      "",
+      `Open PRs that carry the Sandcastle PR marker but weren't opened by ${report.host}, so they aren't listed above.`,
+      "If the Actions sweep publishes as another login, run this signed in as that account; this status is partial:",
+      ...report.foreignMarked.map((foreign) => `  PR #${foreign.number}, opened by ${foreign.author ?? "a deleted account"}`),
+    );
   }
   lines.push("", `${report.othersOpen} other open PRs into main aren't Sandcastle's.`);
   return lines.join("\n");
@@ -354,7 +373,7 @@ export function statusCommand(
     return 1;
   }
   out(renderStatus(report));
-  const partial = report.pullRequests.some((status) => "error" in status || ownerCheckFailed(status)) || "error" in report.runs || report.uncheckedIssues.length > 0;
+  const partial = report.pullRequests.some((status) => "error" in status || ownerCheckFailed(status)) || "error" in report.runs || report.uncheckedIssues.length > 0 || report.foreignMarked.length > 0;
   return partial ? 1 : 0;
 }
 

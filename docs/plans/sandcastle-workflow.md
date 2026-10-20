@@ -204,6 +204,8 @@ A hand-off PR that closes without merging is never handed back: there's no issue
 Each entry gives the PR's title and issue, its follow-up passes used as `N of 3` (counted as the pass counts them), the reason the sweep would give, and whether the next pass hands it back.
 It also gives the unresolved threads split into bot, owner and other people's, the merge state, the checks, and whether it carries `sandcastle:needs-human` or `review:claude`.
 Above the PRs it lists the Sandcastle workflow's run in progress and its queued run.
+It judges every PR against the login `gh` is signed in as, and prints that login; the Actions sweep uses its own, so run it as the account the sweep publishes with.
+An open PR that carries the Sandcastle PR marker from another author makes the status partial (exit 1), as does an owner check that couldn't answer, including one on a reply after the host's answer on a thread.
 The reason comes from the sweep's own `sweepSkipReason`, `admitToSweep` and `decide`, so the status can't disagree with the sweep.
 The command is read-only: it posts nothing, changes no label, pushes nothing and starts no sandbox, and needs only an authenticated `gh`.
 

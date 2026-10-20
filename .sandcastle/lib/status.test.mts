@@ -437,6 +437,37 @@ describe("buildStatus' list of Sandcastle PRs", () => {
     assert.equal(report.othersOpen, 2);
   });
 
+  it("reports the login it judged against, and PRs with the marker from another author, when gh is signed in as someone else", () => {
+    // Arrange
+    const { github } = stub({ prs: [pr(), pr({ number: 106, author: "other-bot" }), unlabelledHandOff({ number: 107 })] });
+    const out: string[] = [];
+
+    // Act
+    const code = statusCommand({ ...github, hostLogin: () => "collaborator" }, NOW, (text) => void out.push(text));
+
+    // Assert
+    const text = out.join("\n");
+    assert.equal(code, 1);
+    assert.ok(text.includes("Judged against the host login collaborator"), text);
+    assert.ok(text.includes("PR #101, opened by sandcastle-bot"), text);
+    assert.ok(text.includes("PR #106, opened by other-bot"), text);
+    assert.ok(!text.includes("PR #107, opened by"), text);
+    assert.ok(text.includes("this status is partial"), text);
+  });
+
+  it("names the host login and exits 0 when no marked PR is by another author", () => {
+    // Arrange
+    const { github } = stub({ prs: [pr(), unlabelledHandOff({ number: 107 })] });
+    const out: string[] = [];
+
+    // Act
+    const code = statusCommand(github, NOW, (text) => void out.push(text));
+
+    // Assert
+    assert.equal(code, 0);
+    assert.ok(out.join("\n").includes(`Judged against the host login ${HOST}`), out.join("\n"));
+  });
+
   it("lists a Sandcastle PR the sweep skips, with the skip reason", () => {
     const labelled = pr({ labels: ["sandcastle:needs-human"] });
 
