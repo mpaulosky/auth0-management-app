@@ -103,8 +103,15 @@ public sealed class SearchUsersHandler
 
 		UserPage users = search.Value!;
 
+		// The list is persisted into the prerendered HTML and kept for the circuit, so it carries only the Admins on this
+		// page, not the whole cached member set.
+		ImmutableHashSet<string> pageAdminIds = users.Users
+			.Select(user => user.Id)
+			.Where(adminIds.Value!.Ids.Contains)
+			.ToImmutableHashSet(StringComparer.Ordinal);
+
 		return Result.Ok(new UserListPage(users.Users, users.Total, page, pageCount, users.Total > UserPaging.SearchCap,
-			adminIds.Value!.Ids, adminIds.Value.Truncated));
+			pageAdminIds, adminIds.Value!.Truncated));
 	}
 
 	private Task<Result<UserPage>> SearchAsync(string? luceneQuery, int page, CancellationToken cancellationToken) =>

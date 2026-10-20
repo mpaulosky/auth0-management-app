@@ -130,6 +130,16 @@
 		await SearchAsync(_appliedQuery, State.Page, notify: false);
 	}
 
+	// JS interop can't run during the prerender, so a page the handler clamped is written back to the URL once the pane is
+	// interactive. State follows too, so a Try again doesn't ask for the page that overshot.
+	protected override async Task OnAfterRenderAsync(bool firstRender)
+	{
+		if (firstRender && _list is not null && _list.Page != State.Page)
+		{
+			await OnStateChanged.InvokeAsync(CurrentState());
+		}
+	}
+
 	private Task PersistListAsync()
 	{
 		if (_list is not null)
@@ -145,6 +155,14 @@
 		_text = e.Value?.ToString() ?? string.Empty;
 
 		CancelDebounce();
+
+		// Typing a letter and deleting it again leaves the applied search as it was, so it keeps the Admin on their page.
+		// Enter still searches again. After a failed search nothing is applied, so the same text is worth another try.
+		if (_list is not null && _error is null && string.Equals(_text.Trim(), _appliedQuery?.Trim() ?? string.Empty, StringComparison.Ordinal))
+		{
+			return;
+		}
+
 		CancellationTokenSource source = new();
 		_debounce = source;
 		_ = SearchAfterDelayAsync(_text, source.Token);

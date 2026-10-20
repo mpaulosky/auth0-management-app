@@ -254,6 +254,25 @@ public class SearchUsersHandlerTests
 	}
 
 	[Fact]
+	public async Task HandleAsync_AdminsBeyondThePage_KeepsOnlyTheAdminsOnThePage()
+	{
+		// Arrange
+		UserSummary[] users = UsersOf(3);
+		_api.SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Ok(new UserPage(users, 3))));
+		_api.ListRolesAsync(Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Ok<IReadOnlyList<RoleSummary>>([new RoleSummary("role-admin", "Admin", null)])));
+		_api.ListRoleMembersAsync("role-admin", Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Ok(new RoleMembers([users[1], new UserSummary("auth0|elsewhere", null, null, null, null)], false))));
+
+		// Act
+		Result<UserListPage> result = await _sut.HandleAsync(new SearchUsersQuery(null, 1), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Value!.AdminIds.Should().BeEquivalentTo(users[1].Id);
+	}
+
+	[Fact]
 	public async Task HandleAsync_ManyUsers_NeverMakesAPerUserRequest()
 	{
 		// Arrange

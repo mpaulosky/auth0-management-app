@@ -406,6 +406,24 @@ public class UsersPageTests : BunitContext
 	}
 
 	[Fact]
+	public void Render_PageBeyondTheLastPage_WritesTheLastReachablePageBackToTheUrl()
+	{
+		// Arrange
+		Open("?q=jane&page=9");
+		_api.SearchUsersAsync(Arg.Is<UserSearch>(search => search.Page == 9), Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Ok(new UserPage([], 60))));
+		_api.SearchUsersAsync(Arg.Is<UserSearch>(search => search.Page == 3), Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Ok(new UserPage(People(10), 60))));
+
+		// Act
+		RenderPage();
+
+		// Assert
+		WrittenQuery()["page"].ToString().Should().Be("3");
+		WrittenQuery()["q"].ToString().Should().Be("jane");
+	}
+
+	[Fact]
 	public void Type_ThenWaitsLessThanFourHundredMilliseconds_DoesNotSearchYet()
 	{
 		// Arrange
@@ -454,6 +472,27 @@ public class UsersPageTests : BunitContext
 		// Assert
 		cut.WaitForAssertion(() => SearchesSent().Should().ContainSingle()
 			.Which.Query.Should().Be(UserSearchQueryBuilder.Build("jane")));
+	}
+
+	[Fact]
+	public void Type_ThenDeletesItAgainBeforeTheDebounceEnds_DoesNotSearchAgain()
+	{
+		// Arrange
+		Open("?q=jane&page=5");
+		ReturnPage(People(25), 200);
+		IRenderedComponent<UsersPage> cut = RenderPage();
+		_api.ClearReceivedCalls();
+
+		// Act
+		cut.Find(SearchBox).Input("janex");
+		cut.Find(SearchBox).Input("jane");
+		_time.Advance(TimeSpan.FromMilliseconds(400));
+
+		// Assert
+		// Enter searches at once, so the one search it sent shows the debounce had sent none before it.
+		cut.Find(SearchBox).KeyDown(new KeyboardEventArgs { Key = "Enter" });
+		cut.WaitForAssertion(() => SearchesSent().Should().NotBeEmpty());
+		SearchesSent().Should().ContainSingle();
 	}
 
 	[Fact]
