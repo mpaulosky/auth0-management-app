@@ -407,7 +407,7 @@ Triggers:
 - `issues: labeled` where the label is exactly `Sandcastle`;
 - `issues` / `pull_request_target: unlabeled` where the label is exactly `sandcastle:needs-info` or `sandcastle:needs-human`. A PR's label events come from
   `pull_request_target`, not `pull_request`, because GitHub starts no `pull_request` run on a PR with merge conflicts; the job checks out `main` either way. A PR's
-  removal counts only for a same-repo PR, since `pull_request_target` gives a fork's PR the secrets too;
+  label event counts only for a same-repo PR into `main`: `pull_request_target` gives a fork's PR the secrets too, and runs the workflow file from the PR's base branch;
 - `pull_request_review` submitted by Copilot, and `workflow_run` completed for `Build and Test Suite` or `Claude Review` (the `name:` of `ci.yml` and of
   `claude-review.yml`, since `workflow_run` matches workflow names, not file names), only for same-repo `feature/*` / `fix/*` / `hotfix/*` heads, so a fork never runs with
   secrets. Claude Review is followed by its completion because it posts with `GITHUB_TOKEN`, whose review starts no `pull_request_review` run, so without it a Claude review
@@ -431,15 +431,17 @@ pending slot and can't displace a real pending run. One run going and at most on
 
 **Follow-up runs** ([#53](https://github.com/mpaulosky/auth0-management-app/issues/53)): with the repository variable `SANDCASTLE_FOLLOW_UP_JOB` set to `true`, a run started
 by `pull_request_review`, `workflow_run` or `pull_request_target` (the follow-up label, or a hand-back removal on a PR, which re-queues it for the sweep) takes the
-group `sandcastle-follow-up` instead, and the run step sets `SANDCASTLE_MODE=follow-up`. The host
-then only sweeps and runs follow-up passes, so a PR's review or CI result is answered beside a running build rather than after it. The two expressions share one condition, so a
-follow-up-group run always has the mode set. Until the host supports the mode, the variable stays unset, and every run takes `sandcastle` as before.
+group `sandcastle-follow-up` instead, and the run step sets `SANDCASTLE_MODE=follow-up`. The host then only sweeps and runs follow-up passes, so a PR's review or CI
+result is answered beside a running build rather than after it. A small first job, **Choose the run mode**, carries the event filter and decides the mode once; the Sandcastle
+job's concurrency group and `SANDCASTLE_MODE` both read its output. Computing them separately could disagree: the group is evaluated when the job is queued and a step's `env`
+when it starts, maybe hours later, and the variable can change in between. Until the host supports the mode, the variable stays unset, and every run takes `sandcastle` as
+before.
 
 With the variable set, a full run and a follow-up run can be going at once, and a full run still sweeps at the start of each round. Before the variable is set, the host must
 keep the two off the same PR. For example, a full run skips its sweep while follow-up runs are on, or each PR is locked while a run works on it. Otherwise both can push to
 the same branch, and both count follow-up passes, so the pass limit runs out twice as fast.
 
-**The run's own check:** a run started by a PR event (`pull_request_review`, `pull_request_target`) reports the job as a `Sandcastle` check on that PR's head. It runs while the
+**The run's own check:** a run started by a PR event (`pull_request_review`, `pull_request_target`) reports the `Sandcastle` job as a check on that PR's head (and **Choose the run mode**, which finishes before it starts). It runs while the
 run does, and Fail on hand-backs turns it red when the run hands back anything, even an unrelated issue. The host must leave that check out when it reads a PR's checks.
 Otherwise the sweep waits on its own running check, or flags a red one no pass can fix.
 
