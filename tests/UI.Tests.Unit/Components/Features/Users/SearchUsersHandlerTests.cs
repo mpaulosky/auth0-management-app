@@ -9,6 +9,8 @@
 
 using Domain.Abstractions;
 
+using Microsoft.Extensions.Time.Testing;
+
 using UI.Components.Features.Users;
 using UI.ManagementApi;
 
@@ -17,11 +19,12 @@ namespace UI.Tests.Unit.Components.Features.Users;
 public class SearchUsersHandlerTests
 {
 	private readonly IManagementApi _api = Substitute.For<IManagementApi>();
+	private readonly FakeTimeProvider _time = new();
 	private readonly SearchUsersHandler _sut;
 
 	public SearchUsersHandlerTests()
 	{
-		_sut = new SearchUsersHandler(_api, new SearchUsersQueryValidator());
+		_sut = new SearchUsersHandler(_api, new SearchUsersQueryValidator(), _time);
 		_api.SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>())
 			.Returns(Task.FromResult(Result.Ok(new UserPage(UsersOf(1), 1))));
 		_api.ListRolesAsync(Arg.Any<CancellationToken>())
@@ -352,6 +355,75 @@ public class SearchUsersHandlerTests
 		result.Failure.Should().BeTrue();
 		result.Details.Should().Be("ManagementApi.RateLimited");
 		await _api.DidNotReceive().ListRolesAsync(Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public async Task HandleAsync_SearchedTwiceWithinAMinute_LooksUpTheAdminIdsOnce()
+	{
+		// Arrange
+		UserSummary[] users = UsersOf(3);
+		_api.ListRoleMembersAsync("role-admin", Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Ok(new RoleMembers([users[0]], false))));
+		await _sut.HandleAsync(new SearchUsersQuery("jane", 1), Xunit.TestContext.Current.CancellationToken);
+		_time.Advance(TimeSpan.FromSeconds(59));
+
+		// Act
+		Result<UserListPage> result = await _sut.HandleAsync(new SearchUsersQuery("john", 1), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Value!.AdminIds.Should().BeEquivalentTo(users[0].Id);
+		await _api.Received(1).ListRolesAsync(Arg.Any<CancellationToken>());
+		await _api.Received(1).ListRoleMembersAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+		await _api.Received(2).SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public async Task HandleAsync_SearchedAfterAMinute_LooksUpTheAdminIdsAgain()
+	{
+		// Arrange
+		await _sut.HandleAsync(new SearchUsersQuery("jane", 1), Xunit.TestContext.Current.CancellationToken);
+		_time.Advance(TimeSpan.FromSeconds(61));
+
+		// Act
+		await _sut.HandleAsync(new SearchUsersQuery("jane", 1), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		await _api.Received(2).ListRolesAsync(Arg.Any<CancellationToken>());
+		await _api.Received(2).ListRoleMembersAsync("role-admin", Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public async Task HandleAsync_AdminLookupFailed_IsNotCachedAndTheNextSearchTriesAgain()
+	{
+		// Arrange
+		_api.ListRolesAsync(Arg.Any<CancellationToken>()).Returns(
+			Task.FromResult(Result.Fail<IReadOnlyList<RoleSummary>>("Try again in 3 seconds.", ResultErrorCode.RateLimited, "ManagementApi.RateLimited")),
+			Task.FromResult(Result.Ok<IReadOnlyList<RoleSummary>>([new RoleSummary("role-admin", "Admin", null)])));
+		await _sut.HandleAsync(new SearchUsersQuery(null, 1), Xunit.TestContext.Current.CancellationToken);
+
+		// Act
+		Result<UserListPage> result = await _sut.HandleAsync(new SearchUsersQuery(null, 1), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Success.Should().BeTrue();
+		await _api.Received(2).ListRolesAsync(Arg.Any<CancellationToken>());
+	}
+
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public async Task HandleAsync_AdminMembersTruncated_ReportsTheBadgesAsIncomplete(bool truncated)
+	{
+		// Arrange
+		_api.ListRoleMembersAsync("role-admin", Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Ok(new RoleMembers(UsersOf(2), truncated))));
+
+		// Act
+		Result<UserListPage> result = await _sut.HandleAsync(new SearchUsersQuery(null, 1), Xunit.TestContext.Current.CancellationToken);
+
+		// Assert
+		result.Success.Should().BeTrue();
+		result.Value!.AdminBadgesIncomplete.Should().Be(truncated);
 	}
 
 	private static UserSummary[] UsersOf(int count) =>

@@ -43,6 +43,7 @@ public class UsersPageTests : BunitContext
 	private readonly IManagementApi _api = Substitute.For<IManagementApi>();
 	private readonly FakeTimeProvider _time = new();
 	private readonly BunitJSModuleInterop _module;
+	private readonly BunitPersistentComponentState _persisted;
 
 	public UsersPageTests()
 	{
@@ -50,6 +51,7 @@ public class UsersPageTests : BunitContext
 		Services.AddSingleton<TimeProvider>(_time);
 		Services.AddSingleton<IValidator<SearchUsersQuery>, SearchUsersQueryValidator>();
 		Services.AddSingleton<SearchUsersHandler>();
+		_persisted = AddBunitPersistentComponentState();
 		_module = JSInterop.SetupModule(ModulePath);
 		_module.Mode = JSRuntimeMode.Loose;
 
@@ -140,6 +142,84 @@ public class UsersPageTests : BunitContext
 		_api.Received(1).ListRoleMembersAsync("role-admin", Arg.Any<CancellationToken>());
 		_api.DidNotReceiveWithAnyArgs().UserHoldsRoleAsync(default!, default!, Arg.Any<CancellationToken>());
 		_api.DidNotReceiveWithAnyArgs().GetUserAsync(default!, Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public void Render_AfterThePrerenderPersistedTheList_StartsFromItWithoutSearchingAgain()
+	{
+		// Arrange
+		UserSummary[] people = People(3);
+		ReturnPage(people, 3);
+		_api.ListRoleMembersAsync("role-admin", Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Ok(new RoleMembers([people[1]], false))));
+		IRenderedComponent<UsersPage> prerendered = RenderPage();
+		_persisted.TriggerOnPersisting();
+		prerendered.Dispose();
+		_api.ClearReceivedCalls();
+
+		// Act
+		IRenderedComponent<UsersPage> cut = RenderPage();
+
+		// Assert
+		IReadOnlyList<IElement> rows = Rows(cut);
+		rows.Should().HaveCount(3);
+		rows[1].TextContent.Should().Contain("Admin");
+		_api.DidNotReceiveWithAnyArgs().SearchUsersAsync(default!, Arg.Any<CancellationToken>());
+		_api.DidNotReceiveWithAnyArgs().ListRolesAsync(Arg.Any<CancellationToken>());
+		_api.DidNotReceiveWithAnyArgs().ListRoleMembersAsync(default!, Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public void Render_PrerenderThenCircuitStart_SearchesOncePerPageLoad()
+	{
+		// Arrange
+		IRenderedComponent<UsersPage> prerendered = RenderPage();
+		_persisted.TriggerOnPersisting();
+		prerendered.Dispose();
+
+		// Act
+		RenderPage();
+
+		// Assert
+		_api.Received(1).SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public void Render_NothingPersisted_Searches()
+	{
+		// Arrange
+
+		// Act
+		RenderPage();
+
+		// Assert
+		_api.Received(1).SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public void Render_AdminMembersTruncated_NotesThatTheAdminBadgesMayBeIncomplete()
+	{
+		// Arrange
+		_api.ListRoleMembersAsync("role-admin", Arg.Any<CancellationToken>())
+			.Returns(Task.FromResult(Result.Ok(new RoleMembers([], true))));
+
+		// Act
+		IRenderedComponent<UsersPage> cut = RenderPage();
+
+		// Assert
+		TextOf(cut).Should().Contain("Admin badges may be incomplete");
+	}
+
+	[Fact]
+	public void Render_AdminMembersComplete_ShowsNoIncompleteBadgesNote()
+	{
+		// Arrange
+
+		// Act
+		IRenderedComponent<UsersPage> cut = RenderPage();
+
+		// Assert
+		TextOf(cut).Should().NotContain("Admin badges may be incomplete");
 	}
 
 	[Fact]

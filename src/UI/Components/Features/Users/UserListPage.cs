@@ -7,6 +7,8 @@
 // Project Name :  UI
 // =============================================
 
+using System.Collections.Immutable;
+
 using UI.ManagementApi;
 
 namespace UI.Components.Features.Users;
@@ -19,11 +21,13 @@ namespace UI.Components.Features.Users;
 /// <param name="Page">The page shown, after clamping to the reachable pages.</param>
 /// <param name="PageCount">The reachable page count.</param>
 /// <param name="ShowsCapNote">Whether the total is over the 1000 Users Auth0 will search.</param>
-/// <param name="AdminIds">The ids of the Users who hold <c>Admin</c>.</param>
+/// <param name="AdminIds">The ids of the Users who hold <c>Admin</c>. A concrete set, so the page survives the prerender's JSON round trip.</param>
+/// <param name="AdminBadgesIncomplete">Whether <c>Admin</c> has more members than were fetched, so a User past them shows no badge.</param>
 public sealed record UserListPage(
 	IReadOnlyList<UserSummary> Users,
 	int Total,
 	int Page,
 	int PageCount,
 	bool ShowsCapNote,
-	IReadOnlySet<string> AdminIds);
+	ImmutableHashSet<string> AdminIds,
+	bool AdminBadgesIncomplete = false);

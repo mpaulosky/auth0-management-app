@@ -5,6 +5,7 @@
 @using UI.ManagementApi
 @inject SearchUsersHandler Handler
 @inject TimeProvider Time
+@inject PersistentComponentState PersistedState
 
 <section aria-label="Users" class="grid gap-4">
 	<div>
@@ -30,6 +31,11 @@
 		@if (_list.ShowsCapNote)
 		{
 			<p class="text-sm text-amber-700 dark:text-amber-300">Auth0 shows only the first 1,000 of @Format(_list.Total) matches. Narrow the search.</p>
+		}
+
+		@if (_list.AdminBadgesIncomplete)
+		{
+			<p class="text-sm text-amber-700 dark:text-amber-300">The Admin badges may be incomplete: Admin has more members than the app lists.</p>
 		}
 
 		@if (_list.Users.Count == 0)
@@ -70,7 +76,11 @@
 </section>
 
 @code {
+	private const string ListKey = "users-list";
+
 	private static readonly TimeSpan SearchDelay = TimeSpan.FromMilliseconds(400);
+
+	private PersistingComponentStateSubscription _persisting;
 
 	private CancellationTokenSource? _debounce;
 
@@ -107,7 +117,27 @@
 		_text = State.Query ?? string.Empty;
 		_userId = State.UserId;
 
+		// The static prerender already searched, and the circuit starts from the same URL, so it takes that page instead of
+		// repeating the search and its Management API calls.
+		_persisting = PersistedState.RegisterOnPersisting(PersistListAsync);
+		if (PersistedState.TryTakeFromJson(ListKey, out UserListPage? restored) && restored is not null)
+		{
+			_list = restored;
+
+			return;
+		}
+
 		await SearchAsync(_appliedQuery, State.Page, notify: false);
+	}
+
+	private Task PersistListAsync()
+	{
+		if (_list is not null)
+		{
+			PersistedState.PersistAsJson(ListKey, _list);
+		}
+
+		return Task.CompletedTask;
 	}
 
 	private void OnInput(ChangeEventArgs e)
@@ -146,7 +176,10 @@
 		try
 		{
 			await Task.Delay(SearchDelay, Time, token);
-			await InvokeAsync(() => SearchAsync(text, 1, notify: true));
+
+			// Enter can cancel this wait after the delay has finished and before the dispatcher runs the search, so the
+			// token is checked again where the search starts.
+			await InvokeAsync(() => token.IsCancellationRequested ? Task.CompletedTask : SearchAsync(text, 1, notify: true));
 		}
 		catch (OperationCanceledException) when (token.IsCancellationRequested)
 		{
@@ -238,6 +271,7 @@
 
 	public void Dispose()
 	{
+		_persisting.Dispose();
 		CancelDebounce();
 		_search?.Cancel();
 		_search?.Dispose();
