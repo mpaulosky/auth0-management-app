@@ -99,14 +99,19 @@ SANDCASTLE_LABEL=<label> pnpm run sandcastle          # work the issues labelled
 ```
 
 `scripts/gate.sh` is the definition of "ready to push": lint of the changed YAML, Markdown, workflows and shell
-scripts, then this repo's own checks in `.github/ci/gate-checks.sh` (the Copilot review sync check and the Sandcastle
-check, each when its files changed), then a Release build and each test project under `tests/`, run one by one.
+scripts, then this repo's own checks in `.github/ci/gate-checks.sh` (the Copilot review sync check, the test of
+`scripts/check-git-hooks.sh` and the Sandcastle check, each when its files changed), then a Release build and each test project under `tests/`, run one by one.
 `scripts/gate.sh` is an Owned file of the CI Baseline (see `.claude/rules/baseline.md`), overwritten on every Apply,
 so a new repo-only check goes in `gate-checks.sh`. Don't use `dotnet test --solution` as the check: under Microsoft
 Testing Platform it can report zero tests while the project runs pass. The pre-push hook runs the gate after its own branch
 checks (no pushes to `main`, `preview` or `dev`, the branch names in `docs/PROCESS.md`, and a clean tree at the pushed
 commit). Sandcastle doesn't go through the hook: it pushes the commit its sandbox gated from the main checkout, with git
 hooks off.
+
+The hooks run only in a clone with `git config core.hooksPath .github/hooks` set; without it a push skips the gate
+silently. Claude Code's `SessionStart` hook (`scripts/check-git-hooks.sh`, registered in `.claude/settings.json`) warns
+at the start of a session when it isn't set. Don't report the pre-push gate as passed unless you saw the hook's
+"All gates passed" line, or ran `scripts/gate.sh` by hand and it passed.
 
 Push from a checkout of the branch being pushed, with nothing uncommitted or untracked in it: the hook gates the
 checked-out commit, so it refuses `git push origin <other-branch>` from the `main` checkout. Push from the branch's
