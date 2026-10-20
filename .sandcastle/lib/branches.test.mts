@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { branchFor, discardClosedWork, fetchMain, isIssueBranch, parseHeads, prepareBranches, slugFor, type BranchRefs } from "./branches.mts";
+import { branchFor, discardClosedWork, fetchMain, isHandOffBranch, isIssueBranch, parseHeads, prepareBranches, slugFor, type BranchRefs } from "./branches.mts";
 
 // The branch standard, from the script the pre-push hook and CI's Branch name check share.
 const checkBranchName = fileURLToPath(new URL("../../scripts/check-branch-name.sh", import.meta.url));
@@ -86,6 +86,50 @@ describe("isIssueBranch", () => {
     ]) {
       assert.ok(!isIssueBranch(branch, 4), branch);
       assert.ok(!passesBranchStandard(branch), branch);
+    }
+  });
+});
+
+// #58: the branches the sweep follows a hand-off PR from are the ones
+// scripts/check-branch-name.sh accepts without --pr.
+describe("isHandOffBranch", () => {
+  for (const branch of ["chore/tidy-docs", "chore/a", "chore/bump-2-deps", "feature/9-add-search", "fix/12-stop-the-crash", "hotfix/3-patch"]) {
+    it(`accepts ${branch}`, () => {
+      assert.equal(isHandOffBranch(branch), true);
+    });
+  }
+
+  // A chore slug starts with a letter, so it can't pass for an issue number.
+  // dev, preview and dependabot/* are not branches a person hands off, and a
+  // branch name reaches a shell in the sandbox.
+  for (const branch of [
+    "main",
+    "dev",
+    "preview",
+    "dependabot/npm_and_yarn/x",
+    "chore/9-x",
+    "chore/",
+    "chore/Tidy",
+    "chore/a--b",
+    "chore/$(touch-x)",
+    "chore/a;rm",
+    "chore/a b",
+    "feature/tidy",
+    "feature/9-Add",
+    "feature/9-$(x)",
+    "docs/release-notes",
+    "claude/session-1",
+    "",
+  ]) {
+    it(`rejects ${JSON.stringify(branch)}`, () => {
+      assert.equal(isHandOffBranch(branch), false);
+    });
+  }
+
+  it("agrees with scripts/check-branch-name.sh on every name above", () => {
+    const names = ["chore/tidy-docs", "chore/9-x", "chore/$(x)", "feature/9-add-search", "feature/tidy", "dev", "dependabot/npm/x", "hotfix/3-patch"];
+    for (const name of names) {
+      assert.equal(isHandOffBranch(name), passesBranchStandard(name), name);
     }
   });
 });

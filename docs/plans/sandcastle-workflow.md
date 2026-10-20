@@ -34,15 +34,19 @@ so Sandcastle builds its own upgrade.
 | `sandcastle:needs-info` | Host (intake) | The issue's text is the problem: answer the questions and edit the issue. | Human, which re-queues the issue |
 | `sandcastle:needs-human` | Host | Sandcastle tried and couldn't. On an issue: two failed builds, a PR closed without merging, or a push touching `.github/workflows/**`. On a PR: follow-up gave up. | Human, which re-queues the issue or PR |
 | `bug` | Human or host (intake) | The issue is a fix, so its branch is `fix/`. | Human |
+| `sandcastle:follow-up` | The owner, or the session handing a PR off | The follow-up sweep follows up on this hand-opened PR like one of Sandcastle's own (see **Hand-off PRs** in [Phase 1](#phase-1-follow-up-sweep)). | The owner, to take the PR back |
 
 The host creates any missing `sandcastle:*` label at startup, and `review:claude` (colour `8957e5`, "Ask Claude to review this PR") too, through `ensureHostLabels` in
 `lib/github.mts`. `review:claude` isn't in `SANDCASTLE_LABELS`, since that list also decides which labels the queue scope refuses and which ones the follow-up sweep restores.
+Nor is `sandcastle:follow-up` (colour `5319E7`), which `ensureHostLabels` creates too: a person applies it, and the sweep never restores it.
 The wayfinder map and its tickets must never carry `Sandcastle`.
 
 `sandcastle:building` exists because a manual `/implement-spec #71` started on 2026-10-07 while Sandcastle was already building #71, and only the run log showed it (#150).
 `buildIssue` adds it before creating the issue's sandbox and removes it after the sandbox closes, in a `finally`, so a pass, a failure or a thrown error all clear it.
 Two runs can both pass the gate before either adds the label, so `buildIssue` reads the issue's labels again just before adding it, and leaves an issue that already carries it to the
 run that marked it, without creating a sandbox or counting an attempt. Only the run that added the label removes it, and an add that fails is undone at once.
+A follow-up pass claims it the same way, on the PR's issue, or on the PR itself for a hand-off PR, so the claim can sit on a PR. Issues and PRs share one numbering,
+and the host reads, adds and removes it through the REST labels endpoints, which serve both. The startup sweep of stale labels finds a PR's too.
 A removal that fails is tried again at the start of the run's next round, so it doesn't hold the issue back for the rest of the run.
 A run stopped with Ctrl-C or SIGTERM, or one that crashes, removes the labels it still holds as the process exits.
 A run never removes a label it claimed more than 6 hours ago: by then another run may have cleared it as stale and claimed the issue.
@@ -109,6 +113,26 @@ A swept PR that has never carried `review:claude` gets it first (see **Labelling
 A PR whose issue carries `sandcastle:building` is skipped too: another run is passing on it or a build is opening it ([#53](https://github.com/mpaulosky/auth0-management-app/issues/53)).
 A full run removes any `sandcastle:building` label it still holds before its sweep, so it never skips a PR of its own.
 
+**Hand-off PRs** ([#58](https://github.com/mpaulosky/auth0-management-app/issues/58)). A hand-opened PR gets no follow-up from the checks above: it has no marker, often no issue
+branch, and its issue isn't in scope. The owner, or the session handing a PR off, opts it in with `sandcastle:follow-up`. The sweep then treats it like one of Sandcastle's own:
+it re-requests a stale Copilot review, updates a branch that's behind `main`, and runs a pass for a conflict, a red check or an unresolved bot or owner thread.
+
+- **The PR is the subject.** Its pass claims `sandcastle:building` on the PR itself, takes its brief from the PR's title, description and the comments of people with write
+  access, and hands back with `sandcastle:needs-human` on the PR. That holds on a `feature/{n}-…` branch whose issue isn't in scope too, because the owner never approved that
+  issue's text for a prompt. A Sandcastle PR of an in-scope issue keeps its issue as subject, label or not (`sweepSubject` in `lib/follow-up.mts`).
+- **Only the owner's label counts.** The sweep reads the PR's events and body edits through `approval`, as for `Sandcastle` on an issue: the most recent add of the label must
+  be the owner's, and nobody else may have renamed the PR or edited its body since. A stranger's label is logged and nothing is written. An actor the owner check can't answer
+  for ends a follow-up run red. The owner re-approves by removing and re-adding the label. The pass checks approval again after it reads the PR's text.
+- **No author or marker check.** The owner's label is the consent, and a same-repo branch already needs push access.
+- **Only a branch `scripts/check-branch-name.sh` accepts**: `feature|fix|hotfix/{n}-{slug}` or `chore/{slug}`. The branch name reaches a shell in the sandbox, and this keeps
+  the host off `dev`, `preview` and `dependabot/*`.
+- **Only in the default queue scope.** A local `SANDCASTLE_ISSUE` or `SANDCASTLE_LABEL` run never touches hand-off PRs.
+- A hand-off PR is skipped while it carries `sandcastle:building` itself, is a draft, carries `sandcastle:needs-human`, or is truncated. The re-read before an update-branch or
+  a Copilot re-request reads the PR's own labels.
+- A build of the issue a hand-off PR's branch names shares that branch and its worktree, and its claim is on the issue. So a hand-off PR on `feature/{n}-…` is also skipped while
+  #n carries `sandcastle:building`, the re-read before a write reads #n's labels too, and a pass claims #n beside the PR.
+- `isSandcastlePullRequest` stays strict, since `closedWithoutMerging` and `startFromMain` use it to hand an issue back and to delete a closed PR's branch.
+
 **Settled.** A PR gets a pass only when every check run on its head has completed and Copilot has reviewed the head (a Copilot review with `commit.oid == headRefOid`, and Copilot not in
 `reviewRequests`). A red check or an unresolved bot or owner thread gets a pass as soon as the checks have completed,
 without waiting for Copilot, so a Claude review's threads are answered whether or not Copilot ever reviews the head.
@@ -139,9 +163,16 @@ gates and pushes the merge itself.
 **Thread rules.** Follow-up acts on bot threads (Copilot, CodeQL, and Claude Review, which posts as `github-actions[bot]`) and the repository owner's threads,
 but resolves only bot threads. Threads anyone else opens never reach the role; they stay open for the owner, and the job summary lists them.
 The owner resolves their own threads, because that's their sign-off. It may decline a
-bot thread without a change only because the suggestion contradicts the issue's acceptance criteria or `CODING_STANDARDS.md`, is factually wrong (the reply cites the code), or is out of
-the issue's scope. Outdated threads whose concern the current code handles are resolved `ADDRESSED`. When it disagrees with an owner thread, it replies with its reasoning and leaves the
-thread open.
+bot thread without a change only because the suggestion contradicts the brief's acceptance criteria or `CODING_STANDARDS.md`, is factually wrong (the reply cites the code), or is out of
+the brief's scope. The brief is the issue, or a hand-off PR's own text. Outdated threads whose concern the current code handles are resolved `ADDRESSED`. When it disagrees with an
+owner thread, it replies with its reasoning and leaves the thread open.
+
+On a hand-off PR, [#54](https://github.com/mpaulosky/auth0-management-app/issues/54)'s decline rule applies: a pass resolves a thread only when Copilot or Claude Review opened
+it and the verdict is `fixed`. A declined or outdated thread gets a reply and stays open for the owner, as owner threads always do.
+A reply by the host's login carrying `<!-- claude-session -->`, the marker `CLAUDE.md` has a session end its comments with, counts as the host's own reply, so the first pass
+after a hand-off doesn't answer again the threads the session already declined.
+The sweep's `decide` ignores a bot thread whose newest comment is such a reply, so a thread left open for the owner doesn't hold the PR at "needs a pass" and keep the sweep from
+updating its branch or re-asking Copilot.
 
 **Red CI.** The gate decides, run on the commit `pull_request` CI actually built. That's the bare head, unless the PR is behind main with a settled red check: `pull_request`
 checkout merges the head with main by default, so gating the bare head there would judge a commit CI never built. A merge GitHub already says is clean (the PR isn't conflicted)
@@ -166,6 +197,7 @@ count as giving up: the human who opened them is already involved, and the job s
 **Closed PRs.** If a PR closes without merging while its issue is open, the host adds `sandcastle:needs-human` to the issue with the comment "PR #x was closed without merging; remove the
 label to rebuild". The next build of that issue starts fresh from `main`: the host deletes the old remote branch before `createSandbox()`.
 Only a full run hands back an issue this way, so a full run and a follow-up run can't both post the comment.
+A hand-off PR that closes without merging is never handed back: there's no issue to re-queue, and the owner closed it.
 
 ## Phase 2: Intake
 
@@ -423,7 +455,8 @@ Triggers:
 - `workflow_dispatch`, and `schedule` every 2 hours as a backstop for blockers cleared by merges and PRs that fall behind `main` (`push: main` deliberately isn't a trigger);
 - with the repository variable `SANDCASTLE_FOLLOW_UP_LABEL` set to `true` ([#58](https://github.com/mpaulosky/auth0-management-app/issues/58)): `pull_request_target: labeled` where the owner
   adds exactly `sandcastle:follow-up` to a same-repo PR, and the review and `workflow_run` triggers above for `chore/*` heads too, so the host can follow up on hand-opened
-  PRs labelled for it. Until the host supports that label, the variable stays unset and these events end as skipped jobs.
+  PRs labelled for it. The host supports the label (see **Hand-off PRs** in [Phase 1](#phase-1-follow-up-sweep)), so the owner can set `SANDCASTLE_FOLLOW_UP_LABEL`.
+  Until then these events end as skipped jobs. The host still decides from the label itself, so a run a `chore/*` PR without it starts sweeps nothing on that PR.
 
 Event triggers can't filter by label name, so every `labeled` / `unlabeled` event starts the workflow. The job's `if:` checks `github.event.label.name` against the
 exact names above (and the fork and branch conditions), so labels the host applies (`sandcastle:ready`, `bug`) end as a skipped job and never start Sandcastle. For label
@@ -447,10 +480,11 @@ when it starts, maybe hours later, and the variable can change in between. The h
 (`runModeFrom` in `lib/config.mts`).
 
 With the variable set, a full run and a follow-up run can be going at once, and a full run still sweeps at the start of each round, as the backstop for a follow-up event
-that was dropped or a pass that failed. `sandcastle:building` keeps the two off the same PR. A pass claims it on the PR's issue before it touches the branch and reads the PR
-again after the claim, a build claims it on its issue, and the sweep skips a PR whose issue carries it. So neither run updates the branch of, re-asks Copilot on, passes on
-or pushes to a PR the other is working on, and they can't both count a pass. A follow-up run also leaves closed-PR hand-backs (see **Closed PRs**) to full runs.
-The sweep reads `sandcastle:building` once, before its per-PR reads, and reads the issue's labels again right before an update-branch or a Copilot re-request, so a
+that was dropped or a pass that failed. `sandcastle:building` keeps the two off the same PR. A pass claims it on the PR's issue, or on a hand-off PR itself,
+before it touches the branch and reads the PR again after the claim, a build claims it on its issue, and the sweep skips a PR whose claim is held.
+So neither run updates the branch of, re-asks Copilot on, passes on or pushes to a PR the other is working on, and they can't both count a pass.
+A follow-up run also leaves closed-PR hand-backs (see **Closed PRs**) to full runs.
+The sweep reads `sandcastle:building` once, before its per-PR reads, and reads the claim's labels again right before an update-branch or a Copilot re-request, so a
 claim made meanwhile stops the write. A follow-up run ends red when the sweep couldn't follow up a PR, including one whose owner check couldn't finish, since it has no next
 round. Three gaps remain:
 

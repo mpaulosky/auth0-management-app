@@ -140,6 +140,9 @@ function githubStub(overrides: Partial<FollowUpGitHub> = {}) {
     isOwner: () => true,
     pullRequestEvents: () => [],
     addPullRequestLabel: () => {},
+    followsHandOffs: () => false,
+    pullRequestLabels: () => [],
+    pullRequestBodyEdits: () => [],
     ...overrides,
   };
   return { github, closedCalls, handBacks };

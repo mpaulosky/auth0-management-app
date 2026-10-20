@@ -322,6 +322,25 @@ export const REVIEW_LABEL_DEFINITION: SandcastleLabel = {
   description: "Ask Claude to review this PR",
 };
 
+// Added by the owner (or the session handing a PR off) to a same-repo PR into
+// main, so the follow-up sweep treats it like one of Sandcastle's own (#58).
+export const FOLLOW_UP_LABEL = "sandcastle:follow-up";
+
+// FOLLOW_UP_LABEL as the host creates it at startup when the repository lacks
+// it (lib/github.mts#ensureHostLabels). Kept out of SANDCASTLE_LABELS, since
+// a human applies it and the sweep never restores it. GitHub caps a label
+// description at 100 characters.
+export const FOLLOW_UP_LABEL_DEFINITION: SandcastleLabel = {
+  name: FOLLOW_UP_LABEL,
+  color: "5319E7",
+  description: "Sandcastle follows up on this hand-opened PR: its threads, red checks and catching up with main.",
+};
+
+// The marker CLAUDE.md has a session end each comment with, which
+// scripts/watch-pr.sh reads too: a reply carrying it was the owner's session,
+// not the owner (#58).
+export const SESSION_REPLY_MARKER = "<!-- claude-session -->";
+
 // The login requestReviewsByLogin takes for Copilot's code review
 // (lib/follow-up.mts#sweepPullRequests).
 export const COPILOT_REVIEWER = "copilot-pull-request-reviewer[bot]";

@@ -127,9 +127,9 @@ the PRs it opens itself, and its follow-up sweep adds it to any open Sandcastle 
 one whose run stopped between creating it and labelling it. A run that couldn't add the label ends red: add it by hand to
 each PR the run report lists under **Pull requests without `review:claude`**.
 
-Watch every PR you open until it merges: Sandcastle's follow-up sweep acts only on the PRs Sandcastle opened itself, so
-nothing else answers a hand-opened PR's review threads or fixes its red checks, and PR Auto-Merge holds it on every
-unresolved thread. Run `scripts/watch-pr.sh <n>` in the background after opening the PR and after every push. It
+Watch every PR you open until it merges: Sandcastle's follow-up sweep acts only on the PRs Sandcastle opened itself and
+the ones handed off to it (below), so nothing else answers a hand-opened PR's review threads or fixes its red checks,
+and PR Auto-Merge holds it on every unresolved thread. Run `scripts/watch-pr.sh <n>` in the background after opening the PR and after every push. It
 exits with the reason it woke you: the PR closed, it conflicts with or is behind `main`, a check failed, a review thread
 or other feedback is waiting on you, or nothing changed for 30 minutes. Act on it, then run it again:
 
@@ -143,3 +143,10 @@ or other feedback is waiting on you, or nothing changed for 30 minutes. Act on i
 
 Stop when the PR has merged or closed, when only threads waiting on a person or a check you can't fix remain, or when it
 has sat 30 minutes with nothing to act on, and tell the owner which.
+
+To hand a PR off when you stop watching it (the session is ending, the laptop is closing), add the
+`sandcastle:follow-up` label to it. Once it's on, stop running `scripts/watch-pr.sh` and push nothing more to the
+branch, so two writers never push to one branch. Sandcastle then answers its bot and owner threads, fixes red checks and
+catches the branch up with `main`, resolving only the Claude Review and Copilot threads it fixed and leaving declined
+and people's threads open for the owner. Only the owner's label counts, and an edit to the PR's title or body by anyone
+else after it stops the follow-up until the owner removes and re-adds it. To take the PR back, remove the label.

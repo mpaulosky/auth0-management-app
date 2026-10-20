@@ -6,8 +6,8 @@
 // runs beside a build, in its own concurrency group, so a review or a CI
 // result is answered within minutes rather than after the build. The two runs
 // stay off each other's PRs through sandcastle:building: a pass claims it on
-// the PR's issue, and the sweep skips a PR whose issue carries it
-// (lib/follow-up.mts#sweepSkipReason).
+// the PR's issue, or on a hand-off PR itself (#58), and the sweep skips a PR
+// whose claim is held (lib/follow-up.mts#sweepSkipReason).
 // ---------------------------------------------------------------------------
 
 import { fetchMain } from "./branches.mts";
