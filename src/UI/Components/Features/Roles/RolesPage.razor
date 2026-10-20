@@ -4,8 +4,10 @@
 
 @using Domain.Constants
 @using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Routing
 @using Microsoft.AspNetCore.WebUtilities
 @using Microsoft.Extensions.Primitives
+@implements IDisposable
 @inject NavigationManager Navigation
 
 <PageTitle>Roles</PageTitle>
@@ -22,7 +24,7 @@
 
 <div class="mt-6">
 	<ManagementApiErrorBoundary>
-		<RolesContent RoleId="@_roleId" />
+		<RolesContent RoleId="@_roleId" Visit="@_visit" />
 	</ManagementApiErrorBoundary>
 </div>
 
@@ -36,7 +38,36 @@
 
 	private string? _roleId;
 
+	private int _visit;
+
+	protected override void OnInitialized()
+	{
+		Navigation.LocationChanged += OnLocationChanged;
+	}
+
 	protected override void OnParametersSet()
+	{
+		ReadRoleId();
+	}
+
+	// A tile pick writes the address with history.replaceState, which raises no event; a link to this page, such as the
+	// current tab, does, and must reset the selection even though the address's role is the same as the page last read.
+	private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+	{
+		_ = InvokeAsync(() =>
+		{
+			ReadRoleId();
+			_visit++;
+			StateHasChanged();
+		});
+	}
+
+	public void Dispose()
+	{
+		Navigation.LocationChanged -= OnLocationChanged;
+	}
+
+	private void ReadRoleId()
 	{
 		Dictionary<string, StringValues> query = QueryHelpers.ParseQuery(new Uri(Navigation.Uri).Query);
 		string? roleId = query.TryGetValue("role", out StringValues values) ? values.ToString() : null;

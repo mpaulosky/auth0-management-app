@@ -108,8 +108,6 @@ else
 
 	private string? _selectedRoleId;
 
-	private string? _parameterRoleId;
-
 	private bool _loadedOnce;
 
 	private bool _writeUrl;
@@ -122,19 +120,27 @@ else
 	[Parameter]
 	public string? RoleId { get; set; }
 
+	/// <summary>
+	///   Changes each time the page's address changes, so a link to this same page resets the selection even when the
+	///   URL's <c>role</c> is still empty.
+	/// </summary>
+	[Parameter]
+	public int Visit { get; set; }
+
 	private string SelectedRoleName =>
 		_overview?.Tiles.FirstOrDefault(tile => tile.Role.Id == _overview.SelectedRoleId)?.Role.Name ?? string.Empty;
 
 	protected override async Task OnParametersSetAsync()
 	{
-		// A new ?role= from the URL (a navigation) reloads; a tile pick has already set the selection itself.
-		if (_loadedOnce && RoleId == _parameterRoleId)
+		// A navigation whose ?role= differs from the selection reloads; a tile pick has already set the selection
+		// itself, so the address it wrote matches. Comparing with the selection, not the last URL value, lets a link
+		// to /admin/roles clear a pick.
+		if (_loadedOnce && RoleId == _selectedRoleId)
 		{
 			return;
 		}
 
 		_loadedOnce = true;
-		_parameterRoleId = RoleId;
 		_selectedRoleId = RoleId;
 		await LoadAsync();
 	}
@@ -165,7 +171,10 @@ else
 		RolesOverview? filtered = _overview?.Select(_selectedRoleId);
 		if (filtered is not null)
 		{
+			// A load still running was for an earlier selection: let this pick have the last word.
+			_loadNumber++;
 			_overview = filtered;
+			_failure = null;
 			return;
 		}
 

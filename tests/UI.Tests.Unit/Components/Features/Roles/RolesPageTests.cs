@@ -291,6 +291,47 @@ public class RolesPageTests : BunitContext
 	}
 
 	[Fact]
+	public void Click_TileWhileAnEarlierLoadIsStillRunning_TheEarlierLoadDoesNotOverwriteIt()
+	{
+		// Arrange
+		IRenderedComponent<RolesPage> cut = RenderPage($"?role={EditorRole.Id}");
+		TaskCompletionSource<Result<UserPage>> search = new();
+		_api.SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>()).Returns(search.Task);
+		TileOf(cut, "Editor").Click();
+
+		// Act
+		TileOf(cut, "Admin").Click();
+		cut.WaitForAssertion(() => TileOf(cut, "Admin").GetAttribute("aria-pressed").Should().Be("true"));
+		search.SetResult(Page(Jane, Bob, Cy));
+
+		// Assert
+		cut.WaitForAssertion(() =>
+		{
+			TileOf(cut, "Admin").GetAttribute("aria-pressed").Should().Be("true");
+			cut.FindAll("tbody tr").Should().ContainSingle();
+		});
+	}
+
+	[Fact]
+	public void Click_RolesTabAfterPickingATile_ClearsThePick()
+	{
+		// Arrange
+		IRenderedComponent<RolesPage> cut = RenderPage();
+		TileOf(cut, "Editor").Click();
+		cut.WaitForAssertion(() => cut.FindAll("tbody tr").Should().HaveCount(2));
+
+		// Act
+		Services.GetRequiredService<NavigationManager>().NavigateTo("/admin/roles");
+
+		// Assert
+		cut.WaitForAssertion(() =>
+		{
+			cut.FindAll("button[aria-pressed='true']").Should().BeEmpty();
+			cut.FindAll("tbody tr").Should().HaveCount(3);
+		});
+	}
+
+	[Fact]
 	public void Click_ShowAllRolesAfterAPickedRoleFailsToLoad_BringsTheTableBack()
 	{
 		// Arrange
