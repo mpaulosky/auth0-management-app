@@ -158,8 +158,11 @@
 
 		// Typing a letter and deleting it again leaves the applied search as it was, so it keeps the Admin on their page.
 		// Enter still searches again. After a failed search nothing is applied, so the same text is worth another try.
+		// A search the debounce already started is cancelled too, or it would apply the text the Admin just deleted.
 		if (_list is not null && _error is null && string.Equals(_text.Trim(), _appliedQuery?.Trim() ?? string.Empty, StringComparison.Ordinal))
 		{
+			_search?.Cancel();
+
 			return;
 		}
 

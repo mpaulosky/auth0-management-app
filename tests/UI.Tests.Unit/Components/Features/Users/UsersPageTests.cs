@@ -496,6 +496,35 @@ public class UsersPageTests : BunitContext
 	}
 
 	[Fact]
+	public void Type_ThenDeletesItAgainWhileTheSearchIsInFlight_CancelsItAndKeepsTheAppliedList()
+	{
+		// Arrange
+		Open("?q=jane");
+		ReturnPage(People(1), 1);
+		IRenderedComponent<UsersPage> cut = RenderPage();
+		List<CancellationToken> tokens = [];
+		TaskCompletionSource<Result<UserPage>> inFlight = new();
+		_api.SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>()).Returns(call =>
+		{
+			tokens.Add(call.Arg<CancellationToken>());
+
+			return inFlight.Task;
+		});
+		cut.Find(SearchBox).Input("janex");
+		_time.Advance(TimeSpan.FromMilliseconds(400));
+		cut.WaitForAssertion(() => tokens.Should().HaveCount(1));
+
+		// Act
+		cut.Find(SearchBox).Input("jane");
+		inFlight.SetResult(Result.Ok(new UserPage([new UserSummary("auth0|old", "Stale Result", "stale@example.com", null, null)], 1)));
+
+		// Assert
+		tokens[0].IsCancellationRequested.Should().BeTrue();
+		cut.WaitForAssertion(() => TextOf(cut).Should().NotContain("Stale Result"));
+		cut.Find(SearchBox).GetAttribute("value").Should().Be("jane");
+	}
+
+	[Fact]
 	public void PressEnter_AfterTyping_SearchesAtOnceWithoutWaitingForTheDebounce()
 	{
 		// Arrange
