@@ -9,7 +9,7 @@
 // here writes to GitHub.
 // ---------------------------------------------------------------------------
 
-import { FOLLOW_UP_LABEL, FOLLOW_UP_MARKER, FOLLOW_UP_PASS_CAP, REVIEW_LABEL } from "./config.mts";
+import { FOLLOW_UP_LABEL, FOLLOW_UP_MARKER, FOLLOW_UP_PASS_CAP, REVIEW_LABEL, type QueueScope } from "./config.mts";
 import {
   admitToSweep,
   answeredByHost,
@@ -41,6 +41,10 @@ export type StatusGitHub = Pick<
 > & {
   passComments(pr: number): CommentReads;
   workflowRuns(): WorkflowRun[];
+  // The lines loadQueue gave for the issues it left out because an owner check
+  // couldn't answer, as of the last inScopeIssues read. Such an issue looks
+  // like an ordinary skip to the sweep's checks, so the status says so itself.
+  uncheckedIssues(): string[];
 };
 
 // A PR's unresolved review threads, by who opened them: a bot, the repository
@@ -91,6 +95,9 @@ export type PullRequestStatus =
 export type StatusReport = {
   pullRequests: PullRequestStatus[];
   othersOpen: number;
+  // Issues left out of the in-scope set for want of an owner check, so a PR on
+  // one may be listed as an ordinary skip; the status is partial when any.
+  uncheckedIssues: string[];
   runs: { running: WorkflowRun[]; queued: WorkflowRun[] } | { error: string };
 };
 
@@ -159,6 +166,7 @@ export function heldReason(
 // entry's error, and the runs' becomes the report's.
 export function buildStatus(github: StatusGitHub, now: number): StatusReport {
   const context = sweepContext(github);
+  const uncheckedIssues = github.uncheckedIssues();
   const open = github.openPullRequests();
   const listed = open
     .filter((pr) => isSandcastlePullRequest(pr, context.host) || hasLabel(pr, FOLLOW_UP_LABEL))
@@ -166,6 +174,7 @@ export function buildStatus(github: StatusGitHub, now: number): StatusReport {
   return {
     pullRequests: listed.map((pr) => pullRequestStatus(pr, context, github, now)),
     othersOpen: open.length - listed.length,
+    uncheckedIssues,
     runs: workflowRunsStatus(github),
   };
 }
@@ -229,6 +238,9 @@ export function renderStatus(report: StatusReport): string {
   }
   if (report.pullRequests.length === 0) lines.push("", "No open Sandcastle PR into main.");
   for (const status of report.pullRequests) lines.push("", ...pullRequestLines(status));
+  if (report.uncheckedIssues.length > 0) {
+    lines.push("", "Issues whose owner check couldn't answer, so this status is partial:", ...report.uncheckedIssues.map((line) => `  ${line.trim()}`));
+  }
   lines.push("", `${report.othersOpen} other open PRs into main aren't Sandcastle's.`);
   return lines.join("\n");
 }
@@ -322,7 +334,7 @@ export function statusCommand(
     return 1;
   }
   out(renderStatus(report));
-  const partial = report.pullRequests.some((status) => "error" in status || ownerCheckFailed(status)) || "error" in report.runs;
+  const partial = report.pullRequests.some((status) => "error" in status || ownerCheckFailed(status)) || "error" in report.runs || report.uncheckedIssues.length > 0;
   return partial ? 1 : 0;
 }
 
@@ -334,15 +346,35 @@ export function withoutLabelWrites(github: QueueGitHub): QueueGitHub {
   return { ...github, removeLabel: () => {}, addLabel: () => {} };
 }
 
-// The live StatusGitHub: the sweep's own reads, except the in-scope issues.
-// The sweep reads those through loadQueue, which writes its label fixes, so
-// the status runs it with those writes removed, and drops its log,
-// whose lines would claim writes that never happened.
+// The issues the sweep would see in scope, read through loadQueue with its
+// label writes removed, plus its skip lines for the issues it couldn't check
+// (see uncheckedIssues). Its other lines are dropped: the `↺` ones would claim
+// writes that never happened. A fresh `logged` set keeps loadQueue's
+// once-per-run dedupe from hiding a line.
+export function readInScopeIssues(
+  github: QueueGitHub,
+  scope: QueueScope = activeQueueScope(),
+): { issues: { number: number; labels: string[] }[]; unchecked: string[] } {
+  const unchecked: string[] = [];
+  const kept = loadQueue(scope, withoutLabelWrites(github), (line) => {
+    if (line.includes("couldn't check")) unchecked.push(line);
+  }, new Set());
+  return { issues: kept.map(({ number, labels }) => ({ number, labels })), unchecked };
+}
+
+// The live StatusGitHub: the sweep's own reads, except the in-scope issues
+// (see readInScopeIssues). inScopeIssues keeps the lines it couldn't check
+// for uncheckedIssues, which buildStatus reads right after it.
+let unchecked: string[] = [];
 export const liveStatusGitHub: StatusGitHub = {
   hostLogin: () => liveFollowUpGitHub.hostLogin(),
   openPullRequests: () => liveFollowUpGitHub.openPullRequests(),
-  inScopeIssues: () =>
-    loadQueue(activeQueueScope(), withoutLabelWrites(liveQueueGitHub()), () => {}).map(({ number, labels }) => ({ number, labels })),
+  inScopeIssues: () => {
+    const read = readInScopeIssues(liveQueueGitHub());
+    unchecked = read.unchecked;
+    return read.issues;
+  },
+  uncheckedIssues: () => unchecked,
   isOwner: (login) => liveFollowUpGitHub.isOwner(login),
   pullRequestEvents: (number) => liveFollowUpGitHub.pullRequestEvents(number),
   pullRequestBodyEdits: (number) => liveFollowUpGitHub.pullRequestBodyEdits(number),

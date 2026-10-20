@@ -903,15 +903,24 @@ describe("sandcastleWorkflowRuns", () => {
   it("throws when an answer isn't an array, rather than report no runs", () => {
     const { calls, run } = recordingGh([JSON.stringify({ message: "rate limited" })]);
 
-    assert.throws(() => sandcastleWorkflowRuns(run, "o/r"), /^(?!.*Not implemented)/s);
-    assert.equal(calls.length > 0, true);
+    assert.throws(() => sandcastleWorkflowRuns(run, "o/r"), /something other than a list of runs/);
+    assert.equal(calls.length, 1);
   });
 
   it("throws when a run in the answer lacks its id", () => {
     const { calls, run } = recordingGh([JSON.stringify([{ status: "queued", event: "issues" }])]);
 
-    assert.throws(() => sandcastleWorkflowRuns(run, "o/r"), /^(?!.*Not implemented)/s);
-    assert.equal(calls.length > 0, true);
+    assert.throws(() => sandcastleWorkflowRuns(run, "o/r"), /gh run list gave a run without an id/);
+    assert.equal(calls.length, 1);
+  });
+
+  it("throws when a run has an id but lacks a text field", () => {
+    const { calls, run } = recordingGh([
+      JSON.stringify([{ databaseId: 7, status: "queued", event: "issues", displayTitle: "T", headBranch: "main", createdAt: "2026-10-20T11:40:00Z" }]),
+    ]);
+
+    assert.throws(() => sandcastleWorkflowRuns(run, "o/r"), /gh run list gave a run without a url/);
+    assert.equal(calls.length, 1);
   });
 });
 

@@ -22,6 +22,7 @@ import {
   renderStatus,
   statusCommand,
   threadCounts,
+  readInScopeIssues,
   withoutLabelWrites,
   type PullRequestStatus,
   type StatusGitHub,
@@ -122,6 +123,7 @@ function stub({
   failEvents = [],
   failRuns = false,
   failOpen = false,
+  unchecked = [],
 }: {
   prs?: SweepPullRequest[];
   issues?: { number: number; labels: string[] }[];
@@ -134,6 +136,7 @@ function stub({
   failEvents?: number[];
   failRuns?: boolean;
   failOpen?: boolean;
+  unchecked?: string[];
 } = {}) {
   const record = { calls: [] as string[] };
   stubs.push(record);
@@ -170,6 +173,7 @@ function stub({
       if (failPassComments.includes(number)) throw new Error("gh api failed: HTTP 500");
       return comments[number] ?? reads();
     },
+    uncheckedIssues: () => unchecked,
     workflowRuns: () => {
       record.calls.push("workflowRuns");
       if (failRuns) throw new Error("gh run list failed: HTTP 502");
@@ -826,6 +830,18 @@ describe("statusCommand", () => {
     assert.equal(statusCommand(github, NOW, () => {}), 1);
   });
 
+  it("exits 1 and names the issue when a queue owner check couldn't answer", () => {
+    const line = "  ⊘ #42 is skipped: couldn't check whether @ghost, who added Sandcastle, is the repository owner.";
+    const { github } = stub({ unchecked: [line] });
+    const out: string[] = [];
+
+    const code = statusCommand(github, NOW, (text) => void out.push(text));
+
+    assert.equal(code, 1);
+    assert.ok(out.join("\n").includes("#42 is skipped: couldn't check whether @ghost"), out.join("\n"));
+    assert.ok(out.join("\n").includes("this status is partial"), out.join("\n"));
+  });
+
   it("exits 1 when the runs couldn't be read", () => {
     const { github } = stub({ failRuns: true });
 
@@ -909,6 +925,43 @@ describe("withoutLabelWrites", () => {
   });
 });
 
+describe("readInScopeIssues", () => {
+  const scope = { kind: "label", label: "Sandcastle" } as const;
+  const queue = (isOwnerOfAdder: IsOwner): QueueGitHub => ({
+    issuesInScope: () => [{ number: 42, title: "Unchecked", body: "B", labels: ["Sandcastle"], comments: [] }],
+    events: () => [{ event: "labeled", actor: "ghost", label: "Sandcastle", createdAt: "2026-10-01T00:00:00Z" }],
+    bodyEdits: () => [],
+    isOwner: isOwnerOfAdder,
+    removeLabel: () => {},
+    addLabel: () => {},
+  });
+
+  it("leaves out an issue whose adder couldn't be checked and returns loadQueue's line for it", () => {
+    // Arrange
+    const github = queue(isOwner);
+
+    // Act
+    const read = readInScopeIssues(github, scope);
+
+    // Assert
+    assert.deepEqual(read.issues, []);
+    assert.equal(read.unchecked.length, 1);
+    assert.ok(read.unchecked[0]!.includes("#42 is skipped: couldn't check whether @ghost"));
+  });
+
+  it("returns no unchecked line for an issue loadQueue could check", () => {
+    // Arrange
+    const github = queue((login) => login === "ghost");
+
+    // Act
+    const read = readInScopeIssues(github, scope);
+
+    // Assert
+    assert.deepEqual(read.issues.map((issue) => issue.number), [42]);
+    assert.deepEqual(read.unchecked, []);
+  });
+});
+
 // The status is read-only because it never imports a write. Tests can't see
 // a call the stub doesn't offer, so the source is checked too.
 describe("lib/status.mts' imports", () => {
@@ -945,7 +998,8 @@ describe("lib/status.mts' imports", () => {
   });
 
   it("reads the in-scope issues through loadQueue with its label writes removed, never liveFollowUpGitHub's", () => {
-    assert.match(source, /withoutLabelWrites\(liveQueueGitHub\(\)\)/);
+    assert.match(source, /loadQueue\(scope, withoutLabelWrites\(github\)/);
+    assert.match(source, /readInScopeIssues\(liveQueueGitHub\(\)\)/);
     assert.ok(!source.includes("liveFollowUpGitHub.inScopeIssues"));
   });
 
