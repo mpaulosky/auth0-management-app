@@ -7,12 +7,26 @@ import type { PromptArgs } from "@ai-hero/sandcastle";
 import type { Checkpoint } from "./checkpoint.mts";
 import { BASE_BRANCH } from "./config.mts";
 import type { PromptThread } from "./follow-up-pass.mts";
-import type { SandcastleIssue } from "./github.mts";
+import type { PullRequestText, SandcastleIssue } from "./github.mts";
 
-// Sandcastle sets {{TARGET_BRANCH}} itself (to the sandbox's own branch inside
-// createSandbox) and refuses an override, so the branch to compare against
-// goes in as {{BASE_BRANCH}}.
-export function issuePromptArgs(issue: SandcastleIssue, branch: string) {
+// What a follow-up pass's roles learn about the work: the issue a Sandcastle PR
+// implements, or a hand-off PR's own text when it has no issue of its own (#58).
+export type PassBrief = { kind: "issue"; issue: SandcastleIssue } | { kind: "pull-request"; pr: PullRequestText };
+
+// The arguments every role that works from a brief gets.
+export type BriefPromptArgs = Record<
+  "TASK_ID" | "ISSUE_TITLE" | "ISSUE_BODY" | "ISSUE_COMMENTS" | "BRANCH" | "BASE_BRANCH" | "BRIEF_SOURCE",
+  string
+>;
+
+// The prompt arguments for `brief`. Sandcastle sets {{TARGET_BRANCH}} itself
+// (to the sandbox's own branch inside createSandbox) and refuses an override,
+// so the branch to compare against goes in as {{BASE_BRANCH}}. BRIEF_SOURCE
+// is the sentence that opens the role prompt's brief: it names the issue, or
+// says the PR's title and description are the brief.
+export function briefPromptArgs(brief: PassBrief, branch: string): BriefPromptArgs {
+  if (brief.kind !== "issue") throw new Error("Not implemented");
+  const { issue } = brief;
   return {
     TASK_ID: String(issue.number),
     ISSUE_TITLE: issue.title,
@@ -20,13 +34,18 @@ export function issuePromptArgs(issue: SandcastleIssue, branch: string) {
     ISSUE_COMMENTS: issue.comments.length > 0 ? issue.comments.join("\n\n---\n\n") : "(no comments)",
     BRANCH: branch,
     BASE_BRANCH,
+    BRIEF_SOURCE: "",
   };
 }
 
-// The gate-fixer needs the issue, since at checkpoint 1 it may finish the
+export function issuePromptArgs(issue: SandcastleIssue, branch: string) {
+  return briefPromptArgs({ kind: "issue", issue }, branch);
+}
+
+// The gate-fixer needs the brief, since at checkpoint 1 it may finish the
 // implementation, plus the red gate's output and which checkpoint it's at.
-export function gateFixerPromptArgs(issue: SandcastleIssue, branch: string, checkpoint: Checkpoint, gateOutput: string) {
-  return { ...issuePromptArgs(issue, branch), CHECKPOINT: String(checkpoint), GATE_OUTPUT: gateOutput };
+export function gateFixerPromptArgs(brief: PassBrief, branch: string, checkpoint: Checkpoint, gateOutput: string) {
+  return { ...briefPromptArgs(brief, branch), CHECKPOINT: String(checkpoint), GATE_OUTPUT: gateOutput };
 }
 
 // The follow-up role (lib/follow-up-pass.mts#runPass) needs the issue, the
@@ -40,7 +59,7 @@ export function gateFixerPromptArgs(issue: SandcastleIssue, branch: string, chec
 // such as CodeQL's (#79), as CODEQL_LOG; Sandcastle refuses a placeholder
 // with no value, so a pass with none still sends a sentence saying so.
 export function followUpPromptArgs(
-  issue: SandcastleIssue,
+  brief: PassBrief,
   branch: string,
   pr: number,
   threads: readonly PromptThread[],
@@ -48,7 +67,7 @@ export function followUpPromptArgs(
   ciLog?: string,
 ): PromptArgs {
   return {
-    ...issuePromptArgs(issue, branch),
+    ...briefPromptArgs(brief, branch),
     PR_NUMBER: String(pr),
     THREADS_JSON: JSON.stringify(threads),
     MERGE: merge,

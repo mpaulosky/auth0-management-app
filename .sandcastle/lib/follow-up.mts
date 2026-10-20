@@ -17,9 +17,10 @@
 // ---------------------------------------------------------------------------
 
 import { discardClosedWork, isIssueBranch, type BranchRefs } from "./branches.mts";
-import { BUILDING_LABEL, COPILOT_REREQUEST_AFTER_MS, PR_MARKER, REVIEW_LABEL } from "./config.mts";
+import { BUILDING_LABEL, COPILOT_REREQUEST_AFTER_MS, PR_MARKER, REVIEW_LABEL, type QueueScope } from "./config.mts";
 import {
   addPullRequestLabel,
+  bodyEdits,
   closedPullRequests,
   handBack,
   hasCarriedReviewLabel,
@@ -28,6 +29,7 @@ import {
   isCopilot,
   issueEvents,
   issueLabels,
+  labelsOn,
   labelTimeline,
   openPullRequestsForSweep,
   pushAccess,
@@ -36,11 +38,12 @@ import {
   timestamp,
   updatePullRequestBranch,
   type ClosedPullRequest,
+  type ContentEdit,
   type IssueEvent,
   type PullRequestIdentity,
   type TimelineLabelEvent,
 } from "./github.mts";
-import { labelOriginFixes, loadQueue, ownerCheck, type IsOwner } from "./queue.mts";
+import { activeQueueScope, labelOriginFixes, loadQueue, ownerCheck, type IsOwner } from "./queue.mts";
 import {
   outcomeReport,
   unlabelledPrReport,
@@ -116,6 +119,30 @@ export function isSandcastlePullRequest(pr: PullRequestIdentity, host: string): 
   );
 }
 
+// How the sweep treats a PR it doesn't skip: a Sandcastle PR of an in-scope
+// issue, whose claim and brief are the issue, or a hand-off PR (#58), whose
+// claim and brief are the PR itself.
+export type SweepSubject = { kind: "issue"; issueNumber: number } | { kind: "pull-request" };
+
+// "issue" when isSandcastlePullRequest(pr, host) and its issue is in
+// `inScope`; otherwise "pull-request" when `handOffs`, the PR carries
+// FOLLOW_UP_LABEL and its branch is one isHandOffBranch accepts; otherwise
+// undefined.
+export function sweepSubject(
+  _pr: PullRequestIdentity & { labels: string[] },
+  _inScope: ReadonlySet<number>,
+  _host: string,
+  _handOffs: boolean,
+): SweepSubject | undefined {
+  throw new Error("Not implemented");
+}
+
+// Whether a run in `scope` follows hand-off PRs: only the default Sandcastle
+// label scope, so a local run on one issue or another label never touches them.
+export function followsHandOffs(_scope: QueueScope): boolean {
+  throw new Error("Not implemented");
+}
+
 // The first reason the sweep skips `pr`, checked in this order: a fork, not
 // into main, not an issue branch, the issue isn't open and in scope, the
 // issue is in `building` (labelled sandcastle:building), a draft, labelled
@@ -129,6 +156,7 @@ export function sweepSkipReason(
   inScope: ReadonlySet<number>,
   host: string,
   building: ReadonlySet<number> = new Set(),
+  _handOffs: boolean = false,
 ): string | undefined {
   if (pr.isCrossRepository !== false) return "it's from a fork";
   if (pr.baseRefName !== "main") return `it's into ${pr.baseRefName}, not main`;
@@ -284,6 +312,12 @@ export type FollowUpGitHub = {
   pullRequestEvents(number: number): IssueEvent[];
   // Puts back a PR's hand-back label someone else removed. live: gh pr edit.
   addPullRequestLabel(number: number, label: string): void;
+  // Whether this run follows hand-off PRs (#58). live: followsHandOffs(activeQueueScope()).
+  followsHandOffs(): boolean;
+  // The labels a PR carries now, read fresh just before a write to it. live: labelsOn(number).
+  pullRequestLabels(number: number): string[];
+  // The edits to a PR's body, for the hand-off approval. live: bodyEdits(number, ..., "pullRequest").
+  pullRequestBodyEdits(number: number): ContentEdit[];
 };
 
 export const liveFollowUpGitHub: FollowUpGitHub = {
@@ -299,6 +333,9 @@ export const liveFollowUpGitHub: FollowUpGitHub = {
   isOwner: ownerCheck(() => signedInHostLogin(), (login) => pushAccess(login)),
   pullRequestEvents: (number) => issueEvents(number),
   addPullRequestLabel: (number, label) => addPullRequestLabel(number, label),
+  followsHandOffs: () => followsHandOffs(activeQueueScope()),
+  pullRequestLabels: (number) => labelsOn(number),
+  pullRequestBodyEdits: (number) => bodyEdits(number, undefined, undefined, "pullRequest"),
 };
 
 // What the sweep found that needs an agent: the numbers of the PRs it logged
@@ -485,7 +522,8 @@ export type PassTarget = {
   id: string;
   headRefName: string;
   headRefOid: string;
-  issueNumber: number;
+  // Undefined for a hand-off PR, whose claim and brief are the PR itself (#58).
+  issueNumber: number | undefined;
   reasons: string[];
   // GitHub said the PR conflicts with main (DIRTY), so a pass merges main
   // in. A PR that's only behind isn't merged by a pass: the sweep updates it

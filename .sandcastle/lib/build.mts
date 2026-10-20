@@ -616,7 +616,7 @@ async function buildMarkedIssue(
             "gate-fixer",
             {
               promptFile: "./.sandcastle/roles/gate-fixer.md",
-              promptArgs: gateFixerPromptArgs(issue, branch, at, gateOutput),
+              promptArgs: gateFixerPromptArgs({ kind: "issue", issue }, branch, at, gateOutput),
             },
             host.limits,
           );

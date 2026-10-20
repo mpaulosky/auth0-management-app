@@ -41,6 +41,14 @@ export function isIssueBranch(branch: string, issueNumber: number): boolean {
   return new RegExp(`^(?:${issuePrefixes.join("|")})/${issueNumber}-[a-z0-9]+(?:-[a-z0-9]+)*$`).test(branch);
 }
 
+// Whether a branch is one scripts/check-branch-name.sh accepts without --pr:
+// an issue branch for any issue, or chore/{slug}. The sweep follows up on a
+// hand-off PR (#58) only from such a branch, since a branch name reaches a
+// shell in the sandbox, and it keeps the host off dev, preview and dependabot/*.
+export function isHandOffBranch(_branch: string): boolean {
+  throw new Error("Not implemented");
+}
+
 // The issue's branch: its existing feature/, fix/ or hotfix/{n}-{slug} branch on the
 // remote when there is one, even if the title or labels have changed since, so
 // earlier work is built on rather than redone. Otherwise fix/{n}-{slug} for a

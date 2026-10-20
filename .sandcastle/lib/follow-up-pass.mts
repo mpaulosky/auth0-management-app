@@ -51,13 +51,14 @@ import {
   reviewThreadsOf,
   signedInHostLogin,
   type HeadCheck,
+  type PullRequestText,
   type ReviewThread,
   type SandcastleIssue,
 } from "./github.mts";
 import { repoGitDir, worktreeLinkProblems } from "./host-safety.mts";
 import { plainText, withoutReferences } from "./intake.mts";
 import { runLimits, type RunLimits } from "./limits.mts";
-import { followUpPromptArgs, gateFixerPromptArgs } from "./prompts.mts";
+import { followUpPromptArgs, gateFixerPromptArgs, type PassBrief } from "./prompts.mts";
 import { ownerCheck, type IsOwner } from "./queue.mts";
 import { humanThreadReport, outcomeReport, type HumanThreadEntry, type OutcomeEntry, type OutcomeReport } from "./report.mts";
 import { containsSandboxSecret, sandboxSecrets } from "./sandbox-env.mts";
@@ -214,6 +215,17 @@ export function parseVerdicts(text: string): { verdicts: ThreadVerdict[]; reject
 // INVALID for one declined.
 export type Resolution = "ADDRESSED" | "WONT_FIX" | "INVALID";
 
+// Which bot threads a pass resolves (#58): every one it answered, as for a
+// Sandcastle PR, or only those Copilot or Claude Review opened and the pass
+// fixed, as for a hand-off PR, whose declined threads stay open for the owner.
+export type ResolveRule = "every-bot-thread" | "fixed-review-threads";
+
+// Whether `login` is Copilot's code-review account or Claude Review's
+// github-actions, with or without "[bot]", case-insensitively.
+export function isReviewBot(_login: string | null): boolean {
+  throw new Error("Not implemented");
+}
+
 // One verdict matched to the thread it answers (see threadActions), and how
 // the host resolves it on GitHub: undefined for an owner thread, which the
 // host replies to but never resolves.
@@ -231,6 +243,7 @@ export type ThreadAction = { thread: PromptThread; verdict: ThreadVerdict; resol
 export function threadActions(
   verdicts: readonly ThreadVerdict[],
   given: readonly PromptThread[],
+  _rule: ResolveRule = "every-bot-thread",
 ): { actions: ThreadAction[]; ignored: string[] } {
   const byId = new Map(given.map((thread) => [thread.threadId, thread]));
   const answered = new Set<string>();
@@ -490,6 +503,10 @@ export type PassHost = {
   markBuilding(issue: number): boolean;
   // lib/building.mts#releaseBuildingLabel.
   unmarkBuilding(issue: number): void;
+  // A hand-off PR's own text as the pass's brief (#58): lib/github.mts#pullRequestText,
+  // read before the PR's events and body edits, and only when the owner's
+  // sandcastle:follow-up still approves it. Throws with the reason otherwise.
+  pullRequestBrief(pr: number): PullRequestText;
   createSandbox(branch: string): Promise<sandcastle.Sandbox>;
   // lib/host-safety.mts's worktree-tamper check, as lib/build.mts#BuildHost
   // already exposes it.
@@ -561,6 +578,9 @@ export const livePassHost: PassHost = {
   contains: (commit, ancestor) => originRefs.contains(commit, ancestor),
   markBuilding: (issue) => claimBuildingLabel(issue),
   unmarkBuilding: (issue) => releaseBuildingLabel(issue),
+  pullRequestBrief: () => {
+    throw new Error("Not implemented");
+  },
   createSandbox: (branch) => createCheckedSandbox(branch),
   worktreeProblems: (path) => worktreeLinkProblems(path, repoGitDir()),
   leaksSecret: (base, commit) => firstSecretMatch(base, commit, sandboxSecrets()),
@@ -623,7 +643,7 @@ async function followUpVerdicts(
       "follow-up",
       {
         promptFile: "./.sandcastle/roles/follow-up.md",
-        promptArgs: followUpPromptArgs(issue, target.headRefName, target.number, forRole, mergeNote, ciLog),
+        promptArgs: followUpPromptArgs({ kind: "issue", issue }, target.headRefName, target.number, forRole, mergeNote, ciLog),
       },
       host.limits,
     );
@@ -736,10 +756,12 @@ export function planRedCi(gatePassed: boolean, redChecks: readonly CheckState[])
 // resolved origin/main to this round.
 export async function runPass(
   target: PassTarget,
-  issue: SandcastleIssue,
+  brief: PassBrief,
   base: string,
   host: PassHost = livePassHost,
 ): Promise<PassOutcome> {
+  if (brief.kind !== "issue") throw new Error("Not implemented");
+  const { issue } = brief;
   const log = (line: string) => host.log(`  PR #${target.number} ${line}`);
   const skip = (reason: string): PassOutcome => {
     log(`isn't given a follow-up pass this round: ${reason}.`);
@@ -1010,7 +1032,7 @@ async function passOnMarkedIssue(
           runRoleInSandbox(
             sandbox,
             "gate-fixer",
-            { promptFile: "./.sandcastle/roles/gate-fixer.md", promptArgs: gateFixerPromptArgs(issue, branch, at, gateOutput) },
+            { promptFile: "./.sandcastle/roles/gate-fixer.md", promptArgs: gateFixerPromptArgs({ kind: "issue", issue }, branch, at, gateOutput) },
             host.limits,
           ),
         uncounted: (error) => error instanceof UncountedStopError,
@@ -1225,6 +1247,7 @@ export async function followUpPassPhase(
   const started: { index: number; issue: SandcastleIssue }[] = [];
   // Serially, because concurrent fetches contend on the same ref lock.
   for (const [index, target] of targets.entries()) {
+    if (target.issueNumber === undefined) throw new Error("Not implemented");
     const issue = byNumber.get(target.issueNumber);
     if (issue === undefined) {
       outcomes[index] = { kind: "skipped", reason: `#${target.issueNumber} isn't in this round's queue` };
@@ -1240,7 +1263,7 @@ export async function followUpPassPhase(
     started.push({ index, issue });
   }
 
-  const settled = await Promise.allSettled(started.map(({ index, issue }) => runPass(targets[index]!, issue, base, host)));
+  const settled = await Promise.allSettled(started.map(({ index, issue }) => runPass(targets[index]!, { kind: "issue", issue }, base, host)));
   let stop: UncountedStopError | undefined;
   for (const [position, result] of settled.entries()) {
     const { index } = started[position]!;

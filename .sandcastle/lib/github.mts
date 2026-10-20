@@ -1162,6 +1162,54 @@ export function issuesWithLabel(
   ) as number[];
 }
 
+// The names of the labels on the issue or PR `number` now, from the REST
+// labels endpoint, which covers both (gh issue view refuses a PR here, #58).
+export function labelsOn(_number: number, _run: typeof execFileSync = execFileSync, _repo: string = repoName()): string[] {
+  throw new Error("Not implemented");
+}
+
+// Adds `label` to the issue or PR `number` with the REST labels endpoint.
+export function addLabelOn(
+  _number: number,
+  _label: string,
+  _run: typeof execFileSync = execFileSync,
+  _repo: string = repoName(),
+): void {
+  throw new Error("Not implemented");
+}
+
+// Removes `label` from the issue or PR `number`; a 404 counts as removed.
+export function removeLabelFrom(
+  _number: number,
+  _label: string,
+  _run: typeof execFileSync = execFileSync,
+  _repo: string = repoName(),
+): void {
+  throw new Error("Not implemented");
+}
+
+// The numbers of the open issues and PRs carrying `label`.
+export function openNumbersWithLabel(_label: string, _run: typeof execFileSync = execFileSync, _repo: string = repoName()): number[] {
+  throw new Error("Not implemented");
+}
+
+// A hand-off PR's own text, the brief of a pass that has no issue (#58): its
+// title and description, and the comments of authors with write access.
+export type PullRequestText = { number: number; title: string; body: string; comments: string[] };
+
+// Reads PR `number`'s title, description and comments with gh pr view,
+// dropping the comments of authors without write access (see ownerApproved).
+export function pullRequestText(
+  _number: number,
+  _run: typeof execFileSync = execFileSync,
+  _repo: string = repoName(),
+  _canPush: Map<string, boolean> = new Map(),
+  _warn: (message: string) => void = console.error,
+  _failed: Set<string> = new Set(),
+): PullRequestText {
+  throw new Error("Not implemented");
+}
+
 // One "labeled" or "unlabeled" event from an issue's or PR's REST timeline.
 export type TimelineLabelEvent = { event: "labeled" | "unlabeled"; label: string; createdAt: string };
 
@@ -1245,6 +1293,7 @@ export function bodyEdits(
   number: number,
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
+  _kind: "issue" | "pullRequest" = "issue",
 ): ContentEdit[] {
   const [owner, name] = repo.split("/") as [string, string];
   return jsonLines(

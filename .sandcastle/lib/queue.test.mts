@@ -23,6 +23,54 @@ const isOwnerOf =
 
 const OWNER_AND_STRANGER = isOwnerOf({ owner: true, stranger: false, host: true });
 
+// #58: the sweep reads a hand-off PR's label through approval, and tells a
+// failed lookup (the follow-up run ends red) from a stranger's label (it
+// doesn't) by `unknown`.
+describe("approval's unknown flag", () => {
+  const labeledBy = (actor: string | null): IssueEvent[] => [
+    { event: "labeled", actor, label: "sandcastle:follow-up", createdAt: "2026-10-01T00:00:00Z" },
+  ];
+
+  it("is set when the actor who added the label can't be checked", () => {
+    const result = approval("sandcastle:follow-up", labeledBy("unlisted"), [], isOwnerOf({ unlisted: undefined }));
+
+    assert.equal(result.approved, false);
+    assert.equal(!result.approved && result.unknown, true);
+  });
+
+  it("is set when the editor of the body after the add can't be checked", () => {
+    const edits: ContentEdit[] = [{ editor: "unlisted", editedAt: "2026-10-02T00:00:00Z" }];
+
+    const result = approval("sandcastle:follow-up", labeledBy("owner"), edits, isOwnerOf({ owner: true, unlisted: undefined }));
+
+    assert.equal(result.approved, false);
+    assert.equal(!result.approved && result.unknown, true);
+  });
+
+  it("isn't set when a stranger added the label", () => {
+    const result = approval("sandcastle:follow-up", labeledBy("stranger"), [], OWNER_AND_STRANGER);
+
+    assert.equal(result.approved, false);
+    assert.equal(!result.approved && result.unknown, undefined);
+  });
+
+  it("isn't set when a stranger edited the body after the add", () => {
+    const edits: ContentEdit[] = [{ editor: "stranger", editedAt: "2026-10-02T00:00:00Z" }];
+
+    const result = approval("sandcastle:follow-up", labeledBy("owner"), edits, OWNER_AND_STRANGER);
+
+    assert.equal(result.approved, false);
+    assert.equal(!result.approved && result.unknown, undefined);
+  });
+
+  it("isn't set when nothing shows who added the label", () => {
+    const result = approval("sandcastle:follow-up", [], [], OWNER_AND_STRANGER);
+
+    assert.equal(result.approved, false);
+    assert.equal(!result.approved && result.unknown, undefined);
+  });
+});
+
 describe("approval", () => {
   it("isn't approved when there's no labeled event adding the queue label", () => {
     assert.equal(approval("Sandcastle", [], [], OWNER_AND_STRANGER).approved, false);

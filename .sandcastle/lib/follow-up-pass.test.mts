@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import type { Sandbox, SandboxRunOptions } from "@ai-hero/sandcastle";
 import { createCheckedSandbox } from "./build.mts";
-import { FOLLOW_UP_MARKER, FOLLOW_UP_PASS_CAP, FOLLOW_UP_REPLY_MARKER } from "./config.mts";
+import { FOLLOW_UP_MARKER, FOLLOW_UP_PASS_CAP, FOLLOW_UP_REPLY_MARKER, SESSION_REPLY_MARKER } from "./config.mts";
 import { UncountedStopError } from "./errors.mts";
 import type { CheckState, PassTarget } from "./follow-up.mts";
 import {
   followUpPassPhase,
   giveUpComment,
   isGateCovered,
+  isReviewBot,
   parseVerdicts,
   passOutcomeEntry,
   passSummaryComment,
@@ -25,7 +27,8 @@ import {
   type ThreadAction,
   type ThreadVerdict,
 } from "./follow-up-pass.mts";
-import type { HeadCheck, ReviewThread, SandcastleIssue } from "./github.mts";
+import type { HeadCheck, PullRequestText, ReviewThread, SandcastleIssue } from "./github.mts";
+import type { PassBrief } from "./prompts.mts";
 import type { IsOwner } from "./queue.mts";
 import { OutcomeReport, type HumanThreadEntry } from "./report.mts";
 import { RunLimits } from "./limits.mts";
@@ -770,12 +773,15 @@ function passHostFake(
     rerunResult?: CheckState[];
     // host.failedCheckLog's answer.
     failedCheckLog?: string;
+    // host.pullRequestBrief's answer (#58), or the error it throws.
+    pullRequestBrief?: PullRequestText | Error;
   } = {},
 ) {
   const calls = {
     fetchBranch: [] as string[],
     markBuilding: [] as number[],
     unmarkBuilding: [] as number[],
+    pullRequestBrief: [] as number[],
     createSandbox: [] as string[],
     push: [] as { branch: string; commit: string }[],
     replyToThread: [] as { threadId: string; body: string }[],
@@ -804,6 +810,12 @@ function passHostFake(
       return options.markBuildingResult ?? true;
     },
     unmarkBuilding: (issueNumber) => void calls.unmarkBuilding.push(issueNumber),
+    pullRequestBrief: (pr) => {
+      calls.pullRequestBrief.push(pr);
+      const brief = options.pullRequestBrief ?? { number: pr, title: "Tidy the docs", body: "A chore PR.", comments: [] };
+      if (brief instanceof Error) throw brief;
+      return brief;
+    },
     createSandbox: async (branch) => {
       calls.createSandbox.push(branch);
       return sandbox.sandbox;
@@ -852,7 +864,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Returned a Result<T>.", commit: "a".repeat(7) }]) });
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "passed");
     assert.deepEqual(sandbox.steps.filter((step) => step === "follow-up"), ["follow-up"]);
@@ -872,7 +884,7 @@ describe("runPass", () => {
       const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_owner", verdict, reason: "Noted.", ...commit }]) });
       const { passHost, calls } = passHostFake({ threads: [ownerThread(), botThread()], containsBase: true, sandbox });
 
-      await runPass(passTarget(), issue, BASE, passHost);
+      await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
       assert.equal(calls.replyToThread.length, 1);
       assert.equal(calls.replyToThread[0]!.threadId, "RT_owner");
@@ -887,7 +899,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: "[]" });
     const { passHost } = passHostFake({ threads: [answered, botThread()], containsBase: true, sandbox });
 
-    await runPass(passTarget(), issue, BASE, passHost);
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     const roleRun = sandbox.runs.find((run) => run.name === "follow-up");
     assert.ok(roleRun !== undefined, "the bot thread starts a pass");
@@ -900,7 +912,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: "[]" });
     const { passHost, calls } = passHostFake({ threads: [strangerThread(), botThread()], containsBase: true, sandbox });
 
-    await runPass(passTarget(), issue, BASE, passHost);
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     const roleRun = sandbox.runs.find((run) => run.name === "follow-up");
     assert.ok(roleRun !== undefined, "the bot thread starts a pass");
@@ -914,7 +926,7 @@ describe("runPass", () => {
     const uncertain = ownerThread({ comments: [{ author: "maybe-owner", byBot: false, body: "Hmm.", url: "https://github.com/o/r/pull/7#discussion_r6" }] });
     const { passHost, calls } = passHostFake({ threads: [uncertain], containsBase: true, isOwnerFn: () => undefined });
 
-    await runPass(passTarget(), issue, BASE, passHost);
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.deepEqual(calls.createSandbox, []);
   });
@@ -929,7 +941,7 @@ describe("runPass", () => {
       const sandbox = sandboxFake({ followUpJson: JSON.stringify([verdict]) });
       const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
 
-      await runPass(passTarget(), issue, BASE, passHost);
+      await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
       assert.deepEqual(calls.replyToThread, []);
       assert.deepEqual(calls.resolveThread, []);
@@ -946,7 +958,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: JSON.stringify(verdicts) });
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
 
-    await runPass(passTarget(), issue, BASE, passHost);
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.deepEqual(calls.replyToThread, []);
     assert.deepEqual(calls.resolveThread, []);
@@ -956,7 +968,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: "[]" });
     const { passHost } = passHostFake({ threads: [botThread()], containsBase: false, sandbox });
 
-    await runPass(passTarget(), issue, BASE, passHost);
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     const merge = String(sandbox.runs[0]?.promptArgs?.MERGE ?? "");
     assert.match(merge, /No merge with main is needed/);
@@ -969,7 +981,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: "[]" });
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: false, sandbox });
 
-    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), { kind: "issue", issue }, BASE, passHost);
 
     const resetIndex = sandbox.steps.findIndex((step) => step.startsWith("git reset --hard"));
     const mergeIndex = sandbox.steps.findIndex((step) => step.startsWith("git merge"));
@@ -1015,7 +1027,7 @@ describe("runPass", () => {
         worktreeProblems: () => [],
       });
 
-    const outcome = await runPass(passTarget({ reasons: ["check Build Solution is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["check Build Solution is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     const mergeIndex = sandbox.steps.findIndex((step) => step.startsWith("git merge "));
     assert.notEqual(mergeIndex, -1, sandbox.steps.join("\n"));
@@ -1031,7 +1043,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1, 1, 1] });
     const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
 
-    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.deepEqual(calls.push, []);
     assert.equal(outcome.kind, "gave-up");
@@ -1044,7 +1056,7 @@ describe("runPass", () => {
   it("hands the PR back instead of starting a fourth pass", async () => {
     const { passHost, calls } = passHostFake({ threads: [botThread()], passCount: FOLLOW_UP_PASS_CAP });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.deepEqual(calls.createSandbox, []);
@@ -1056,7 +1068,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }]) });
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox, passCount: FOLLOW_UP_PASS_CAP - 1 });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "passed");
     assert.match(calls.commentOnPullRequest[0]!.body, new RegExp(`pass ${FOLLOW_UP_PASS_CAP} of ${FOLLOW_UP_PASS_CAP}`, "i"));
@@ -1065,7 +1077,7 @@ describe("runPass", () => {
   it("skips a PR whose head moved since the sweep read it, without creating a sandbox", async () => {
     const { passHost, calls } = passHostFake({ threads: [botThread()], headRefOid: "f".repeat(40) });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.createSandbox, []);
@@ -1074,7 +1086,7 @@ describe("runPass", () => {
   it("skips a PR whose only threads for the role are owner threads and that needs no merge, without creating a sandbox", async () => {
     const { passHost, calls } = passHostFake({ threads: [ownerThread()], containsBase: true });
 
-    const outcome = await runPass(passTarget({ reasons: ["CI is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["CI is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.createSandbox, []);
@@ -1084,7 +1096,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake();
     const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
 
-    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.deepEqual(sandbox.runs, []);
     assert.deepEqual(outcome, { kind: "passed", pushed: sandbox.headOf() });
@@ -1095,7 +1107,7 @@ describe("runPass", () => {
   it("doesn't merge main into a PR that's only behind it, and so skips one that's otherwise only red on CI", async () => {
     const { passHost, calls } = passHostFake({ threads: [], containsBase: false });
 
-    const outcome = await runPass(passTarget({ reasons: ["check build is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["check build is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.createSandbox, []);
@@ -1105,7 +1117,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: "[]" });
     const { passHost } = passHostFake({ threads: [botThread()], containsBase: false, sandbox });
 
-    await runPass(passTarget(), issue, BASE, passHost);
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.ok(!sandbox.execCalls.some((call) => call.startsWith("git merge ")), sandbox.execCalls.join("\n"));
   });
@@ -1116,7 +1128,7 @@ describe("runPass", () => {
     });
     const { passHost, calls } = passHostFake({ threads: [answered], containsBase: true });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.resolveThread, []);
@@ -1127,7 +1139,7 @@ describe("runPass", () => {
   it("doesn't hand the PR back from the read before the claim, even at the cap", async () => {
     const { passHost, calls } = passHostFake({ threads: [botThread()], passCount: FOLLOW_UP_PASS_CAP, markBuildingResult: false });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.handBack, []);
@@ -1139,7 +1151,7 @@ describe("runPass", () => {
       throw new Error("the worktree no longer points at this repository");
     };
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.match(calls.handBack[0]!.reason, /creating the sandbox failed/);
@@ -1150,7 +1162,7 @@ describe("runPass", () => {
   it("skips a PR that needs no merge and has no thread for the role, without creating a sandbox", async () => {
     const { passHost, calls } = passHostFake({ threads: [], containsBase: true });
 
-    const outcome = await runPass(passTarget({ reasons: [] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: [] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.createSandbox, []);
@@ -1160,7 +1172,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ roleFailing: ["follow-up"] });
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
 
-    await runPass(passTarget(), issue, BASE, passHost).catch(() => undefined);
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost).catch(() => undefined);
 
     assert.deepEqual(calls.markBuilding, [ISSUE_NUMBER]);
     assert.deepEqual(calls.unmarkBuilding, [ISSUE_NUMBER]);
@@ -1169,7 +1181,7 @@ describe("runPass", () => {
   it("creates no sandbox when another run already claimed the issue's building label", async () => {
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, markBuildingResult: false });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.createSandbox, []);
@@ -1180,7 +1192,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ roleFailing: ["follow-up"], roleFailWith: { "follow-up": stop } });
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
 
-    await assert.rejects(() => runPass(passTarget(), issue, BASE, passHost), (error: unknown) => error instanceof UncountedStopError);
+    await assert.rejects(() => runPass(passTarget(), { kind: "issue", issue }, BASE, passHost), (error: unknown) => error instanceof UncountedStopError);
 
     assert.deepEqual(calls.handBack, []);
     assert.deepEqual(calls.commentOnPullRequest, []);
@@ -1190,7 +1202,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "declined", reason: "Out of scope." }]) });
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "passed");
     assert.equal(calls.replyToThread.length, 1);
@@ -1201,7 +1213,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }]) });
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox, pushError: new Error("! [rejected] (non-fast-forward)") });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "push-failed");
     assert.deepEqual(calls.replyToThread, []);
@@ -1219,7 +1231,7 @@ describe("runPass", () => {
       remoteHead: HEAD,
     });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.equal(calls.handBack.length, 1);
@@ -1237,7 +1249,7 @@ describe("runPass", () => {
       remoteHead: ROLE_COMMIT,
     });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.deepEqual(outcome, { kind: "passed", pushed: ROLE_COMMIT });
     assert.deepEqual(calls.resolveThread, ["RT_bot"]);
@@ -1247,7 +1259,7 @@ describe("runPass", () => {
   it("decides from what GitHub says once the issue is claimed: a thread another run answered meanwhile isn't passed on", async () => {
     const { passHost, calls } = passHostFake({ threads: [botThread()], threadsAfterClaim: [botThread({ resolved: true })], containsBase: true });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.createSandbox, []);
@@ -1257,7 +1269,7 @@ describe("runPass", () => {
   it("hands the PR back, with no sandbox, when another run took it to the cap before this one claimed it", async () => {
     const { passHost, calls } = passHostFake({ threads: [botThread()], passCount: FOLLOW_UP_PASS_CAP - 1, passCountAfterClaim: FOLLOW_UP_PASS_CAP });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.deepEqual(calls.createSandbox, []);
@@ -1267,7 +1279,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [0, 0, 0], gateCommits: true });
     const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
 
-    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.deepEqual(calls.push, []);
@@ -1285,7 +1297,7 @@ describe("runPass", () => {
       const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit }]) });
       const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
 
-      const outcome = await runPass(passTarget(), issue, BASE, passHost);
+      const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
       assert.equal(outcome.kind, "passed");
       assert.deepEqual(calls.replyToThread, []);
@@ -1302,7 +1314,7 @@ describe("runPass", () => {
       const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit }]) });
       const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: false, sandbox });
 
-      const outcome = await runPass(passTarget({ conflicted: true }), issue, BASE, passHost);
+      const outcome = await runPass(passTarget({ conflicted: true }), { kind: "issue", issue }, BASE, passHost);
 
       assert.equal(outcome.kind, "passed");
       assert.deepEqual(calls.resolveThread, []);
@@ -1314,7 +1326,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }]) });
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox, leaksSecret: sampleSecretMatch });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.deepEqual(calls.push, []);
@@ -1325,7 +1337,7 @@ describe("runPass", () => {
     const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: "a".repeat(7) }]) });
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox, leaksSecret: sampleSecretMatch });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     const logged = calls.log.join("\n");
@@ -1460,7 +1472,7 @@ describe("runPass's other give-ups", () => {
     const sandbox = sandboxFake({ followUpJson: fixedVerdict, roleUnfinished: ["follow-up"] });
     const { passHost, calls } = passHostFake({ threads: [botThread()], sandbox });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.deepEqual(calls.push, []);
@@ -1471,7 +1483,7 @@ describe("runPass's other give-ups", () => {
     const sandbox = sandboxFake();
     const { passHost, calls } = passHostFake({ threads: [botThread()], sandbox });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.match(calls.handBack[0]!.reason, /follow-up\.json/);
@@ -1482,7 +1494,7 @@ describe("runPass's other give-ups", () => {
     const sandbox = sandboxFake({ mergeConflictFiles: ["src/A.cs"] });
     const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
 
-    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "passed");
     assert.equal(calls.commentOnPullRequest.length, 1);
@@ -1492,7 +1504,7 @@ describe("runPass's other give-ups", () => {
     const sandbox = sandboxFake({ followUpJson: JSON.stringify({ threadId: "RT_bot" }) });
     const { passHost, calls } = passHostFake({ threads: [botThread()], sandbox });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.deepEqual(calls.push, []);
@@ -1502,7 +1514,7 @@ describe("runPass's other give-ups", () => {
     const sandbox = sandboxFake({ followUpJson: fixedVerdict });
     const { passHost } = passHostFake({ threads: [botThread()], sandbox });
 
-    await runPass(passTarget(), issue, BASE, passHost);
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     const removeIndex = sandbox.execCalls.findIndex((call) => call === "rm -f .sandcastle/follow-up.json");
     const readIndex = sandbox.execCalls.findIndex((call) => call.startsWith("cat") && call.includes("follow-up.json"));
@@ -1514,7 +1526,7 @@ describe("runPass's other give-ups", () => {
     const sandbox = sandboxFake({ followUpJson: fixedVerdict, rewritesHistory: true });
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.match(calls.handBack[0]!.reason, /rewritten/);
@@ -1525,7 +1537,7 @@ describe("runPass's other give-ups", () => {
     const sandbox = sandboxFake({ followUpJson: "[]", mergeConflictFiles: ["src/A.cs", "src/B.cs"] });
     const { passHost } = passHostFake({ threads: [], containsBase: false, sandbox });
 
-    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+    await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), { kind: "issue", issue }, BASE, passHost);
 
     const merge = String(sandbox.runs[0]?.promptArgs?.MERGE ?? "");
     assert.match(merge, /src\/A\.cs, src\/B\.cs/);
@@ -1536,7 +1548,7 @@ describe("runPass's other give-ups", () => {
     const sandbox = sandboxFake({ followUpJson: "[]", mergeConflictFiles: ["src/A.cs"] });
     const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
 
-    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.deepEqual(outcome, { kind: "passed", pushed: ROLE_COMMIT });
     assert.deepEqual(calls.push, [{ branch: BRANCH, commit: ROLE_COMMIT }]);
@@ -1547,7 +1559,7 @@ describe("runPass's other give-ups", () => {
     const sandbox = sandboxFake({ followUpJson: "[]", mergeConflictFiles: ["src/A.cs"], abandonsMerge: true });
     const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
 
-    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.match(calls.handBack[0]!.reason, /abandoned/);
@@ -1561,7 +1573,7 @@ describe("runPass's other give-ups", () => {
     const sandbox = sandboxFake({ followUpJson: fixedVerdict });
     const { passHost, calls } = passHostFake({ threads: [botThread()], sandbox, pushError: rejection });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.match(calls.handBack[0]!.reason, /workflow/);
@@ -1575,7 +1587,7 @@ describe("runPass's other give-ups", () => {
       throw new Error("gh api graphql failed");
     };
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "passed");
     assert.deepEqual(calls.resolveThread, []);
@@ -1588,7 +1600,7 @@ describe("runPass's other give-ups", () => {
     });
     const { passHost, calls } = passHostFake({ threads: [answered], containsBase: true, hostLogin: "owner" });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.createSandbox, []);
@@ -1607,7 +1619,7 @@ describe("runPass's red CI handling", () => {
       checks: [redCheck({ name: "Build Solution" })],
     });
 
-    const outcome = await runPass(passTarget({ reasons: ["check Build Solution is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["check Build Solution is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "passed");
     assert.ok(sandbox.runs.some((run) => run.name === "gate-fixer"), "the gate-fixer ran");
@@ -1626,7 +1638,7 @@ describe("runPass's red CI handling", () => {
       rerunResult: [redCheck({ name: "Tests: Domain.Tests.Unit", green: true })],
     });
 
-    const outcome = await runPass(passTarget({ reasons: ["check Tests: Domain.Tests.Unit is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["check Tests: Domain.Tests.Unit is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.deepEqual(outcome, { kind: "passed", pushed: undefined });
     assert.deepEqual(calls.rerunFailedChecks, [{ pr: PR_NUMBER, checkNames: ["Tests: Domain.Tests.Unit"], expectedHead: HEAD }]);
@@ -1646,7 +1658,7 @@ describe("runPass's red CI handling", () => {
       rerunResult: [redCheck({ name: "Tests: Domain.Tests.Unit" })],
     });
 
-    const outcome = await runPass(passTarget({ reasons: ["check Tests: Domain.Tests.Unit is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["check Tests: Domain.Tests.Unit is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.equal(calls.handBack.length, 1);
@@ -1667,7 +1679,7 @@ describe("runPass's red CI handling", () => {
       failedCheckLog: "##[error] CS8600: converting null literal...",
     });
 
-    const outcome = await runPass(passTarget({ reasons: ["check Analyze (csharp) is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["check Analyze (csharp) is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.deepEqual(calls.failedCheckLog, [{ pr: PR_NUMBER, checkNames: ["Analyze (csharp)"], expectedHead: HEAD }]);
     const roleRun = sandbox.runs.find((run) => run.name === "follow-up");
@@ -1693,7 +1705,7 @@ describe("runPass's red CI handling", () => {
       failedCheckLog: "##[error] CS8600: converting null literal...",
     });
 
-    const outcome = await runPass(passTarget({ reasons: ["check Analyze (csharp) is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["check Analyze (csharp) is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.match(calls.handBack[0]!.reason, /Analyze \(csharp\)/);
@@ -1710,7 +1722,7 @@ describe("runPass's red CI handling", () => {
   it("doesn't start a pass for a red check with no Actions run behind it", async () => {
     const { passHost, calls } = passHostFake({ threads: [], containsBase: true, checks: [runlessCheck()] });
 
-    const outcome = await runPass(passTarget({ reasons: ["check CodeQL is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["check CodeQL is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.createSandbox, []);
@@ -1730,7 +1742,7 @@ describe("runPass's red CI decisions", () => {
       checksHeadRefOid: "f".repeat(40),
     });
 
-    const outcome = await runPass(passTarget({ reasons: ["check Build Solution is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["check Build Solution is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.createSandbox, []);
@@ -1742,7 +1754,7 @@ describe("runPass's red CI decisions", () => {
       checks: [redCheck({ name: "Tests: Domain.Tests.Unit" }), redCheck({ name: "Analyze (csharp)", completed: false, completedAt: null })],
     });
 
-    const outcome = await runPass(passTarget({ reasons: ["check Tests: Domain.Tests.Unit is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["check Tests: Domain.Tests.Unit is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.markBuilding, []);
@@ -1763,7 +1775,7 @@ describe("runPass's red CI decisions", () => {
       checks: [redCheck({ name: "Build Solution" })],
     });
 
-    const outcome = await runPass(passTarget({ conflicted: false, reasons: ["check Build Solution is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ conflicted: false, reasons: ["check Build Solution is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     const mergeIndex = sandbox.steps.findIndex((step) => step.startsWith("git merge "));
     const gateIndex = sandbox.steps.findIndex((step) => step === "scripts/gate.sh 2>&1");
@@ -1788,7 +1800,7 @@ describe("runPass's red CI decisions", () => {
       checks: [redCheck({ name: "Build Solution" })],
     });
 
-    const outcome = await runPass(passTarget({ conflicted: false, reasons: ["check Build Solution is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ conflicted: false, reasons: ["check Build Solution is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     const firstMergeIndex = sandbox.steps.findIndex((step) => step.startsWith("git merge "));
     const abortIndex = sandbox.steps.findIndex((step) => step === "git merge --abort");
@@ -1807,7 +1819,7 @@ describe("runPass's red CI decisions", () => {
   it("doesn't start a pass merely because the PR is behind main, with no red check or bot thread", async () => {
     const { passHost, calls } = passHostFake({ threads: [], containsBase: false, checks: [] });
 
-    const outcome = await runPass(passTarget({ conflicted: false }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ conflicted: false }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "skipped");
     assert.deepEqual(calls.createSandbox, []);
@@ -1820,7 +1832,7 @@ describe("runPass's red CI decisions", () => {
     });
     const { passHost, calls } = passHostFake({ threads: [botThread()], sandbox, checks: [redCheck({ name: "Tests: Domain.Tests.Unit" })] });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.deepEqual(outcome, { kind: "passed", pushed: ROLE_COMMIT });
     assert.deepEqual(calls.rerunFailedChecks, []);
@@ -1835,7 +1847,7 @@ describe("runPass's red CI decisions", () => {
       rerunResult: [redCheck({ name: "Tests: Domain.Tests.Unit", completed: false, completedAt: null })],
     });
 
-    await runPass(passTarget(), issue, BASE, passHost);
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(calls.commentOnPullRequest.length, 1);
     assert.match(calls.commentOnPullRequest[0]!.body, /Re-ran the failed jobs of Tests: Domain\.Tests\.Unit once/);
@@ -1845,7 +1857,7 @@ describe("runPass's red CI decisions", () => {
     const sandbox = sandboxFake({ gateExitCodes: [0] });
     const { passHost, calls } = passHostFake({ threads: [], sandbox, checks: [redCheck({ name: "Build Solution" })], rerunResult: [] });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.match(calls.handBack[0]!.reason, /Build Solution/);
@@ -1860,7 +1872,7 @@ describe("runPass's red CI decisions", () => {
       failedCheckLog: `${"x".repeat(200_000)}\n##[error] the real failure`,
     });
 
-    await runPass(passTarget(), issue, BASE, passHost);
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     const log = String(sandbox.runs.find((run) => run.name === "follow-up")?.promptArgs?.CODEQL_LOG ?? "");
     assert.ok(log.length < 100_000, `the log reached the role at ${log.length} characters`);
@@ -1878,7 +1890,7 @@ describe("runPass's red CI decisions", () => {
       throw new Error("gh api rate limited");
     };
 
-    const outcome = await runPass(passTarget({ reasons: ["check Analyze (csharp) is red"] }), issue, BASE, passHost);
+    const outcome = await runPass(passTarget({ reasons: ["check Analyze (csharp) is red"] }), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.match(calls.handBack[0]!.reason, /Analyze \(csharp\)/);
@@ -1898,7 +1910,7 @@ describe("runPass's red CI decisions", () => {
       rerunResult: [redCheck({ name: "Tests: Domain.Tests.Unit" })],
     });
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.deepEqual(calls.push, []);
@@ -1921,7 +1933,7 @@ describe("runPass's red CI decisions", () => {
       throw new Error("gh run rerun failed");
     };
 
-    const outcome = await runPass(passTarget(), issue, BASE, passHost);
+    const outcome = await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
 
     assert.equal(outcome.kind, "gave-up");
     assert.match(calls.handBack[0]!.reason, /Tests: Domain\.Tests\.Unit/);
@@ -1959,5 +1971,505 @@ describe("followUpPassPhase's skips", () => {
     assert.deepEqual(outcomes.map((outcome) => outcome.kind), ["skipped", "skipped"]);
     assert.match((outcomes[0] as { reason: string }).reason, /fetch/);
     assert.match((outcomes[1] as { reason: string }).reason, /nothing a follow-up pass handles/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #58: hand-off PRs
+// ---------------------------------------------------------------------------
+
+describe("isReviewBot", () => {
+  for (const login of [
+    "copilot-pull-request-reviewer[bot]",
+    "copilot-pull-request-reviewer",
+    "Copilot",
+    "copilot",
+    "github-actions[bot]",
+    "github-actions",
+    "GitHub-Actions[bot]",
+    "GITHUB-ACTIONS",
+  ]) {
+    it(`accepts ${login}, a reviewer whose threads a hand-off PR's pass may resolve`, () => {
+      assert.equal(isReviewBot(login), true);
+    });
+  }
+
+  for (const login of ["dependabot[bot]", "github-advanced-security[bot]", "owner", "stranger", "github-actions-bot", ""]) {
+    it(`rejects ${JSON.stringify(login)}`, () => {
+      assert.equal(isReviewBot(login), false);
+    });
+  }
+
+  it("rejects null, a deleted account", () => {
+    assert.equal(isReviewBot(null), false);
+  });
+});
+
+// Under "fixed-review-threads", a hand-off PR's pass resolves only the
+// threads Copilot or Claude Review opened that it fixed; declined and
+// outdated ones get a reply and stay open for the owner.
+describe("threadActions' fixed-review-threads rule", () => {
+  const rule = "fixed-review-threads";
+  const botThreadBy = (author: string): PromptThread => ({ ...forRoleBot, comments: [{ author, body: "Consider this." }] });
+  const verdict = (kind: ThreadVerdict["verdict"], extra: Partial<ThreadVerdict> = {}): ThreadVerdict => ({
+    threadId: "RT_bot",
+    verdict: kind,
+    reason: "Because.",
+    ...(kind === "fixed" ? { commit: "a".repeat(7) } : {}),
+    ...extra,
+  });
+
+  for (const author of ["copilot-pull-request-reviewer", "copilot-pull-request-reviewer[bot]", "Copilot", "github-actions[bot]", "github-actions"]) {
+    it(`resolves a fixed thread ${author} opened ADDRESSED`, () => {
+      const { actions } = threadActions([verdict("fixed")], [botThreadBy(author)], rule);
+
+      assert.equal(actions[0]!.resolve, "ADDRESSED");
+    });
+  }
+
+  it("leaves a declined thread open", () => {
+    const { actions } = threadActions([verdict("declined")], [forRoleBot], rule);
+
+    assert.equal(actions.length, 1);
+    assert.equal(actions[0]!.resolve, undefined);
+  });
+
+  it("leaves a thread declined as invalid open", () => {
+    const { actions } = threadActions([verdict("declined", { invalid: true })], [forRoleBot], rule);
+
+    assert.equal(actions[0]!.resolve, undefined);
+  });
+
+  it("leaves an outdated thread open", () => {
+    const { actions } = threadActions([verdict("outdated")], [forRoleBot], rule);
+
+    assert.equal(actions[0]!.resolve, undefined);
+  });
+
+  it("leaves a fixed thread another bot opened open", () => {
+    const { actions } = threadActions([verdict("fixed")], [botThreadBy("dependabot[bot]")], rule);
+
+    assert.equal(actions[0]!.resolve, undefined);
+  });
+
+  it("leaves a fixed thread open when the first comment is a person's and a review bot only replied", () => {
+    const thread: PromptThread = {
+      ...forRoleBot,
+      comments: [{ author: "dependabot[bot]", body: "Look." }, { author: "copilot-pull-request-reviewer", body: "Agreed." }],
+    };
+
+    const { actions } = threadActions([verdict("fixed")], [thread], rule);
+
+    assert.equal(actions[0]!.resolve, undefined);
+  });
+
+  it("never resolves an owner thread, whatever the verdict", () => {
+    const { actions } = threadActions([{ threadId: "RT_owner", verdict: "fixed", reason: "Done." }], [forRoleOwner], rule);
+
+    assert.equal(actions[0]!.resolve, undefined);
+  });
+
+  it("still answers every verdict, so a declined thread gets its reply, and ignores an unknown thread", () => {
+    const { actions, ignored } = threadActions([verdict("declined"), { threadId: "RT_made_up", verdict: "fixed", reason: "x" }], [forRoleBot], rule);
+
+    assert.deepEqual(actions.map((action) => action.verdict.threadId), ["RT_bot"]);
+    assert.deepEqual(ignored, ["RT_made_up"]);
+  });
+
+  it("keeps the default rule for a Sandcastle PR: a declined bot thread is WONT_FIX and an outdated one ADDRESSED", () => {
+    assert.equal(threadActions([verdict("declined")], [forRoleBot]).actions[0]!.resolve, "WONT_FIX");
+    assert.equal(threadActions([verdict("declined")], [forRoleBot], "every-bot-thread").actions[0]!.resolve, "WONT_FIX");
+    assert.equal(threadActions([verdict("outdated")], [forRoleBot], "every-bot-thread").actions[0]!.resolve, "ADDRESSED");
+    assert.equal(threadActions([verdict("fixed")], [botThreadBy("dependabot[bot]")], "every-bot-thread").actions[0]!.resolve, "ADDRESSED");
+  });
+});
+
+// The session that handed a PR off ends each reply with SESSION_REPLY_MARKER.
+// It posts as the host's login (the owner's token), so without this the first
+// pass would answer again every thread the session already declined.
+describe("threadsForRole and a session's reply", () => {
+  const sessionReply = (author: string, body = `Declined: it is out of scope.\n\n${SESSION_REPLY_MARKER}`) => ({
+    author,
+    byBot: false,
+    body,
+    url: "https://github.com/o/r/pull/7#discussion_r9",
+  });
+
+  it("drops a bot thread whose last comment is the host login's reply ending with the session marker", () => {
+    const answered = botThread({ comments: [...botThread().comments, sessionReply(HOST_LOGIN)] });
+
+    const { forRole, leftForHuman, unknown } = threadsForRole([answered], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole, []);
+    assert.deepEqual(leftForHuman, []);
+    assert.deepEqual(unknown, []);
+  });
+
+  it("drops an owner thread whose last comment is the host login's reply ending with the session marker", () => {
+    const answered = ownerThread({ comments: [...ownerThread().comments, sessionReply(HOST_LOGIN)] });
+
+    const { forRole } = threadsForRole([answered], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole, []);
+  });
+
+  it("finds the marker anywhere in the reply, not only at its start", () => {
+    const answered = ownerThread({ comments: [...ownerThread().comments, sessionReply(HOST_LOGIN, `${SESSION_REPLY_MARKER}\nNoted, thanks.`)] });
+
+    assert.deepEqual(threadsForRole([answered], isOwner, HOST_LOGIN).forRole, []);
+  });
+
+  it("keeps an owner thread when a stranger ends a comment with the session marker", () => {
+    const spoofed = ownerThread({ comments: [...ownerThread().comments, sessionReply("stranger")] });
+
+    const { forRole } = threadsForRole([spoofed], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole.map((thread) => thread.threadId), ["RT_owner"]);
+  });
+
+  it("keeps an owner thread when the owner, under another login than the host's, ends a comment with the session marker", () => {
+    const ownerComment = ownerThread({ comments: [...ownerThread().comments, sessionReply("owner")] });
+
+    const { forRole } = threadsForRole([ownerComment], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole.map((thread) => thread.threadId), ["RT_owner"]);
+  });
+
+  it("keeps a bot thread when the owner, under another login than the host's, ends a comment with the session marker", () => {
+    const ownerComment = botThread({ comments: [...botThread().comments, sessionReply("owner")] });
+
+    const { forRole } = threadsForRole([ownerComment], isOwner, HOST_LOGIN);
+
+    assert.deepEqual(forRole.map((thread) => thread.threadId), ["RT_bot"]);
+  });
+
+  it("keeps a thread whose host reply has neither marker", () => {
+    const unmarked = ownerThread({ comments: [...ownerThread().comments, sessionReply(HOST_LOGIN, "Looks fine to me.")] });
+
+    assert.deepEqual(threadsForRole([unmarked], isOwner, HOST_LOGIN).forRole.map((thread) => thread.threadId), ["RT_owner"]);
+  });
+
+  it("gives the thread back to the role once the owner replies after the session", () => {
+    const repliedTo = ownerThread({
+      comments: [...ownerThread().comments, sessionReply(HOST_LOGIN), { author: "owner", byBot: false, body: "Do it anyway.", url: "https://github.com/o/r/pull/7#discussion_r10" }],
+    });
+
+    assert.deepEqual(threadsForRole([repliedTo], isOwner, HOST_LOGIN).forRole.map((thread) => thread.threadId), ["RT_owner"]);
+  });
+
+  it("still drops a thread carrying the host's own FOLLOW_UP_REPLY_MARKER reply", () => {
+    const answered = ownerThread({
+      comments: [...ownerThread().comments, sessionReply(HOST_LOGIN, `${FOLLOW_UP_REPLY_MARKER}\nNoted.`)],
+    });
+
+    assert.deepEqual(threadsForRole([answered], isOwner, HOST_LOGIN).forRole, []);
+  });
+});
+
+describe("runPass on a hand-off PR", () => {
+  const HAND_OFF_BRANCH = "chore/tidy-docs";
+  const pullRequest: PullRequestText = {
+    number: PR_NUMBER,
+    title: "chore: Tidy the docs",
+    body: "Moves two files.",
+    comments: ["Keep the old names."],
+  };
+  const brief: PassBrief = { kind: "pull-request", pr: pullRequest };
+  const handOffTarget = (overrides: Partial<PassTarget> = {}) =>
+    passTarget({ issueNumber: undefined, headRefName: HAND_OFF_BRANCH, ...overrides });
+  const fixedVerdict = JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: ROLE_COMMIT.slice(0, 7) }]);
+
+  it("claims sandcastle:building on the PR itself and releases it there", async () => {
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    const outcome = await runPass(handOffTarget(), brief, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(calls.markBuilding, [PR_NUMBER]);
+    assert.deepEqual(calls.unmarkBuilding, [PR_NUMBER]);
+  });
+
+  it("skips, naming the PR, when another run already claimed the PR", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, markBuildingResult: false });
+
+    const outcome = await runPass(handOffTarget(), brief, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.match((outcome as { reason: string }).reason, new RegExp(`#${PR_NUMBER}`));
+    assert.deepEqual(calls.createSandbox, []);
+    assert.deepEqual(calls.unmarkBuilding, []);
+  });
+
+  it("gives the follow-up role the PR's title, description and comments as its brief", async () => {
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(handOffTarget(), brief, BASE, passHost);
+
+    const args = sandbox.runs.find((run) => run.name === "follow-up")?.promptArgs ?? {};
+    assert.equal(args.ISSUE_TITLE, "chore: Tidy the docs");
+    assert.equal(args.ISSUE_BODY, "Moves two files.");
+    assert.match(String(args.ISSUE_COMMENTS), /Keep the old names\./);
+    assert.match(String(args.BRIEF_SOURCE), /Pull request #7/);
+    assert.equal(args.PR_NUMBER, "7");
+    assert.equal(args.BRANCH, HAND_OFF_BRANCH);
+  });
+
+  it("gives the gate-fixer the PR's brief too", async () => {
+    const sandbox = sandboxFake({ gateExitCodes: [1, 0] });
+    const { passHost } = passHostFake({
+      threads: [],
+      containsBase: true,
+      sandbox,
+      checks: [redCheck({ name: "Build Solution" })],
+    });
+
+    const outcome = await runPass(handOffTarget({ reasons: ["check Build Solution is red"] }), brief, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    const args = sandbox.runs.find((run) => run.name === "gate-fixer")?.promptArgs ?? {};
+    assert.equal(args.ISSUE_TITLE, "chore: Tidy the docs");
+    assert.equal(args.ISSUE_BODY, "Moves two files.");
+    assert.match(String(args.BRIEF_SOURCE), /Pull request #7/);
+  });
+
+  it("still gives an issue brief's roles the issue's text and the issue sentence", async () => {
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
+
+    const args = sandbox.runs.find((run) => run.name === "follow-up")?.promptArgs ?? {};
+    assert.equal(args.ISSUE_TITLE, "Fix the widget");
+    assert.match(String(args.BRIEF_SOURCE), /implements issue 50/);
+    assert.deepEqual(calls.markBuilding, [ISSUE_NUMBER]);
+  });
+
+  it("resolves a fixed Copilot thread and replies to it", async () => {
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(handOffTarget(), brief, BASE, passHost);
+
+    assert.equal(calls.replyToThread.length, 1);
+    assert.deepEqual(calls.resolveThread, ["RT_bot"]);
+  });
+
+  it("replies to a declined Copilot thread but leaves it open for the owner", async () => {
+    const sandbox = sandboxFake({
+      followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "declined", reason: "Out of scope for this PR." }]),
+      roleNoCommit: ["follow-up"],
+    });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(handOffTarget(), brief, BASE, passHost);
+
+    assert.equal(calls.replyToThread.length, 1);
+    assert.match(calls.replyToThread[0]!.body, /Left open for the repository owner/);
+    assert.deepEqual(calls.resolveThread, []);
+  });
+
+  it("replies to an outdated Copilot thread but leaves it open", async () => {
+    const sandbox = sandboxFake({
+      followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "outdated", reason: "Handled in the helper." }]),
+      roleNoCommit: ["follow-up"],
+    });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(handOffTarget(), brief, BASE, passHost);
+
+    assert.equal(calls.replyToThread.length, 1);
+    assert.deepEqual(calls.resolveThread, []);
+  });
+
+  it("leaves a fixed thread another bot opened open", async () => {
+    const dependabotThread = botThread({
+      comments: [{ author: "dependabot[bot]", byBot: true, body: "Bump this.", url: "https://github.com/o/r/pull/7#discussion_r1" }],
+    });
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost, calls } = passHostFake({ threads: [dependabotThread], containsBase: true, sandbox });
+
+    await runPass(handOffTarget(), brief, BASE, passHost);
+
+    assert.deepEqual(calls.resolveThread, []);
+  });
+
+  it("resolves a fixed Claude Review thread", async () => {
+    const claudeThread = botThread({
+      comments: [{ author: "github-actions[bot]", byBot: true, body: "Consider this.", url: "https://github.com/o/r/pull/7#discussion_r1" }],
+    });
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost, calls } = passHostFake({ threads: [claudeThread], containsBase: true, sandbox });
+
+    await runPass(handOffTarget(), brief, BASE, passHost);
+
+    assert.deepEqual(calls.resolveThread, ["RT_bot"]);
+  });
+
+  it("keeps resolving every answered bot thread on a Sandcastle PR, a declined one included", async () => {
+    const sandbox = sandboxFake({
+      followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "declined", reason: "Out of scope." }]),
+      roleNoCommit: ["follow-up"],
+    });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
+
+    assert.deepEqual(calls.resolveThread, ["RT_bot"]);
+  });
+
+  it("hands the PR back, not an issue, when the pass has hit its cap", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], passCount: FOLLOW_UP_PASS_CAP });
+
+    const outcome = await runPass(handOffTarget(), brief, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.equal(calls.handBack.length, 1);
+    assert.equal(calls.handBack[0]!.pr, PR_NUMBER);
+    assert.deepEqual(calls.markBuilding, [PR_NUMBER]);
+    assert.deepEqual(calls.unmarkBuilding, [PR_NUMBER]);
+  });
+
+  it("hands the PR back when the gate stays red", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", gateExitCodes: [1, 1, 1] });
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: false, sandbox });
+
+    const outcome = await runPass(handOffTarget({ conflicted: true, reasons: ["it has merge conflicts"] }), brief, BASE, passHost);
+
+    assert.equal(outcome.kind, "gave-up");
+    assert.deepEqual(calls.handBack.map((entry) => entry.pr), [PR_NUMBER]);
+    assert.deepEqual(calls.push, []);
+  });
+
+  it("pushes the gated commit to the PR's own branch", async () => {
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    await runPass(handOffTarget(), brief, BASE, passHost);
+
+    assert.deepEqual(calls.push, [{ branch: HAND_OFF_BRANCH, commit: sandbox.headOf() }]);
+  });
+});
+
+describe("followUpPassPhase's hand-offs", () => {
+  const HAND_OFF_BRANCH = "chore/tidy-docs";
+  const handOffTarget = (overrides: Partial<PassTarget> = {}) =>
+    passTarget({ issueNumber: undefined, headRefName: HAND_OFF_BRANCH, ...overrides });
+  const issueTarget = () => passTarget({ number: 8, id: "PR_8", headRefName: "feature/51-tidy-widget", issueNumber: 51 });
+  const otherIssue: SandcastleIssue = { number: 51, title: "Tidy up the widget", body: "", labels: ["Sandcastle"], comments: [] };
+
+  it("reads the brief of a target with no issue, fetches its branch and passes on it, claiming the PR", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox: sandboxFake({ followUpJson: "[]", roleNoCommit: ["follow-up"] }) });
+
+    const outcomes = await followUpPassPhase([handOffTarget()], [], BASE, passHost);
+
+    assert.deepEqual(calls.pullRequestBrief, [PR_NUMBER]);
+    assert.deepEqual(calls.fetchBranch, [HAND_OFF_BRANCH]);
+    assert.deepEqual(calls.markBuilding, [PR_NUMBER]);
+    assert.notEqual(outcomes[0]!.kind, "skipped");
+  });
+
+  it("gives the role the brief the host read", async () => {
+    const sandbox = sandboxFake({ followUpJson: "[]", roleNoCommit: ["follow-up"] });
+    const { passHost } = passHostFake({
+      threads: [botThread()],
+      containsBase: true,
+      sandbox,
+      pullRequestBrief: { number: PR_NUMBER, title: "chore: Read me", body: "The body.", comments: [] },
+    });
+
+    await followUpPassPhase([handOffTarget()], [], BASE, passHost);
+
+    assert.equal(sandbox.runs.find((run) => run.name === "follow-up")?.promptArgs?.ISSUE_TITLE, "chore: Read me");
+  });
+
+  it("doesn't read a brief for a target with an issue", async () => {
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: true });
+
+    await followUpPassPhase([issueTarget()], [otherIssue], BASE, passHost);
+
+    assert.deepEqual(calls.pullRequestBrief, []);
+  });
+
+  it("skips a PR whose brief can't be read, before fetching its branch, and logs why", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], pullRequestBrief: new Error("the owner's label no longer approves it") });
+
+    const outcomes = await followUpPassPhase([handOffTarget()], [], BASE, passHost);
+
+    assert.equal(outcomes[0]!.kind, "skipped");
+    assert.deepEqual(calls.fetchBranch, []);
+    assert.deepEqual(calls.createSandbox, []);
+    assert.deepEqual(calls.markBuilding, []);
+    assert.ok(
+      calls.log.some((line) => /PR #7: couldn't read its brief/.test(line) && /passed on next round/.test(line) && /no longer approves/.test(line)),
+      calls.log.join("\n"),
+    );
+  });
+
+  it("passes on the other targets when one hand-off PR's brief can't be read", async () => {
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: true, pullRequestBrief: new Error("unreadable") });
+
+    const outcomes = await followUpPassPhase([handOffTarget(), issueTarget()], [otherIssue], BASE, passHost);
+
+    assert.equal(outcomes.length, 2);
+    assert.equal(outcomes[0]!.kind, "skipped");
+    assert.deepEqual(calls.fetchBranch, ["feature/51-tidy-widget"]);
+  });
+
+  it("skips a hand-off PR whose branch fails to fetch, and still passes on the rest", async () => {
+    const { passHost, calls } = passHostFake({ threads: [], containsBase: true });
+    passHost.fetchBranch = (branch) => {
+      calls.fetchBranch.push(branch);
+      if (branch === HAND_OFF_BRANCH) throw new Error("git fetch failed");
+    };
+
+    const outcomes = await followUpPassPhase([handOffTarget(), issueTarget()], [otherIssue], BASE, passHost);
+
+    assert.match((outcomes[0] as { reason: string }).reason, /fetch/);
+    assert.equal(calls.fetchBranch.length, 2);
+  });
+
+  it("records a hand-off PR's pass in the run report like any other", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Done.", commit: ROLE_COMMIT.slice(0, 7) }]) });
+    const { passHost } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+    const report = new OutcomeReport();
+
+    await followUpPassPhase([handOffTarget()], [], BASE, passHost, report);
+
+    assert.deepEqual(report.items().map((entry) => ({ number: entry.kind === "pr" ? entry.number : undefined, outcome: entry.outcome })), [
+      { number: PR_NUMBER, outcome: "follow-up pass" },
+    ]);
+  });
+});
+
+// livePassHost calls gh, so its brief reader is pinned as source: the PR's
+// text is read first, then the events and the body edits, so any edit made
+// before the text was read shows up in the edits; and the owner's label must
+// still approve the result (lib/queue.mts#approval).
+describe("livePassHost.pullRequestBrief", () => {
+  const source = readFileSync(new URL("./follow-up-pass.mts", import.meta.url), "utf8");
+  const body = () => {
+    const start = source.indexOf("pullRequestText(", source.indexOf("export const livePassHost"));
+    assert.notEqual(start, -1, "livePassHost reads the PR's text with pullRequestText");
+    return source.slice(start, start + 1_500);
+  };
+
+  it("reads the PR's text, then its events, then its body edits", () => {
+    const text = body();
+    const events = text.indexOf("issueEvents(");
+    const edits = text.indexOf("bodyEdits(");
+
+    assert.notEqual(events, -1, "reads the events");
+    assert.notEqual(edits, -1, "reads the body edits");
+    assert.ok(events < edits, "events before body edits");
+    assert.match(text.slice(edits), /"pullRequest"/);
+  });
+
+  it("requires the owner's sandcastle:follow-up to approve the PR", () => {
+    const text = body();
+
+    assert.match(text, /approval\(\s*FOLLOW_UP_LABEL/);
+    assert.match(text, /throw/);
   });
 });

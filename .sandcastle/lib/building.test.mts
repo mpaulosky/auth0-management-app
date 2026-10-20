@@ -362,3 +362,92 @@ describe("main.mts's sandcastle:building wiring", () => {
     assert.ok(release < sweep, "main.mts releases the run's building labels after the follow-up sweep, not before it");
   });
 });
+
+// #58: a follow-up pass on a hand-off PR claims sandcastle:building on the PR
+// itself. Issue and PR numbers share one namespace, so the claim, the release
+// and the stale-label sweep need no kind.
+describe("sandcastle:building on a pull request", () => {
+  const labels = (labelsByNumber: Record<number, string[]> = {}) => {
+    const added: number[] = [];
+    const removed: number[] = [];
+    const github: BuildingLabels = {
+      issueLabels: (number) => labelsByNumber[number] ?? [],
+      addLabel: (number) => void added.push(number),
+      removeLabel: (number) => void removed.push(number),
+    };
+    return { github, added, removed };
+  };
+
+  it("claims a PR's number like an issue's, remembering it for release", () => {
+    const { github, added } = labels();
+    const marked = new Map<number, number>();
+
+    const claimed = claimBuildingLabel(58, github, marked, 1_000);
+
+    assert.equal(claimed, true);
+    assert.deepEqual(added, [58]);
+    assert.deepEqual([...marked], [[58, 1_000]]);
+  });
+
+  it("leaves a PR another run already claimed to that run", () => {
+    const { github, added } = labels({ 58: [BUILDING_LABEL] });
+    const marked = new Map<number, number>();
+
+    assert.equal(claimBuildingLabel(58, github, marked), false);
+    assert.deepEqual(added, []);
+    assert.equal(marked.size, 0);
+  });
+
+  it("releases a PR this run still holds at the start of the next round", () => {
+    const { github, removed } = labels();
+    const marked = new Map<number, number>([[58, 1_000]]);
+
+    const released = releaseAllBuildingLabels(github, marked, () => {}, 2_000);
+
+    assert.deepEqual(released, [58]);
+    assert.deepEqual(removed, [58]);
+    assert.equal(marked.size, 0);
+  });
+
+  it("clears a crashed run's stale claim on a PR, found among the open issues and PRs carrying the label", () => {
+    const removed: number[] = [];
+    const github: BuildingGitHub = {
+      issuesWithLabel: () => [58],
+      labelTimeline: () => [labeled("2026-10-10T00:00:00Z")],
+      removeLabel: (number) => void removed.push(number),
+    };
+
+    const cleared = clearStaleBuildingLabels(github, BUILDING_LABEL, BUILDING_LABEL_MAX_AGE_MS, Date.parse("2026-10-10T12:00:00Z"));
+
+    assert.deepEqual(cleared, [58]);
+    assert.deepEqual(removed, [58]);
+  });
+});
+
+// gh issue edit refuses a PR number and gh issue list leaves PRs out, so the
+// live wiring goes through the REST labels endpoints, which serve both. Read
+// as source, like main.mts's wiring above, since the live objects call gh.
+describe("building.mts' live wiring", () => {
+  const source = readFileSync(new URL("./building.mts", import.meta.url), "utf8");
+  const live = (name: string) => {
+    const start = source.indexOf(`export const ${name}`);
+    return source.slice(start, source.indexOf("};", start));
+  };
+
+  it("claims, reads and releases labels through the REST helpers, which cover PRs", () => {
+    const wiring = live("liveBuildingLabels");
+
+    assert.match(wiring, /labelsOn\(/);
+    assert.match(wiring, /addLabelOn\(/);
+    assert.match(wiring, /removeLabelFrom\(/);
+    assert.doesNotMatch(wiring, /addIssueLabel|removeIssueLabel|issueLabels\(/);
+  });
+
+  it("finds and clears stale claims through the REST helpers, so a PR's is found too", () => {
+    const wiring = live("liveBuildingGitHub");
+
+    assert.match(wiring, /openNumbersWithLabel\(/);
+    assert.match(wiring, /removeLabelFrom\(/);
+    assert.doesNotMatch(wiring, /issuesWithLabel\(|removeIssueLabel/);
+  });
+});

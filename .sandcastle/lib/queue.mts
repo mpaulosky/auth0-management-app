@@ -61,7 +61,9 @@ export function ownerCheck(hostLogin: () => string, access: IsOwner): IsOwner {
   return (login) => (login !== null && login === hostLogin() ? true : access(login));
 }
 
-export type Approval = { approved: true } | { approved: false; reason: string };
+// `unknown` is set when the answer is "couldn't check" rather than a definite
+// no, so a caller can tell a failed lookup from a stranger's label (#58).
+export type Approval = { approved: true } | { approved: false; reason: string; unknown?: true };
 
 // Whether the issue's most recent `labeled` event adding `queueLabel` was
 // the repository owner's, and nobody but the owner has renamed the issue or
