@@ -14,11 +14,21 @@ name: Sandcastle
 # GITHUB_TOKEN is read-only. Every write goes through SANDCASTLE_GH_TOKEN, the
 # owner's PAT, whose pushes start CI. It has no Workflows permission, so
 # Sandcastle can't change this file.
+#
+# Two repository variables switch on behaviour the host must support first,
+# so this file can merge before the host code does:
+# - SANDCASTLE_FOLLOW_UP_JOB=true (#53): a run started by a review, a CI or
+#   Claude Review completion, or the sandcastle:follow-up label takes its own
+#   concurrency group and sets SANDCASTLE_MODE=follow-up, so the host only
+#   sweeps and runs follow-up passes, and doesn't wait behind a build.
+# - SANDCASTLE_FOLLOW_UP_LABEL=true (#58): the owner adding sandcastle:follow-up
+#   to a same-repo PR starts a run, and a chore/ branch's review or CI result
+#   starts one too, so the host can follow up on hand-opened PRs labelled for it.
 "on":  # zizmor: ignore[dangerous-triggers] workflow_run runs this file as it is on main, and the job checks out main, never PR code.
   issues:
     types: [labeled, unlabeled]
   pull_request:
-    types: [unlabeled]
+    types: [labeled, unlabeled]
   pull_request_review:
     types: [submitted]
   # The name: of ci.yml and of claude-review.yml: workflow_run matches workflow
@@ -44,13 +54,22 @@ jobs:
     name: Sandcastle
     runs-on: ubuntu-24.04
     timeout-minutes: 350
+    # A follow-up-only run (SANDCASTLE_FOLLOW_UP_JOB) queues in its own group,
+    # beside a build rather than behind it. The same condition sets
+    # SANDCASTLE_MODE in the Run Sandcastle step: keep the two in step.
     concurrency:
-      group: sandcastle
+      group: >-
+        ${{ vars.SANDCASTLE_FOLLOW_UP_JOB == 'true'
+          && (github.event_name == 'pull_request_review' || github.event_name == 'workflow_run'
+            || (github.event_name == 'pull_request' && github.event.action == 'labeled'))
+          && 'sandcastle-follow-up' || 'sandcastle' }}
       cancel-in-progress: false
     # Label events start a run only when the owner adds Sandcastle or removes a
     # hand-back label, so the labels the host applies itself (sandcastle:ready,
     # bug) end here. A review or CI run counts only for a same-repo issue
-    # branch, so a fork never runs with the secrets.
+    # branch, so a fork never runs with the secrets. With
+    # SANDCASTLE_FOLLOW_UP_LABEL, the owner adding sandcastle:follow-up to a
+    # same-repo PR counts too, and so does a chore/ branch's review or CI run.
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
       || github.event_name == 'schedule'
@@ -60,18 +79,25 @@ jobs:
       || ((github.event_name == 'issues' || github.event_name == 'pull_request') && github.event.action == 'unlabeled'
         && (github.event.label.name == 'sandcastle:needs-info' || github.event.label.name == 'sandcastle:needs-human')
         && github.event.sender.login == github.repository_owner)
+      || (github.event_name == 'pull_request' && github.event.action == 'labeled'
+        && vars.SANDCASTLE_FOLLOW_UP_LABEL == 'true'
+        && github.event.label.name == 'sandcastle:follow-up'
+        && github.event.sender.login == github.repository_owner
+        && github.event.pull_request.head.repo.full_name == github.repository)
       || (github.event_name == 'pull_request_review'
         && github.event.review.user.login == 'copilot-pull-request-reviewer[bot]'
         && github.event.pull_request.head.repo.full_name == github.repository
         && (startsWith(github.event.pull_request.head.ref, 'feature/')
           || startsWith(github.event.pull_request.head.ref, 'fix/')
-          || startsWith(github.event.pull_request.head.ref, 'hotfix/')))
+          || startsWith(github.event.pull_request.head.ref, 'hotfix/')
+          || (vars.SANDCASTLE_FOLLOW_UP_LABEL == 'true' && startsWith(github.event.pull_request.head.ref, 'chore/'))))
       || (github.event_name == 'workflow_run'
         && (github.event.workflow_run.name != 'Claude Review' || github.event.workflow_run.conclusion == 'success')
         && github.event.workflow_run.head_repository.full_name == github.repository
         && (startsWith(github.event.workflow_run.head_branch, 'feature/')
           || startsWith(github.event.workflow_run.head_branch, 'fix/')
-          || startsWith(github.event.workflow_run.head_branch, 'hotfix/')))
+          || startsWith(github.event.workflow_run.head_branch, 'hotfix/')
+          || (vars.SANDCASTLE_FOLLOW_UP_LABEL == 'true' && startsWith(github.event.workflow_run.head_branch, 'chore/'))))
 
     steps:
       - name: Check the secrets
@@ -161,8 +187,16 @@ jobs:
       # names, taking a blank one's value from the host's environment. The file
       # is git-ignored, so it's written here with the key and no value: the
       # secret stays in the environment. Never GH_TOKEN, which the host refuses.
+      # SANDCASTLE_MODE is follow-up for a run in the sandcastle-follow-up
+      # group (the job's concurrency: has the same condition), and empty
+      # otherwise, which is a full run.
       - name: Run Sandcastle
         env:
+          SANDCASTLE_MODE: >-
+            ${{ vars.SANDCASTLE_FOLLOW_UP_JOB == 'true'
+              && (github.event_name == 'pull_request_review' || github.event_name == 'workflow_run'
+                || (github.event_name == 'pull_request' && github.event.action == 'labeled'))
+              && 'follow-up' || '' }}
           GH_TOKEN: ${{ secrets.SANDCASTLE_GH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

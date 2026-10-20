@@ -401,7 +401,10 @@ Triggers:
   `claude-review.yml`, since `workflow_run` matches workflow names, not file names), only for same-repo `feature/*` / `fix/*` / `hotfix/*` heads, so a fork never runs with
   secrets. Claude Review is followed by its completion because it posts with `GITHUB_TOKEN`, whose review starts no `pull_request_review` run, so without it a Claude review
   that lands after CI would wait for the next scheduled run;
-- `workflow_dispatch`, and `schedule` every 2 hours as a backstop for blockers cleared by merges and PRs that fall behind `main` (`push: main` deliberately isn't a trigger).
+- `workflow_dispatch`, and `schedule` every 2 hours as a backstop for blockers cleared by merges and PRs that fall behind `main` (`push: main` deliberately isn't a trigger);
+- with the repository variable `SANDCASTLE_FOLLOW_UP_LABEL` set to `true` ([#58](https://github.com/mpaulosky/auth0-management-app/issues/58)): `pull_request: labeled` where the owner
+  adds exactly `sandcastle:follow-up` to a same-repo PR, and the review and `workflow_run` triggers above for `chore/*` heads too, so the host can follow up on hand-opened
+  PRs labelled for it. Until the host supports that label, the variable stays unset and these events end as skipped jobs.
 
 Event triggers can't filter by label name, so every `labeled` / `unlabeled` event starts the workflow. The job's `if:` checks `github.event.label.name` against the
 exact names above (and the fork and branch conditions), so labels the host applies (`sandcastle:ready`, `bug`) end as a skipped job and never start Sandcastle. For label
@@ -414,6 +417,11 @@ with the write token, and every other event runs the host code checked out from 
 
 **Overlap:** `concurrency: { group: sandcastle, cancel-in-progress: false }` on the **job**, not the workflow, so a filtered-out event is skipped before it takes the
 pending slot and can't displace a real pending run. One run going and at most one pending. Every run re-reads the whole queue, so collapsed triggers lose nothing.
+
+**Follow-up runs** ([#53](https://github.com/mpaulosky/auth0-management-app/issues/53)): with the repository variable `SANDCASTLE_FOLLOW_UP_JOB` set to `true`, a run started
+by `pull_request_review`, `workflow_run` or `pull_request: labeled` takes the group `sandcastle-follow-up` instead, and the run step sets `SANDCASTLE_MODE=follow-up`. The host
+then only sweeps and runs follow-up passes, so a PR's review or CI result is answered beside a running build rather than after it. The two expressions share one condition, so a
+follow-up-group run always has the mode set. Until the host supports the mode, the variable stays unset, and every run takes `sandcastle` as before.
 
 **Time:** the job has `timeout-minutes: 350`, and no new round starts after 4 hours. A usage or rate-limit error ends the run cleanly like the time budget: it doesn't fail roles or
 bounce issues. The next trigger resumes the work.
