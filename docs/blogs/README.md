@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-10-20 | [feat(sandcastle): Follow up on hand-opened PRs labelled for it](2026-10-20-pr-70-feat-sandcastle-follow-up-on-hand-opened-prs-labelled-for-it.md) | release,automation |
 | 2026-10-20 | [feat(Users): List and search the Tenant's Users](2026-10-20-pr-59-feat-users-list-and-search-the-tenant-s-users.md) | release,automation |
 | 2026-10-20 | [ci(sandcastle): Answer PR follow-ups without waiting behind a build](2026-10-20-pr-64-ci-sandcastle-answer-pr-follow-ups-without-waiting-behind-a-build.md) | release,automation |
 | 2026-10-20 | [feat(ManagementApi): Cache Management API reads](2026-10-20-pr-56-feat-managementapi-cache-management-api-reads.md) | release,automation |
