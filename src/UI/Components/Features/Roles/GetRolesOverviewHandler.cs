@@ -18,6 +18,9 @@ namespace UI.Components.Features.Roles;
 /// </summary>
 public sealed class GetRolesOverviewHandler
 {
+	// The Users page's page size, so the unfiltered table shows the same first page as the Users list.
+	private const int PageSize = 25;
+
 	private readonly IManagementApi _managementApi;
 
 	/// <summary>
@@ -40,10 +43,82 @@ public sealed class GetRolesOverviewHandler
 	///   The page's content, or the Management API's failure unchanged, such as <c>Role.NotFound</c> or
 	///   <c>ManagementApi.RateLimited</c>.
 	/// </returns>
-	public Task<Result<RolesOverview>> HandleAsync(GetRolesOverviewQuery query, CancellationToken cancellationToken)
+	public async Task<Result<RolesOverview>> HandleAsync(GetRolesOverviewQuery query, CancellationToken cancellationToken)
 	{
-		_ = _managementApi;
+		ArgumentNullException.ThrowIfNull(query);
 
-		throw new NotImplementedException();
+		Result<IReadOnlyList<RoleSummary>> roles =
+			await _managementApi.ListRolesAsync(cancellationToken).ConfigureAwait(false);
+		if (roles.Failure)
+		{
+			return FailedAs(roles);
+		}
+
+		// Every Role's members, because each tile counts them and each row marks every Role. The calls run one at a
+		// time: the token bucket would queue them anyway, and the cache answers them on a later load.
+		List<RoleMembers> members = [];
+		foreach (RoleSummary role in roles.Value!)
+		{
+			Result<RoleMembers> roleMembers =
+				await _managementApi.ListRoleMembersAsync(role.Id, cancellationToken).ConfigureAwait(false);
+			if (roleMembers.Failure)
+			{
+				return FailedAs(roleMembers);
+			}
+
+			members.Add(roleMembers.Value!);
+		}
+
+		List<RoleTile> tiles = [.. roles.Value!.Select((role, index) =>
+			new RoleTile(role, members[index].Users.Count, members[index].Truncated))];
+
+		IReadOnlyList<UserSummary> users;
+		bool selectedRoleTruncated = false;
+		if (query.RoleId is null)
+		{
+			Result<UserPage> page = await _managementApi.SearchUsersAsync(new UserSearch(null, 1, PageSize),
+				cancellationToken).ConfigureAwait(false);
+			if (page.Failure)
+			{
+				return FailedAs(page);
+			}
+
+			users = page.Value!.Users;
+		}
+		else
+		{
+			int selected = tiles.FindIndex(tile => tile.Role.Id == query.RoleId);
+			if (selected < 0)
+			{
+				return ManagementApiError.RoleNotFound.ToResult<RolesOverview>();
+			}
+
+			users = members[selected].Users;
+			selectedRoleTruncated = members[selected].Truncated;
+		}
+
+		List<HashSet<string>> memberIds = [.. members.Select(roleMembers =>
+			roleMembers.Users.Select(user => user.Id).ToHashSet(StringComparer.Ordinal))];
+
+		List<RoleUserRow> rows = [.. users.Select(user => new RoleUserRow(user,
+			[.. members.Select((roleMembers, index) => Holding(user, roleMembers, memberIds[index]))]))];
+
+		return Result.Ok(new RolesOverview(tiles, query.RoleId, rows, selectedRoleTruncated));
+	}
+
+	// A User missing from a Truncated Role's members may still hold it, past the 1000 fetched.
+	private static RoleHolding Holding(UserSummary user, RoleMembers roleMembers, HashSet<string> memberIds)
+	{
+		if (memberIds.Contains(user.Id))
+		{
+			return RoleHolding.Yes;
+		}
+
+		return roleMembers.Truncated ? RoleHolding.Unknown : RoleHolding.No;
+	}
+
+	private static Result<RolesOverview> FailedAs(Result failed)
+	{
+		return Result.Fail<RolesOverview>(failed.Error ?? string.Empty, failed.ErrorCode, failed.Details);
 	}
 }

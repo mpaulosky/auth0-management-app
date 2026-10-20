@@ -7,6 +7,8 @@
 // Project Name :  UI
 // =============================================
 
+using UI.ManagementApi;
+
 namespace UI.Components.Features.Roles;
 
 /// <summary>
@@ -21,6 +23,14 @@ public static class RolesFeature
 	/// <returns>The same service collection, for chaining.</returns>
 	public static IServiceCollection AddRolesFeature(this IServiceCollection services)
 	{
-		throw new NotImplementedException();
+		ArgumentNullException.ThrowIfNull(services);
+
+		// AddManagementApi() registers each service once, so the Users slice can call it too.
+		services.AddManagementApi();
+
+		// The handler holds no state and the seam is a singleton, so one instance serves every circuit.
+		services.AddSingleton<GetRolesOverviewHandler>();
+
+		return services;
 	}
 }

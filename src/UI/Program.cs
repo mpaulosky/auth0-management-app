@@ -14,6 +14,7 @@ using ServiceDefaults;
 using UI.Components;
 using UI.Components.Features.Authentication;
 using UI.Components.Features.Palettes;
+using UI.Components.Features.Roles;
 using UI.Components.Features.Themes;
 using UI.Components.Layout;
 
@@ -34,6 +35,7 @@ builder.Services.AddSingleton(new BuildInfo(BuildInfoConstants.Release, BuildInf
 
 builder.Services.AddAuthenticationFeature(builder.Configuration);
 builder.Services.AddPaletteFeature();
+builder.Services.AddRolesFeature();
 builder.Services.AddThemeFeature();
 builder.Services.AddCascadingAuthenticationState();
 
