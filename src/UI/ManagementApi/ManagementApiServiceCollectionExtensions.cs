@@ -83,7 +83,9 @@ public static class ManagementApiServiceCollectionExtensions
 				httpClient: httpClient);
 		});
 
-		services.TryAddSingleton<IManagementApi, ManagementApiAdapter>();
+		services.TryAddSingleton<ManagementApiAdapter>();
+		services.TryAddSingleton<IManagementApi>(static provider => new CachedManagementApi(
+			provider.GetRequiredService<ManagementApiAdapter>(), provider.GetRequiredService<TimeProvider>()));
 
 		return services;
 	}
