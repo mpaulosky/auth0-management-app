@@ -25,19 +25,22 @@ export type BriefPromptArgs = Record<
 // is the sentence that opens the role prompt's brief: it names the issue, or
 // says the PR's title and description are the brief.
 export function briefPromptArgs(brief: PassBrief, branch: string): BriefPromptArgs {
-  if (brief.kind !== "issue") throw new Error("Not implemented");
-  const { issue } = brief;
+  const text = brief.kind === "issue" ? brief.issue : brief.pr;
   return {
-    TASK_ID: String(issue.number),
-    ISSUE_TITLE: issue.title,
-    ISSUE_BODY: issue.body,
-    ISSUE_COMMENTS: issue.comments.length > 0 ? issue.comments.join("\n\n---\n\n") : "(no comments)",
+    TASK_ID: String(text.number),
+    ISSUE_TITLE: text.title,
+    ISSUE_BODY: text.body,
+    ISSUE_COMMENTS: text.comments.length > 0 ? text.comments.join("\n\n---\n\n") : "(no comments)",
     BRANCH: branch,
     BASE_BRANCH,
-    BRIEF_SOURCE: "",
+    BRIEF_SOURCE:
+      brief.kind === "issue"
+        ? `The branch implements issue ${text.number}`
+        : `Pull request #${text.number} has no Sandcastle issue, so its title and description are the brief. Its title`,
   };
 }
 
+// The prompt arguments of a role that builds `issue`.
 export function issuePromptArgs(issue: SandcastleIssue, branch: string) {
   return briefPromptArgs({ kind: "issue", issue }, branch);
 }
@@ -48,7 +51,7 @@ export function gateFixerPromptArgs(brief: PassBrief, branch: string, checkpoint
   return { ...briefPromptArgs(brief, branch), CHECKPOINT: String(checkpoint), GATE_OUTPUT: gateOutput };
 }
 
-// The follow-up role (lib/follow-up-pass.mts#runPass) needs the issue, the
+// The follow-up role (lib/follow-up-pass.mts#runPass) needs the brief, the
 // PR number (its prompt can't reach GitHub to learn it), the open review
 // threads it must act on (already sorted and trimmed by
 // lib/follow-up-pass.mts#threadsForRole, so no stranger's comment reaches
