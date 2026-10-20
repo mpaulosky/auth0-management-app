@@ -17,8 +17,13 @@ describe("the pre-push-review skill's reviewers", () => {
     assert.match(frontMatter, /^tools: Read, Grep, Glob$/m);
   });
 
-  it("can't read the ledgers, which hold accepted security findings, nor can any other Claude Code agent here", () => {
-    assert.ok(settings.permissions?.deny?.includes("Read(**/.git/review/**)"));
+  // Rooted at the filesystem (`//`): a rule without it is relative to the
+  // session's folder, and from a worktree the ledgers are in the main
+  // checkout's .git. The folder itself is denied too, so a Grep or Glob of it
+  // is refused, not only a Read of a file in it.
+  it("can't read the ledgers, which hold accepted security findings, from any checkout or worktree", () => {
+    assert.ok(settings.permissions?.deny?.includes("Read(//**/.git/review)"));
+    assert.ok(settings.permissions?.deny?.includes("Read(//**/.git/review/**)"));
   });
 
   it("are started as that agent, and never as another type", () => {

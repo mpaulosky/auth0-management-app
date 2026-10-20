@@ -570,8 +570,10 @@ export function renderReport(ledger: Ledger): string {
 // The PR description's `## Review notes`: the findings a person accepted, for
 // people reading the PR, except security findings, which are only counted.
 // GitHub's reviewers aren't known to read the description, so a thread one
-// opens on an accepted finding gets a reply quoting the reason (never for a
-// security finding). Empty when none was accepted.
+// opens on an accepted finding gets the same "Left for the owner." reply as
+// every thread left for the owner (CLAUDE.md); the reason stays in the ledger
+// and, for a finding that isn't a security one, in these notes. Empty when
+// none was accepted.
 export function renderReviewNotes(ledger: Ledger): string {
   const accepted = ledger.findings.filter((finding) => finding.status === "accepted");
   // An accepted security finding is a known weakness left as it is, and the

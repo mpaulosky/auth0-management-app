@@ -1,7 +1,8 @@
 {
 	"permissions": {
 		"deny": [
-			"Read(**/.git/review/**)"
+			"Read(//**/.git/review)",
+			"Read(//**/.git/review/**)"
 		]
 	},
 	"hooks": {
