@@ -349,4 +349,16 @@ describe("main.mts's sandcastle:building wiring", () => {
     assert.ok(release > loop, "main.mts doesn't release labels inside the round loop");
     assert.ok(release < at("gateIssues()"));
   });
+
+  // #53: the sweep skips a PR whose issue is labelled sandcastle:building, so
+  // a label this run still holds must go before the sweep, or the run would
+  // skip its own PR for the round.
+  it("releases the labels the run still holds before the round's follow-up sweep", () => {
+    const loop = at("for (let iteration = 1;");
+    const release = main.indexOf("releaseAllBuildingLabels()", loop);
+    const sweep = main.indexOf("followUpPhase(", loop);
+
+    assert.ok(release > loop, "main.mts doesn't release labels inside the round loop");
+    assert.ok(release < sweep, "main.mts releases the run's building labels after the follow-up sweep, not before it");
+  });
 });

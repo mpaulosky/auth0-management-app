@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import {
   BUILD_ROLES,
@@ -10,9 +11,12 @@ import {
   ROLE_AGENTS,
   QueueScopeError,
   REVIEW_LABEL,
+  RunModeError,
   SANDCASTLE_LABELS,
+  SANDCASTLE_WORKFLOW,
   budgetMinutesFrom,
   queueScopeFrom,
+  runModeFrom,
 } from "./config.mts";
 
 const opus = "claude-opus-5-5";
@@ -162,5 +166,41 @@ describe("budgetMinutesFrom", () => {
 describe("SANDCASTLE_LABELS", () => {
   it("doesn't include review:claude, which the host creates separately", () => {
     assert.ok(!SANDCASTLE_LABELS.some((label) => label.name.toLowerCase() === REVIEW_LABEL.toLowerCase()));
+  });
+});
+
+// #53: SANDCASTLE_MODE=follow-up makes a run sweep and pass once, then exit.
+// The workflow writes the value exactly, so nothing is trimmed or case-folded.
+describe("runModeFrom", () => {
+  it("is a full run when SANDCASTLE_MODE is unset", () => {
+    assert.equal(runModeFrom({}), "full");
+  });
+
+  it("is a full run when SANDCASTLE_MODE is empty", () => {
+    assert.equal(runModeFrom({ SANDCASTLE_MODE: "" }), "full");
+  });
+
+  it("is a follow-up run when SANDCASTLE_MODE is follow-up", () => {
+    assert.equal(runModeFrom({ SANDCASTLE_MODE: "follow-up" }), "follow-up");
+  });
+
+  for (const bad of ["full", "Follow-up", " follow-up", "follow-up ", "build", " "]) {
+    it(`throws RunModeError for "${bad}", naming SANDCASTLE_MODE and the value`, () => {
+      assert.throws(
+        () => runModeFrom({ SANDCASTLE_MODE: bad }),
+        (error: unknown) =>
+          error instanceof RunModeError && error.message.includes("SANDCASTLE_MODE") && error.message.includes(`"${bad}"`),
+      );
+    });
+  }
+});
+
+// #53: the sweep ignores the job's own check by this workflow name, so it has
+// to match the `name:` of the workflow file.
+describe("SANDCASTLE_WORKFLOW", () => {
+  it("is the name of .github/workflows/sandcastle.yml", () => {
+    const workflow = readFileSync(new URL("../../.github/workflows/sandcastle.yml", import.meta.url), "utf8");
+
+    assert.match(workflow, new RegExp(`^name: ${SANDCASTLE_WORKFLOW}$`, "m"));
   });
 });

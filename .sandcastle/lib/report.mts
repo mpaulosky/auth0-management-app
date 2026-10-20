@@ -63,7 +63,8 @@ export type Outcome =
   | "stopped"
   | "not published"
   | "updated"
-  | "follow-up pass";
+  | "follow-up pass"
+  | "follow-up failed";
 
 // `detail` is host-written text only, never raw error output (see the design
 // note's Risks: the summary is public on a public repository).
