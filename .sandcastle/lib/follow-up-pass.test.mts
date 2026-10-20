@@ -3,7 +3,14 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import type { Sandbox, SandboxRunOptions } from "@ai-hero/sandcastle";
 import { createCheckedSandbox } from "./build.mts";
-import { FOLLOW_UP_MARKER, FOLLOW_UP_PASS_CAP, FOLLOW_UP_REPLY_MARKER, SESSION_REPLY_MARKER } from "./config.mts";
+import {
+  FOLLOW_UP_MARKER,
+  FOLLOW_UP_PASS_CAP,
+  FOLLOW_UP_REPLY_MARKER,
+  GIVE_UP_MARKER,
+  SESSION_REPLY_MARKER,
+  WORKTREE_TAMPERED_MARKER,
+} from "./config.mts";
 import { UncountedStopError } from "./errors.mts";
 import type { CheckState, PassTarget } from "./follow-up.mts";
 import {
@@ -566,6 +573,14 @@ describe("giveUpComment", () => {
     assert.match(comment, /```/);
   });
 
+  it("opens with its marker, so scripts/watch-pr.sh doesn't report it as the owner's feedback", () => {
+    assert.ok(giveUpComment("a conflict couldn't be resolved", undefined).startsWith(`${GIVE_UP_MARKER}\n`));
+  });
+
+  it("isn't counted as a follow-up pass", () => {
+    assert.ok(!giveUpComment("a conflict couldn't be resolved", undefined).includes(FOLLOW_UP_MARKER));
+  });
+
   it("names how to re-queue the PR", () => {
     assert.match(giveUpComment("a conflict couldn't be resolved", undefined), /sandcastle:needs-human/);
   });
@@ -874,6 +889,22 @@ describe("runPass", () => {
     assert.deepEqual(calls.resolveThread, ["RT_bot"]);
     assert.equal(calls.commentOnPullRequest.length, 1);
     assert.match(calls.commentOnPullRequest[0]!.body, new RegExp(FOLLOW_UP_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  it("opens the tampered-worktree comment with its marker, so scripts/watch-pr.sh doesn't report it as the owner's feedback", async () => {
+    const sandbox = sandboxFake({ followUpJson: JSON.stringify([{ threadId: "RT_bot", verdict: "fixed", reason: "Returned a Result<T>.", commit: "a".repeat(7) }]) });
+    const { passHost, calls } = passHostFake({
+      threads: [botThread()],
+      containsBase: true,
+      sandbox,
+      worktreeProblems: ["/worktree/.git doesn't point into /repo/.git/worktrees"],
+    });
+
+    await runPass(passTarget(), { kind: "issue", issue }, BASE, passHost);
+
+    const tampered = calls.commentOnPullRequest.at(-1)!.body;
+    assert.ok(tampered.startsWith(`${WORKTREE_TAMPERED_MARKER}\n`));
+    assert.match(tampered, /no longer points at this repository/);
   });
 
   // Acceptance criterion: "An owner thread is replied to but never resolved
