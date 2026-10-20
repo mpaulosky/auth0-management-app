@@ -60,15 +60,14 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 	}
 
 	/// <inheritdoc />
-	[SuppressMessage("Globalization", "CA1308:Normalize strings to uppercase",
-		Justification = "The key follows the plan's normalization, the lower-case form the Users slice searches with.")]
 	public Task<Result<UserPage>> SearchUsersAsync(UserSearch search, CancellationToken cancellationToken)
 	{
 		ArgumentNullException.ThrowIfNull(search);
 
-		// Only the key is normalized: the request goes to Auth0 as given, because Lucene's operators (OR, AND, NOT) are
-		// case-sensitive and lowercasing them would change the query. Callers lower-case the terms they search for.
-		SearchKey key = new(search.Query?.Trim().ToLowerInvariant(), search.Page, search.PerPage);
+		// The key keeps the query's case: the request goes to Auth0 as given, and Lucene's operators (OR, AND, NOT) and
+		// some values are case-sensitive, so two queries that differ in case can return different Users. The Users slice
+		// lower-cases the term it searches for before it builds the query, so its pages still share an entry.
+		SearchKey key = new(search.Query?.Trim(), search.Page, search.PerPage);
 
 		return ReadThroughAsync(key, SearchLifetime, _searchPages,
 			() => _inner.SearchUsersAsync(search, cancellationToken));

@@ -80,7 +80,8 @@ public class CachedManagementApiTests
 
 	/// <summary>
 	///   The stubbed Tenant behind <c>AddManagementApi()</c>: answers every endpoint the cache sits in front of with a
-	///   success, or with Auth0's 429 while <see cref="Failing" /> is set.
+	///   success, with Auth0's 429 while <see cref="Failing" /> is set, or with a dropped connection while
+	///   <see cref="Throwing" /> is set.
 	/// </summary>
 	private sealed class Scenario : IDisposable
 	{
@@ -100,6 +101,11 @@ public class CachedManagementApiTests
 					await held.Released;
 				}
 
+				if (Throwing)
+				{
+					throw new HttpRequestException("The connection dropped.");
+				}
+
 				return Failing ? RateLimited() : Serve(request);
 			};
 		}
@@ -107,6 +113,9 @@ public class CachedManagementApiTests
 		private HeldRead? _held;
 
 		public bool Failing { get; set; }
+
+		/// <summary>Makes every request fail with an <see cref="HttpRequestException" /> instead of an answer.</summary>
+		public bool Throwing { get; set; }
 
 		/// <summary>Makes the next read that reaches Auth0 wait until the returned <see cref="HeldRead" /> is released.</summary>
 		public HeldRead HoldNextRead()
@@ -365,19 +374,34 @@ public class CachedManagementApiTests
 	}
 
 	[Fact]
-	public async Task SearchUsersAsync_QueryDiffersOnlyInCaseAndOuterWhitespace_SharesOneEntry()
+	public async Task SearchUsersAsync_QueryDiffersOnlyInOuterWhitespace_SharesOneEntry()
 	{
 		// Arrange
 		using Scenario scenario = new();
-		await scenario.Api.SearchUsersAsync(new UserSearch("  Jane ", 1, 25), Ct);
+		await scenario.Api.SearchUsersAsync(new UserSearch("  jane ", 1, 25), Ct);
 		int afterFirstRead = scenario.RequestCount;
 
 		// Act
 		await scenario.Api.SearchUsersAsync(new UserSearch("jane", 1, 25), Ct);
-		await scenario.Api.SearchUsersAsync(new UserSearch("JANE", 1, 25), Ct);
 
 		// Assert
-		scenario.RequestCount.Should().Be(afterFirstRead, "the key is the trimmed lower-case query");
+		scenario.RequestCount.Should().Be(afterFirstRead, "the key is the trimmed query");
+	}
+
+	[Theory]
+	[InlineData("name:a OR name:b", "name:a or name:b")]
+	[InlineData("user_id:\"auth0|AbC\"", "user_id:\"auth0|abc\"")]
+	public async Task SearchUsersAsync_QueryDiffersInCase_UsesAnotherEntry(string first, string second)
+	{
+		// Arrange
+		using Scenario scenario = new();
+		await scenario.Api.SearchUsersAsync(new UserSearch(first, 1, 25), Ct);
+
+		// Act
+		bool reached = await scenario.ReachesAuth0Async(async () => await scenario.Api.SearchUsersAsync(new UserSearch(second, 1, 25), Ct));
+
+		// Assert
+		reached.Should().BeTrue("Lucene reads these two queries differently, so one mustn't be answered with the other's page");
 	}
 
 	[Theory]
@@ -387,6 +411,8 @@ public class CachedManagementApiTests
 	[InlineData("ListRoleMembers", "AssignRole")]
 	[InlineData("ListRoleMembers", "RemoveRole")]
 	[InlineData("ListRoles", "CreateRole")]
+	[InlineData("SearchUsers", "UpdateProfileFields")]
+	[InlineData("ListRoleMembers", "UpdateProfileFields")]
 	public async Task ReadAsync_WriteEvictsItsEntryWhileTheReadIsInFlight_DoesNotCacheTheRead(string read, string write)
 	{
 		// Arrange
@@ -576,6 +602,32 @@ public class CachedManagementApiTests
 		// Assert
 		written.Success.Should().BeFalse();
 		reached.Should().BeTrue("a write that failed may still have reached Auth0, so the entries it makes stale are dropped anyway");
+	}
+
+	[Theory]
+	[InlineData("UpdateProfileFields", "GetUser")]
+	[InlineData("UpdateProfileFields", "SearchUsers")]
+	[InlineData("UpdateProfileFields", "ListRoleMembers")]
+	[InlineData("AssignRole", "GetUser")]
+	[InlineData("AssignRole", "ListRoleMembers")]
+	[InlineData("RemoveRole", "GetUser")]
+	[InlineData("RemoveRole", "ListRoleMembers")]
+	[InlineData("CreateRole", "ListRoles")]
+	public async Task Write_Throws_StillEvictsTheEntriesItMakesStale(string write, string read)
+	{
+		// Arrange
+		using Scenario scenario = new();
+		await ReadAsync(scenario.Api, read);
+		scenario.Throwing = true;
+
+		// Act
+		Func<Task> act = async () => await ApiCalls.InvokeAsync(scenario.Api, write, Ct);
+		await act.Should().ThrowAsync<Exception>();
+		scenario.Throwing = false;
+		bool reached = await scenario.ReachesAuth0Async(async () => await ReadAsync(scenario.Api, read));
+
+		// Assert
+		reached.Should().BeTrue("a write that threw may still have reached Auth0, so the entries it makes stale are dropped anyway");
 	}
 
 	[Fact]
