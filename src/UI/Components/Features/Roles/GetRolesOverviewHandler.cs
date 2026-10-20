@@ -55,8 +55,9 @@ public sealed class GetRolesOverviewHandler
 			return FailedAs(roles);
 		}
 
-		// Every Role's members, because each tile counts them and each row marks every Role. The calls run one at a
-		// time: the token bucket would queue them anyway, and the cache answers them on a later load.
+		// Every Role's members, because each tile counts them and each row marks every Role. A load costs one call per
+		// page of each Role's members (up to 10 for a Truncated Role), so the page loads once and filters locally. The
+		// calls run one at a time: the token bucket would queue them anyway, and the cache answers them on a later load.
 		List<RoleTile> tiles = [];
 		List<RoleMembers> members = [];
 		foreach (RoleSummary role in roles.Value!)
@@ -73,8 +74,7 @@ public sealed class GetRolesOverviewHandler
 			tiles.Add(new RoleTile(role, fetched.Users.Count, fetched.Truncated));
 		}
 
-		IReadOnlyList<UserSummary> users;
-		bool selectedRoleTruncated = false;
+		IReadOnlyList<UserSummary>? firstPage = null;
 		if (query.RoleId is null)
 		{
 			Result<UserPage> page = await _managementApi.SearchUsersAsync(new UserSearch(null, 1, PageSize),
@@ -84,38 +84,15 @@ public sealed class GetRolesOverviewHandler
 				return FailedAs(page);
 			}
 
-			users = page.Value!.Users;
+			firstPage = page.Value!.Users;
 		}
-		else
+		else if (!tiles.Exists(tile => tile.Role.Id == query.RoleId))
 		{
-			int selected = tiles.FindIndex(tile => tile.Role.Id == query.RoleId);
-			if (selected < 0)
-			{
-				return ManagementApiError.RoleNotFound.ToResult<RolesOverview>();
-			}
-
-			users = members[selected].Users;
-			selectedRoleTruncated = members[selected].Truncated;
+			return ManagementApiError.RoleNotFound.ToResult<RolesOverview>();
 		}
 
-		List<HashSet<string>> memberIds = [.. members.Select(roleMembers =>
-			roleMembers.Users.Select(user => user.Id).ToHashSet(StringComparer.Ordinal))];
-
-		List<RoleUserRow> rows = [.. users.Select(user => new RoleUserRow(user,
-			[.. members.Select((roleMembers, index) => Holding(user, memberIds[index], roleMembers.Truncated))]))];
-
-		return Result.Ok(new RolesOverview(tiles, query.RoleId, rows, selectedRoleTruncated));
-	}
-
-	// A User missing from a Truncated Role's members may still hold it, past the 1000 fetched.
-	private static RoleHolding Holding(UserSummary user, HashSet<string> memberIds, bool truncated)
-	{
-		if (memberIds.Contains(user.Id))
-		{
-			return RoleHolding.Yes;
-		}
-
-		return truncated ? RoleHolding.Unknown : RoleHolding.No;
+		// The overview keeps the members, so the page filters to a picked Role without another load.
+		return Result.Ok(RolesOverview.Build(tiles, members, firstPage, query.RoleId)!);
 	}
 
 	private static Result<RolesOverview> FailedAs(Result failed)

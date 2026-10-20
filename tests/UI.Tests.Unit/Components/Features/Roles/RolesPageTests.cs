@@ -42,7 +42,10 @@ public class RolesPageTests : BunitContext
 	private const string ErrorBoundaryMessage =
 		"The app couldn't reach Auth0's Management API. Try again, or ask whoever runs the app to check its Auth0 Management settings.";
 
+	private const string ModulePath = "./Components/Features/Roles/RolesContent.razor.js";
+
 	private readonly IManagementApi _api = Tenant();
+	private readonly BunitJSModuleInterop _module;
 
 	public RolesPageTests()
 	{
@@ -51,6 +54,8 @@ public class RolesPageTests : BunitContext
 		Services.AddRolesFeature();
 		AddAuthorization().SetAuthorized("an-admin");
 		JSInterop.Mode = JSRuntimeMode.Loose;
+		_module = JSInterop.SetupModule(ModulePath);
+		_module.Mode = JSRuntimeMode.Loose;
 		SetRendererInfo(new RendererInfo("Server", true));
 	}
 
@@ -246,11 +251,81 @@ public class RolesPageTests : BunitContext
 		TileOf(cut, "Editor").Click();
 
 		// Assert
-		cut.WaitForAssertion(() => JSInterop.Invocations
-			.Where(invocation => invocation.Arguments.Any(argument => argument?.ToString()?.Contains($"role={EditorRole.Id}", StringComparison.Ordinal) == true))
-			.Should().NotBeEmpty("the page writes role=<id> into the URL with history.replaceState"));
+		cut.WaitForAssertion(() => _module.Invocations
+			.Where(invocation => invocation.Identifier == "replaceUrl"
+				&& invocation.Arguments.Any(argument => argument?.ToString()?.Contains($"role={EditorRole.Id}", StringComparison.Ordinal) == true))
+			.Should().NotBeEmpty("the page writes role=<id> into the URL through the module, which keeps the history state"));
 		navigation.Uri.Should().Be(uriBefore, "the tile doesn't navigate: that would be an enhanced navigation, a server round trip");
 		HistoryCount().Should().Be(historyBefore);
+	}
+
+	[Fact]
+	public void Click_Tile_FiltersWithoutCallingTheManagementApiAgain()
+	{
+		// Arrange
+		IRenderedComponent<RolesPage> cut = RenderPage();
+		_api.ClearReceivedCalls();
+
+		// Act
+		TileOf(cut, "Editor").Click();
+		cut.WaitForAssertion(() => TileOf(cut, "Editor").GetAttribute("aria-pressed").Should().Be("true"));
+		TileOf(cut, "Editor").Click();
+
+		// Assert
+		cut.WaitForAssertion(() => cut.FindAll("tbody tr").Should().HaveCount(3));
+		_api.ReceivedCalls().Should().BeEmpty("the loaded members and first page answer both the pick and the clear");
+	}
+
+	[Fact]
+	public void Click_PickedTileAfterOpeningTheUrlWithRole_ListsTheFirstPageFromTheSearch()
+	{
+		// Arrange
+		IRenderedComponent<RolesPage> cut = RenderPage($"?role={EditorRole.Id}");
+
+		// Act
+		TileOf(cut, "Editor").Click();
+
+		// Assert
+		cut.WaitForAssertion(() => cut.FindAll("tbody tr").Should().HaveCount(3));
+		_api.Received(1).SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public void Click_ShowAllRolesAfterAPickedRoleFailsToLoad_BringsTheTableBack()
+	{
+		// Arrange
+		_api.ListRoleMembersAsync("rol_gone", Arg.Any<CancellationToken>()).Returns(RoleNotFound<RoleMembers>());
+		IRenderedComponent<RolesPage> cut = RenderPage("?role=rol_gone");
+
+		// Act
+		cut.Find("button:not([aria-pressed])").Click();
+
+		// Assert
+		cut.WaitForAssertion(() =>
+		{
+			cut.FindAll("table").Should().ContainSingle();
+			cut.FindAll("[role='alert']").Should().BeEmpty();
+			cut.FindAll("tbody tr").Should().HaveCount(3);
+		});
+	}
+
+	[Fact]
+	public void Click_TryAgainAfterTheFirstLoadIsRateLimited_LoadsTheRolesOnceTheLimitLifts()
+	{
+		// Arrange
+		_api.ListRolesAsync(Arg.Any<CancellationToken>()).Returns(RateLimited<IReadOnlyList<RoleSummary>>());
+		IRenderedComponent<RolesPage> cut = RenderPage();
+		_api.ListRolesAsync(Arg.Any<CancellationToken>()).Returns(RolesTestData.Roles(AdminRole, EditorRole, ViewerRole));
+
+		// Act
+		cut.Find("button:not([aria-pressed])").Click();
+
+		// Assert
+		cut.WaitForAssertion(() =>
+		{
+			cut.FindAll("table").Should().ContainSingle();
+			cut.FindAll("[role='alert']").Should().BeEmpty();
+		});
 	}
 
 	[Fact]
