@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-10-20 | [ci(sandcastle): Answer PR follow-ups without waiting behind a build](2026-10-20-pr-64-ci-sandcastle-answer-pr-follow-ups-without-waiting-behind-a-build.md) | release,automation |
 | 2026-10-20 | [feat(ManagementApi): Cache Management API reads](2026-10-20-pr-56-feat-managementapi-cache-management-api-reads.md) | release,automation |
 | 2026-10-20 | [ci(sandcastle): Add switched-off triggers for follow-up runs](2026-10-20-pr-60-ci-sandcastle-add-switched-off-triggers-for-follow-up-runs.md) | release,automation |
 | 2026-10-20 | [feat(sandcastle): Label every Sandcastle PR that never had review:claude](2026-10-20-pr-55-feat-sandcastle-label-every-sandcastle-pr-that-never-had-review-claude.md) | release,automation |
