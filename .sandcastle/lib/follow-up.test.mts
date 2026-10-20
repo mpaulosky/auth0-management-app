@@ -4,6 +4,7 @@ import type { BranchRefs } from "./branches.mts";
 import { BUILDING_LABEL, COPILOT_REVIEWER, FOLLOW_UP_LABEL, FOLLOW_UP_REPLY_MARKER, PR_MARKER, REVIEW_LABEL, SESSION_REPLY_MARKER } from "./config.mts";
 import { HeadMovedError, type ClosedPullRequest, type ContentEdit, type IssueEvent, type PullRequestIdentity, type TimelineLabelEvent } from "./github.mts";
 import {
+  admitToSweep,
   closedPrHandBackComment,
   closedWithoutMerging,
   decide,
@@ -13,12 +14,15 @@ import {
   isSandcastlePullRequest,
   issueNumberOf,
   startFromMain,
+  sweepContext,
   sweepPullRequests,
   sweepSkipReason,
   sweepSubject,
   type FollowUpGitHub,
+  type SweepContext,
   type SweepPullRequest,
 } from "./follow-up.mts";
+import { approval } from "./queue.mts";
 import { OutcomeReport, UnlabelledPrReport, WaitingPrReport } from "./report.mts";
 
 const HOST = "sandcastle-bot";
@@ -34,6 +38,7 @@ function pr(overrides: Partial<SweepPullRequest> = {}): SweepPullRequest {
   return {
     number,
     url: `https://github.com/o/r/pull/${number}`,
+    title: `Add search (#${number})`,
     author: HOST,
     body: `${PR_MARKER}\nCloses #42`,
     baseRefName: "main",
@@ -2606,5 +2611,145 @@ describe("sweepPullRequests' hand-offs", () => {
 
       assert.equal(closedWithoutMerging(prs, 42, HOST), undefined);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #65: the status command calls the sweep's own admission checks, taken out of
+// sweepPullRequests, so it can't disagree with what the sweep does.
+// ---------------------------------------------------------------------------
+
+describe("sweepContext", () => {
+  it("reads the host's login, the in-scope issues and whether the run follows hand-offs, in that order", () => {
+    const reads: string[] = [];
+
+    sweepContext({
+      hostLogin: () => (reads.push("hostLogin"), HOST),
+      inScopeIssues: () => (reads.push("inScopeIssues"), []),
+      followsHandOffs: () => (reads.push("followsHandOffs"), true),
+    });
+
+    assert.deepEqual(reads, ["hostLogin", "inScopeIssues", "followsHandOffs"]);
+  });
+
+  it("computes the in-scope numbers and the issues labelled sandcastle:building", () => {
+    const issues = [
+      { number: 42, labels: [] },
+      { number: 43, labels: [BUILDING_LABEL] },
+      { number: 44, labels: ["Sandcastle:Building"] },
+    ];
+
+    const context = sweepContext({ hostLogin: () => HOST, inScopeIssues: () => issues, followsHandOffs: () => false });
+
+    assert.equal(context.host, HOST);
+    assert.deepEqual(context.issues, issues);
+    assert.deepEqual([...context.inScope].sort(), [42, 43, 44]);
+    assert.deepEqual([...context.building].sort(), [43, 44]);
+    assert.equal(context.handOffs, false);
+  });
+});
+
+describe("admitToSweep", () => {
+  const context: SweepContext = {
+    host: HOST,
+    issues: [{ number: 42, labels: [] }],
+    inScope: IN_SCOPE,
+    building: new Set(),
+    handOffs: true,
+  };
+
+  // A host that records which reads were made.
+  function reads(events: IssueEvent[] = [], isOwner: (login: string | null) => boolean | undefined = isOwnerOrStranger) {
+    const calls: string[] = [];
+    const github = {
+      isOwner,
+      pullRequestEvents: (number: number) => (calls.push(`events:${number}`), events),
+      pullRequestBodyEdits: (number: number) => (calls.push(`edits:${number}`), [] as ContentEdit[]),
+    };
+    return { github, calls };
+  }
+
+  it("passes sweepSkipReason's reason through as a skip that isn't unknown, and reads no events", () => {
+    const draft = pr({ isDraft: true });
+    const { github, calls } = reads();
+
+    const admission = admitToSweep(draft, context, github);
+
+    assert.deepEqual(admission, { kind: "skipped", reason: sweepSkipReason(draft, IN_SCOPE, HOST, new Set(), true), unknown: false });
+    assert.deepEqual(calls, []);
+  });
+
+  it("admits a Sandcastle PR of an in-scope issue with its issue as the subject, reading its events once and no body edits", () => {
+    const { github, calls } = reads();
+
+    const admission = admitToSweep(pr(), context, github);
+
+    assert.deepEqual(admission, { kind: "swept", subject: { kind: "issue", issueNumber: 42 } });
+    assert.deepEqual(calls, ["events:101"]);
+  });
+
+  it("admits a hand-off PR the owner labelled with the PR as the subject, reading its events once and its body edits once", () => {
+    const { github, calls } = reads([ownerAdd]);
+
+    const admission = admitToSweep(handOff(), context, github);
+
+    assert.deepEqual(admission, { kind: "swept", subject: { kind: "pull-request" } });
+    assert.deepEqual(calls.sort(), ["edits:101", "events:101"]);
+  });
+
+  it("skips a hand-off PR whose label a stranger added, with approval's reason and not unknown", () => {
+    const events: IssueEvent[] = [{ ...ownerAdd, actor: "stranger" }];
+    const { github } = reads(events);
+
+    const admission = admitToSweep(handOff(), context, github);
+
+    const expected = approval(FOLLOW_UP_LABEL, events, [], isOwnerOrStranger);
+    assert.equal(expected.approved, false);
+    assert.deepEqual(admission, { kind: "skipped", reason: expected.approved ? "" : expected.reason, unknown: false });
+  });
+
+  it("skips a hand-off PR whose label's adder couldn't be checked, as unknown", () => {
+    const { github } = reads([{ ...ownerAdd, actor: "ghost" }]);
+
+    const admission = admitToSweep(handOff(), context, github);
+
+    assert.equal(admission.kind, "skipped");
+    assert.equal(admission.kind === "skipped" && admission.unknown, true);
+  });
+
+  it("skips a PR whose needs-human removal couldn't be attributed, as unknown", () => {
+    const { github } = reads([
+      { event: "unlabeled", actor: "ghost", label: "sandcastle:needs-human", createdAt: "2026-10-10T09:00:00Z" },
+    ]);
+
+    const admission = admitToSweep(pr(), context, github);
+
+    assert.deepEqual(admission, {
+      kind: "skipped",
+      reason: "couldn't check whether the repository owner removed sandcastle:needs-human",
+      unknown: true,
+    });
+  });
+
+  it("answers restore for a PR whose needs-human a stranger removed", () => {
+    const { github } = reads([
+      { event: "unlabeled", actor: "stranger", label: "sandcastle:needs-human", createdAt: "2026-10-10T09:00:00Z" },
+    ]);
+
+    const admission = admitToSweep(pr(), context, github);
+
+    assert.equal(admission.kind, "restore");
+    assert.equal(admission.kind === "restore" && admission.label, "sandcastle:needs-human");
+    assert.match(admission.kind === "restore" ? admission.reason : "", /stranger/);
+  });
+
+  it("admits a PR whose needs-human the owner removed", () => {
+    const { github } = reads([
+      { event: "unlabeled", actor: OWNER, label: "sandcastle:needs-human", createdAt: "2026-10-10T09:00:00Z" },
+    ]);
+
+    const admission = admitToSweep(pr(), context, github);
+
+    assert.equal(admission.kind, "swept");
   });
 });

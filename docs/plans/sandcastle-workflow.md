@@ -199,6 +199,17 @@ label to rebuild". The next build of that issue starts fresh from `main`: the ho
 Only a full run hands back an issue this way, so a full run and a follow-up run can't both post the comment.
 A hand-off PR that closes without merging is never handed back: there's no issue to re-queue, and the owner closed it.
 
+**Status.** `pnpm run sandcastle:status` lists each open Sandcastle PR into `main`, the host's own and the hand-off PRs, with why it's held
+([#65](https://github.com/mpaulosky/auth0-management-app/issues/65)).
+Each entry gives the PR's title and issue, its follow-up passes used as `N of 3` (counted as the pass counts them), the reason the sweep would give, and whether the next pass hands it back.
+It also gives the unresolved threads split into bot, owner and other people's, the merge state, the checks, and whether it carries `sandcastle:needs-human` or `review:claude`.
+Above the PRs it lists the Sandcastle workflow's run in progress and its queued run.
+It judges every PR against the login `gh` is signed in as, and prints that login; the Actions sweep uses its own, so run it as the account the sweep publishes with.
+An open PR that carries the Sandcastle PR marker from another author makes the status partial (exit 1), as does an owner check that couldn't answer,
+including one on a reply after the host's answer on a thread.
+The reason comes from the sweep's own `sweepSkipReason`, `admitToSweep` and `decide`, so the status can't disagree with the sweep.
+The command is read-only: it posts nothing, changes no label, pushes nothing and starts no sandbox, and needs only an authenticated `gh`.
+
 ## Phase 2: Intake
 
 Decided in [What makes a Sandcastle issue ready to build, and what happens when it isn't](https://github.com/mpaulosky/Blazor-Server/issues/56).
@@ -540,6 +551,7 @@ comments are the ones the phases above post (intake verdicts, critique deferrals
 ```text
 .sandcastle/
   main.mts            round loop, early exit, time budget
+  status.mts          read-only status: why each open Sandcastle PR is held
   lib/config.mts      ROLE_AGENTS, labels, limits, queue scope
   lib/github.mts      gh helpers, labels, marker comments, dependency links
   lib/branches.mts    branch naming and fetching

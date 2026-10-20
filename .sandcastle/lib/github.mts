@@ -369,7 +369,7 @@ query($owner: String!, $name: String!, $cursor: String) {
     pullRequests(states: OPEN, baseRefName: "main", first: 50, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        id number url isDraft isCrossRepository baseRefName headRefName headRefOid body mergeStateStatus
+        id number url title isDraft isCrossRepository baseRefName headRefName headRefOid body mergeStateStatus
         author { login }
         labels(first: 50) { pageInfo { hasNextPage } nodes { name } }
         reviewRequests(first: 20) {
@@ -429,6 +429,7 @@ type SweepNode = {
   id: string;
   number: number;
   url: string;
+  title: string | null;
   isDraft: boolean;
   isCrossRepository: boolean;
   baseRefName: string;
@@ -492,6 +493,7 @@ function sweepPullRequest(node: SweepNode): SweepPullRequest {
     id: node.id,
     number: node.number,
     url: node.url,
+    title: node.title ?? "",
     author: authorLogin(node.author),
     body: node.body ?? "",
     baseRefName: node.baseRefName,
@@ -1477,6 +1479,18 @@ export function markerComments(
   run: typeof execFileSync = execFileSync,
   poster: string = (signedInLogin ??= hostLogin(run)),
 ): TimestampedComment[] {
+  const { comments, timeline, createdAt } = markerCommentReads(number, repo, run);
+  return markerCommentsSince(comments, timeline, label, marker, createdAt, poster);
+}
+
+// The raw reads markerCommentsSince counts from: the comments, the label
+// timeline and when the issue or PR was created (#65).
+export type CommentReads = { comments: TimestampedComment[]; timeline: TimelineLabelEvent[]; createdAt: string };
+
+// Reads what markerComments counts from, without counting, so the status
+// command (lib/status.mts, #65) counts follow-up passes from the same reads
+// the pass does.
+export function markerCommentReads(number: number, repo: string = repoName(), run: typeof execFileSync = execFileSync): CommentReads {
   const comments = jsonLines(
     ghWithStderr(run, [
       "api", "--paginate", `repos/${repo}/issues/${number}/comments`,
@@ -1485,7 +1499,69 @@ export function markerComments(
   ) as TimestampedComment[];
   const timeline = labelTimeline(number, run, repo);
   const createdAt = ghWithStderr(run, ["api", `repos/${repo}/issues/${number}`, "--jq", ".created_at"]).trim();
-  return markerCommentsSince(comments, timeline, label, marker, createdAt, poster);
+  return { comments, timeline, createdAt };
+}
+
+// One run of Sandcastle's workflow that hasn't completed, as `gh run list --json` gives it.
+export type WorkflowRun = {
+  id: number;
+  status: string;
+  event: string;
+  displayTitle: string;
+  headBranch: string | null;
+  createdAt: string;
+  url: string;
+};
+
+// The statuses of a run that hasn't completed, as `gh run list --status` names them.
+const UNFINISHED_RUN_STATUSES = ["in_progress", "queued", "requested", "waiting", "pending"] as const;
+
+// Sandcastle's workflow runs that haven't completed, oldest first, for the
+// status command (#65). One `gh run list` per status rather than one list
+// filtered afterwards: every CI completion starts a run that's skipped at
+// once, so a queued run can be older than the last 100 runs. An answer that
+// isn't a list of runs throws, rather than report that nothing is running.
+export function sandcastleWorkflowRuns(run: typeof execFileSync = execFileSync, repo: string = repoName()): WorkflowRun[] {
+  const byId = new Map<number, WorkflowRun>();
+  for (const status of UNFINISHED_RUN_STATUSES) {
+    const answer = JSON.parse(
+      ghWithStderr(run, [
+        "run", "list", "--repo", repo, "--workflow", SANDCASTLE_WORKFLOW, "--status", status, "--limit", "100",
+        "--json", "databaseId,status,event,displayTitle,headBranch,createdAt,url",
+      ]),
+    ) as unknown;
+    if (!Array.isArray(answer)) throw new Error(`gh run list answered with something other than a list of runs: ${JSON.stringify(answer)}`);
+    for (const entry of answer) {
+      const workflowRun = workflowRunOf(entry);
+      byId.set(workflowRun.id, workflowRun);
+    }
+  }
+  return [...byId.values()].sort((a, b) => timestamp(a.createdAt) - timestamp(b.createdAt));
+}
+
+// One entry of `gh run list --json`, checked field by field: an entry of any
+// other shape throws.
+function workflowRunOf(entry: unknown): WorkflowRun {
+  const raw = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
+  const text = (key: string): string => {
+    const value = raw[key];
+    if (typeof value !== "string") throw new Error(`gh run list gave a run without a ${key}: ${JSON.stringify(entry)}`);
+    return value;
+  };
+  if (typeof raw.databaseId !== "number") throw new Error(`gh run list gave a run without an id: ${JSON.stringify(entry)}`);
+  const headBranch = raw.headBranch;
+  if (headBranch !== null && headBranch !== undefined && typeof headBranch !== "string") {
+    throw new Error(`gh run list gave a run with an unreadable branch: ${JSON.stringify(entry)}`);
+  }
+  return {
+    id: raw.databaseId,
+    status: text("status"),
+    event: text("event"),
+    displayTitle: text("displayTitle"),
+    headBranch: headBranch ?? null,
+    createdAt: text("createdAt"),
+    url: text("url"),
+  };
 }
 
 // A label only the host or a human applies to hand work back: the issue's or

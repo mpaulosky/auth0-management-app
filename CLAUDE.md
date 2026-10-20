@@ -100,6 +100,7 @@ aspire run                                            # run the AppHost over HTT
 dotnet run --project src/AppHost --launch-profile http  # the same without the Aspire CLI or a dev certificate
 pnpm --dir src/UI run watch:css                       # rebuild the CSS live while editing markup
 pnpm run check:sandcastle                             # type-check and test .sandcastle/
+pnpm run sandcastle:status                            # why each open Sandcastle PR is held, and the workflow's runs (read-only)
 SANDCASTLE_ISSUE=<n> pnpm run sandcastle              # build one issue (and its PR) locally
 SANDCASTLE_LABEL=<label> pnpm run sandcastle          # work the issues labelled <label>, e.g. Sandcastle:dev
 ```
