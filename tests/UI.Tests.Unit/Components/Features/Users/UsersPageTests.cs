@@ -472,11 +472,11 @@ public class UsersPageTests : BunitContext
 	}
 
 	[Fact]
-	public void PressEnter_ThenDeletesBackToTheAppliedTextWhileTheSearchIsInFlight_CancelsThatSearch()
+	public void PressEnter_ThenDeletesBackToTheAppliedTextWhileTheSearchIsInFlight_CancelsItAndKeepsTheAppliedList()
 	{
 		// Arrange
 		Open("?q=jane");
-		ReturnPage(People(25), 60);
+		ReturnPage(People(1), 1);
 		IRenderedComponent<UsersPage> cut = RenderPage();
 		List<CancellationToken> tokens = [];
 		TaskCompletionSource<Result<UserPage>> enterSearch = new();
@@ -492,12 +492,13 @@ public class UsersPageTests : BunitContext
 
 		// Act
 		cut.Find(SearchBox).Input("jane");
-		enterSearch.SetResult(Result.Ok(new UserPage(People(25), 60)));
+		enterSearch.SetResult(Result.Ok(new UserPage([new UserSummary("auth0|old", "Stale Result", "stale@example.com", null, null)], 1)));
 
 		// Assert
 		tokens[0].IsCancellationRequested.Should().BeTrue();
+		cut.WaitForAssertion(() => TextOf(cut).Should().NotContain("Stale Result"));
 		cut.Find(SearchBox).GetAttribute("value").Should().Be("jane");
-		SearchesSent().Should().NotContain(search => search.Query == UserSearchQueryBuilder.Build("janex") && search.Page == 2);
+		_module.Invocations["replaceUrl"].Select(call => (string)call.Arguments[0]!).Should().NotContain(url => url.Contains("q=janex"));
 	}
 
 	[Fact]
