@@ -23,9 +23,11 @@ import {
   BUILDING_LABEL,
   COPILOT_REREQUEST_AFTER_MS,
   FOLLOW_UP_LABEL,
+  FOLLOW_UP_REPLY_MARKER,
   PR_MARKER,
   QUEUE_LABEL,
   REVIEW_LABEL,
+  SESSION_REPLY_MARKER,
   type QueueScope,
 } from "./config.mts";
 import {
@@ -81,7 +83,9 @@ export type SweepPullRequest = PullRequestIdentity & {
   reviews: { author: string | null; commitOid: string | null }[];
   // byBot: whether the thread's first comment's author is a Bot. author: that
   // comment's login, for isOwner (null for a deleted account or no comment).
-  threads: { resolved: boolean; byBot: boolean; author: string | null }[];
+  // lastComment: the thread's newest comment, so `decide` can tell a thread the
+  // host already answered from one still waiting on a pass.
+  threads: { resolved: boolean; byBot: boolean; author: string | null; lastComment?: { author: string | null; body: string } | null }[];
   checks: CheckState[];
   // review_requested timeline events naming Copilot, oldest first.
   copilotRequestedAt: string[];
@@ -126,6 +130,19 @@ export function isSandcastlePullRequest(pr: PullRequestIdentity, host: string): 
     pr.author === host &&
     pr.body.includes(PR_MARKER) &&
     issueNumberOf(pr.headRefName) !== undefined
+  );
+}
+
+// Whether `comment` is the host's own reply on a review thread: by `hostLogin`
+// and either opening with FOLLOW_UP_REPLY_MARKER or carrying
+// SESSION_REPLY_MARKER (the owner's session posts with the host's token). One
+// by anyone else never is, so a stranger can't hide a thread by quoting a marker.
+export function isHostReply(comment: { author: string | null; body: string } | null | undefined, hostLogin: string): boolean {
+  return (
+    comment !== null &&
+    comment !== undefined &&
+    comment.author === hostLogin &&
+    (comment.body.startsWith(FOLLOW_UP_REPLY_MARKER) || comment.body.includes(SESSION_REPLY_MARKER))
   );
 }
 
@@ -182,6 +199,12 @@ export function sweepSkipReason(
   if (pr.baseRefName !== "main") return `it's into ${pr.baseRefName}, not main`;
   if (sweepSubject(pr, inScope, host, handOffs)?.kind === "pull-request") {
     if (hasLabel(pr, BUILDING_LABEL)) return `it's labelled ${BUILDING_LABEL}, so another run is passing on it`;
+    // A build of the branch's issue shares this branch and its worktree, and
+    // its claim is on the issue, not on this PR.
+    const branchIssue = issueNumberOf(pr.headRefName);
+    if (branchIssue !== undefined && building.has(branchIssue)) {
+      return `#${branchIssue} is labelled ${BUILDING_LABEL}, so another run is building on this branch`;
+    }
     if (pr.isDraft) return "it's a draft";
     if (hasLabel(pr, NEEDS_HUMAN)) return `it's labelled ${NEEDS_HUMAN}`;
     if (pr.truncated) return "it has more reviews, threads or checks than one read holds";
@@ -219,8 +242,16 @@ export type SweepDecision =
 // settled PR that's only behind main, or leave a clean or merge-blocked one
 // alone. `isOwner` defaults to never-owner so a caller that doesn't pass it
 // (most tests) sees every non-bot thread as a human's, as before this
-// parameter existed.
-export function decide(pr: SweepPullRequest, now: number, isOwner: IsOwner = () => false): SweepDecision {
+// parameter existed. With `hostLogin`, a bot thread whose newest comment is the
+// host's own reply (isHostReply) isn't counted: the pass declined it and left it
+// open for a person, and counting it would hold the PR at needs-pass, which
+// no pass handles, so it would never be updated or re-reviewed.
+export function decide(
+  pr: SweepPullRequest,
+  now: number,
+  isOwner: IsOwner = () => false,
+  hostLogin?: string,
+): SweepDecision {
   // GitHub runs no pull_request workflows on a PR it can't merge, so a head
   // pushed while it conflicts gets no checks: waiting on them would hide the
   // conflict for good.
@@ -236,7 +267,9 @@ export function decide(pr: SweepPullRequest, now: number, isOwner: IsOwner = () 
   // re-request (Copilot's review budget, ADR 0004), and every update-branch
   // makes a head Copilot hasn't seen, so waiting would hide them for good.
   const reasons = pr.checks.filter((check) => !check.green).map((check) => `check ${check.name} is red`);
-  const botThreads = pr.threads.filter((thread) => !thread.resolved && thread.byBot).length;
+  const botThreads = pr.threads.filter(
+    (thread) => !thread.resolved && thread.byBot && !(hostLogin !== undefined && isHostReply(thread.lastComment, hostLogin)),
+  ).length;
   if (botThreads > 0) reasons.push(`${botThreads} unresolved bot thread(s)`);
   // A thread the repository owner opened is the follow-up role's to answer
   // (threadsForRole), not left waiting on a person forever: without this, a
@@ -465,16 +498,22 @@ export function sweepPullRequests(
       // the run report's "waiting on a person" section describe it.
       const humanThreads = pr.threads.filter((thread) => !thread.resolved && !thread.byBot && github.isOwner(thread.author) !== true).length;
       if (humanThreads > 0) waitingPrs.push({ pr: pr.number, threads: humanThreads });
-      const decision = decide(pr, now, github.isOwner);
+      const decision = decide(pr, now, github.isOwner, host);
       // `building` is a snapshot from before the per-PR reads above, so another
       // run may have claimed the issue since. Read it again just before a write
       // that run's pass would race (update-branch moves the head; a Copilot
       // request is noise on a PR it's passing on). A held PR is left for that
       // run, as sweepSkipReason leaves it. A hand-off PR's claim is on the PR.
       if (decision.action === "update-branch" || decision.action === "request-review") {
-        const claimLabels = subject.kind === "issue" ? github.issueLabels(subject.issueNumber) : github.pullRequestLabels(pr.number);
+        // A hand-off PR on an issue's branch is claimed by a build of that
+        // issue too, so both are read.
+        const branchIssue = issueNumberOf(pr.headRefName);
+        const claimLabels =
+          subject.kind === "issue"
+            ? github.issueLabels(subject.issueNumber)
+            : [...github.pullRequestLabels(pr.number), ...(branchIssue === undefined ? [] : github.issueLabels(branchIssue))];
         if (hasLabel({ labels: claimLabels }, BUILDING_LABEL)) {
-          const claimed = subject.kind === "issue" ? "its issue" : "it";
+          const claimed = subject.kind === "issue" ? "its issue" : "it or its branch's issue";
           log(`  · PR #${pr.number} isn't swept: ${claimed} became labelled ${BUILDING_LABEL} since the sweep began, so another run is working on it.`);
           continue;
         }

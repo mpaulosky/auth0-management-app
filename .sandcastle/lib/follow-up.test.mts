@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { BranchRefs } from "./branches.mts";
-import { BUILDING_LABEL, COPILOT_REVIEWER, FOLLOW_UP_LABEL, PR_MARKER, REVIEW_LABEL } from "./config.mts";
+import { BUILDING_LABEL, COPILOT_REVIEWER, FOLLOW_UP_LABEL, FOLLOW_UP_REPLY_MARKER, PR_MARKER, REVIEW_LABEL, SESSION_REPLY_MARKER } from "./config.mts";
 import { HeadMovedError, type ClosedPullRequest, type ContentEdit, type IssueEvent, type PullRequestIdentity, type TimelineLabelEvent } from "./github.mts";
 import {
   closedPrHandBackComment,
@@ -416,6 +416,58 @@ describe("decide", () => {
 
     assert.equal(result.action, "leave");
     assert.match((result as { reason: string }).reason, /BLOCKED/);
+  });
+});
+
+describe("decide's host-answered bot threads", () => {
+  const answered = { author: HOST, body: `${FOLLOW_UP_REPLY_MARKER}\nDeclined: out of scope.` };
+  const botThread = (lastComment: { author: string | null; body: string } | null) => ({
+    resolved: false,
+    byBot: true,
+    author: "copilot-pull-request-reviewer",
+    lastComment,
+  });
+
+  it("updates a behind PR whose only open bot thread the host already answered", () => {
+    const result = decide(pr({ mergeStateStatus: "BEHIND", threads: [botThread(answered)] }), NOW, () => false, HOST);
+
+    assert.deepEqual(result, { action: "update-branch" });
+  });
+
+  it("counts the bot thread when the run doesn't know the host's login", () => {
+    const result = decide(pr({ mergeStateStatus: "BEHIND", threads: [botThread(answered)] }), NOW);
+
+    assert.equal(result.action, "needs-pass");
+  });
+
+  it("counts a bot thread whose newest comment is the bot's own", () => {
+    const result = decide(
+      pr({ mergeStateStatus: "BEHIND", threads: [botThread({ author: "copilot-pull-request-reviewer", body: "Still wrong." })] }),
+      NOW,
+      () => false,
+      HOST,
+    );
+
+    assert.equal(result.action, "needs-pass");
+  });
+
+  it("counts a thread where a stranger quotes the marker", () => {
+    const result = decide(
+      pr({ mergeStateStatus: "BEHIND", threads: [botThread({ author: "stranger", body: answered.body })] }),
+      NOW,
+      () => false,
+      HOST,
+    );
+
+    assert.equal(result.action, "needs-pass");
+  });
+
+  it("treats the owner's session reply (SESSION_REPLY_MARKER, posted as the host) as an answer", () => {
+    const session = { author: HOST, body: `Declined.\n\n${SESSION_REPLY_MARKER}` };
+
+    const result = decide(pr({ mergeStateStatus: "BEHIND", threads: [botThread(session)] }), NOW, () => false, HOST);
+
+    assert.deepEqual(result, { action: "update-branch" });
   });
 });
 
@@ -1842,6 +1894,18 @@ describe("sweepSkipReason's hand-offs", () => {
     assert.match(sweepSkipReason(claimed, IN_SCOPE, HOST, new Set(), true) ?? "", /labelled sandcastle:building/);
   });
 
+  it("skips a labelled PR on the branch of an issue that is labelled sandcastle:building, since a build there shares the branch", () => {
+    const labelled = handOff({ headRefName: "feature/42-add-search", author: "someone-else", body: "no marker" });
+
+    assert.match(sweepSkipReason(labelled, IN_SCOPE, HOST, new Set([42]), true) ?? "", /#42 is labelled sandcastle:building/);
+  });
+
+  it("skips a labelled PR whose issue branch is under a build even when the PR itself isn't labelled", () => {
+    const labelled = handOff({ headRefName: "fix/9-other-thing" });
+
+    assert.match(sweepSkipReason(labelled, IN_SCOPE, HOST, new Set([9]), true) ?? "", /#9 is labelled sandcastle:building/);
+  });
+
   it("skips a labelled draft PR", () => {
     assert.equal(sweepSkipReason(handOff({ isDraft: true }), IN_SCOPE, HOST, new Set(), true), "it's a draft");
   });
@@ -1946,6 +2010,30 @@ describe("sweepPullRequests' hand-offs", () => {
     it("updates a settled hand-off PR that is only behind main", () => {
       const { github, updatedBranches } = stubGithub({
         prs: [handOff({ mergeStateStatus: "BEHIND" })],
+        isOwner: isOwnerOrStranger,
+        pullRequestEvents: () => [ownerAdd],
+      });
+
+      run(github);
+
+      assert.deepEqual(updatedBranches, [{ number: 101, expectedHeadSha: "a".repeat(40) }]);
+    });
+
+    it("updates a behind hand-off PR whose only open bot thread the host already answered", () => {
+      const { github, updatedBranches } = stubGithub({
+        prs: [
+          handOff({
+            mergeStateStatus: "BEHIND",
+            threads: [
+              {
+                resolved: false,
+                byBot: true,
+                author: "copilot-pull-request-reviewer",
+                lastComment: { author: HOST, body: `${FOLLOW_UP_REPLY_MARKER}\nDeclined.` },
+              },
+            ],
+          }),
+        ],
         isOwner: isOwnerOrStranger,
         pullRequestEvents: () => [ownerAdd],
       });
@@ -2336,7 +2424,7 @@ describe("sweepPullRequests' hand-offs", () => {
       assert.deepEqual(requestedReviews, []);
     });
 
-    it("reads the PR's labels, not an issue's, for a hand-off PR on an out-of-scope issue branch", () => {
+    it("reads the PR's labels and its branch's issue's for a hand-off PR on an out-of-scope issue branch", () => {
       const { github, updatedBranches, prLabelReads, labelReads } = stubGithub({
         prs: [handOff({ headRefName: "feature/9-other-thing", mergeStateStatus: "BEHIND" })],
         isOwner: isOwnerOrStranger,
@@ -2347,7 +2435,22 @@ describe("sweepPullRequests' hand-offs", () => {
 
       assert.equal(updatedBranches.length, 1);
       assert.deepEqual(prLabelReads, [101]);
-      assert.deepEqual(labelReads, []);
+      assert.deepEqual(labelReads, [9]);
+    });
+
+    it("doesn't update a hand-off PR's branch when a build of its branch's issue claimed the issue since the sweep began", () => {
+      const lines: string[] = [];
+      const { github, updatedBranches } = stubGithub({
+        prs: [handOff({ headRefName: "feature/9-other-thing", mergeStateStatus: "BEHIND" })],
+        isOwner: isOwnerOrStranger,
+        pullRequestEvents: () => [ownerAdd],
+        labelsNow: { 9: [BUILDING_LABEL] },
+      });
+
+      run(github, undefined, lines);
+
+      assert.deepEqual(updatedBranches, []);
+      assert.ok(lines.some((line) => /PR #101 isn't swept: .*its branch's issue became labelled sandcastle:building/.test(line)));
     });
 
     it("still reads the issue's labels for a Sandcastle PR, even one that carries the label", () => {

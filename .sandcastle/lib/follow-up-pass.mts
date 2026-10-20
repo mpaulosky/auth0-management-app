@@ -36,10 +36,9 @@ import {
   FOLLOW_UP_REPLY_MARKER,
   GATE_COMMENT_LINES,
   GATE_FIXER_ATTEMPTS,
-  SESSION_REPLY_MARKER,
 } from "./config.mts";
 import { UncountedStopError } from "./errors.mts";
-import type { CheckState, PassTarget } from "./follow-up.mts";
+import { isHostReply, issueNumberOf, type CheckState, type PassTarget } from "./follow-up.mts";
 import {
   bodyEdits,
   commentOnPullRequest,
@@ -131,9 +130,7 @@ export function threadsForRole(
   const forRole: PromptThread[] = [];
   const leftForHuman: ReviewThread[] = [];
   const unknown: ReviewThread[] = [];
-  const hostReply = (comment: ReviewThread["comments"][number] | undefined) =>
-    comment?.author === hostLogin &&
-    (comment.body.startsWith(FOLLOW_UP_REPLY_MARKER) || comment.body.includes(SESSION_REPLY_MARKER));
+  const hostReply = (comment: ReviewThread["comments"][number] | undefined) => isHostReply(comment, hostLogin);
   for (const thread of threads) {
     if (thread.resolved) continue;
     const first = thread.comments[0];
@@ -808,18 +805,33 @@ export async function runPass(
   if (!("forRole" in before)) return before;
 
   // Claimed as a build claims it, so two runs never pass on one PR or share
-  // its worktree, and a build of the same issue stands aside meanwhile.
-  if (!host.markBuilding(claim)) return skip(`another run marked #${claim} ${BUILDING_LABEL}`);
+  // its worktree, and a build of the same issue stands aside meanwhile. A
+  // hand-off PR on an issue's branch (feature/{n}-...) shares that branch, and
+  // so its worktree, with a build of #n, whose claim is on the issue: claim
+  // that too, or the two runs never see each other.
+  const claims = [claim];
+  const branchIssue = brief.kind === "pull-request" ? issueNumberOf(target.headRefName) : undefined;
+  if (branchIssue !== undefined) claims.push(branchIssue);
+  const held: number[] = [];
+  const release = () => {
+    for (const number of held.reverse()) {
+      try {
+        host.unmarkBuilding(number);
+      } catch (error) {
+        console.error(`  ⚠ #${number}: removing ${BUILDING_LABEL} failed, so it's tried again when this run exits: ${error}`);
+      }
+    }
+  };
   try {
+    for (const number of claims) {
+      if (!host.markBuilding(number)) return skip(`another run marked #${number} ${BUILDING_LABEL}`);
+      held.push(number);
+    }
     const plan = planPass(target, base, host, skip, true);
     if (!("forRole" in plan)) return plan;
     return await passOnMarkedIssue(target, brief, rule, base, host, plan);
   } finally {
-    try {
-      host.unmarkBuilding(claim);
-    } catch (error) {
-      console.error(`  ⚠ #${claim}: removing ${BUILDING_LABEL} failed, so it's tried again when this run exits: ${error}`);
-    }
+    release();
   }
 }
 

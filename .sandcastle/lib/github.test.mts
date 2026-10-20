@@ -1241,7 +1241,11 @@ describe("openPullRequestsForSweep", () => {
                 reviewThreads: {
                   pageInfo: { hasNextPage: false },
                   nodes: [
-                    { isResolved: false, comments: { nodes: [{ author: { __typename: "Bot", login: "github-advanced-security[bot]" } }] } },
+                    {
+                      isResolved: false,
+                      comments: { nodes: [{ author: { __typename: "Bot", login: "github-advanced-security[bot]" } }] },
+                      lastComments: { nodes: [{ author: { login: "host" }, body: "Declined." }] },
+                    },
                     { isResolved: false, comments: { nodes: [{ author: { __typename: "User", login: "reviewer" } }] } },
                   ],
                 },
@@ -1282,8 +1286,8 @@ describe("openPullRequestsForSweep", () => {
     assert.deepEqual(pr!.reviewRequests, [COPILOT_REVIEWER]);
     assert.deepEqual(pr!.reviews, [{ author: COPILOT_REVIEWER, commitOid: "a".repeat(40) }]);
     assert.deepEqual(pr!.threads, [
-      { resolved: false, byBot: true, author: "github-advanced-security[bot]" },
-      { resolved: false, byBot: false, author: "reviewer" },
+      { resolved: false, byBot: true, author: "github-advanced-security[bot]", lastComment: { author: "host", body: "Declined." } },
+      { resolved: false, byBot: false, author: "reviewer", lastComment: null },
     ]);
     assert.deepEqual(pr!.checks, [{ name: "build", completed: true, green: true, completedAt: "2026-10-01T00:00:00Z" }]);
     assert.equal(pr!.truncated, false);

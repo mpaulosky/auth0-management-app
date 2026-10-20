@@ -129,6 +129,8 @@ it re-requests a stale Copilot review, updates a branch that's behind `main`, an
 - **Only in the default queue scope.** A local `SANDCASTLE_ISSUE` or `SANDCASTLE_LABEL` run never touches hand-off PRs.
 - A hand-off PR is skipped while it carries `sandcastle:building` itself, is a draft, carries `sandcastle:needs-human`, or is truncated. The re-read before an update-branch or
   a Copilot re-request reads the PR's own labels.
+- A build of the issue a hand-off PR's branch names shares that branch and its worktree, and its claim is on the issue. So a hand-off PR on `feature/{n}-…` is also skipped while
+  #n carries `sandcastle:building`, the re-read before a write reads #n's labels too, and a pass claims #n beside the PR.
 - `isSandcastlePullRequest` stays strict, since `closedWithoutMerging` and `startFromMain` use it to hand an issue back and to delete a closed PR's branch.
 
 **Settled.** A PR gets a pass only when every check run on its head has completed and Copilot has reviewed the head (a Copilot review with `commit.oid == headRefOid`, and Copilot not in
@@ -169,6 +171,8 @@ On a hand-off PR, [#54](https://github.com/mpaulosky/auth0-management-app/issues
 it and the verdict is `fixed`. A declined or outdated thread gets a reply and stays open for the owner, as owner threads always do.
 A reply by the host's login carrying `<!-- claude-session -->`, the marker `CLAUDE.md` has a session end its comments with, counts as the host's own reply, so the first pass
 after a hand-off doesn't answer again the threads the session already declined.
+The sweep's `decide` ignores a bot thread whose newest comment is such a reply, so a thread left open for the owner doesn't hold the PR at "needs a pass" and keep the sweep from
+updating its branch or re-asking Copilot.
 
 **Red CI.** The gate decides, run on the commit `pull_request` CI actually built. That's the bare head, unless the PR is behind main with a settled red check: `pull_request`
 checkout merges the head with main by default, so gating the bare head there would judge a commit CI never built. A merge GitHub already says is clean (the PR isn't conflicted)

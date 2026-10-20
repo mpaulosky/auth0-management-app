@@ -2190,6 +2190,32 @@ describe("runPass on a hand-off PR", () => {
     assert.deepEqual(calls.unmarkBuilding, [PR_NUMBER]);
   });
 
+  it("also claims the issue a hand-off PR's branch names, so a build of that issue stands aside", async () => {
+    const sandbox = sandboxFake({ followUpJson: fixedVerdict });
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, sandbox });
+
+    const outcome = await runPass(handOffTarget({ headRefName: "feature/9-other-thing" }), brief, BASE, passHost);
+
+    assert.equal(outcome.kind, "passed");
+    assert.deepEqual(calls.markBuilding, [PR_NUMBER, 9]);
+    assert.deepEqual(calls.unmarkBuilding, [9, PR_NUMBER]);
+  });
+
+  it("skips and releases the PR's claim when a build already claimed the branch's issue", async () => {
+    const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true });
+    passHost.markBuilding = (number) => {
+      calls.markBuilding.push(number);
+      return number !== 9;
+    };
+
+    const outcome = await runPass(handOffTarget({ headRefName: "feature/9-other-thing" }), brief, BASE, passHost);
+
+    assert.equal(outcome.kind, "skipped");
+    assert.match((outcome as { reason: string }).reason, /#9/);
+    assert.deepEqual(calls.createSandbox, []);
+    assert.deepEqual(calls.unmarkBuilding, [PR_NUMBER]);
+  });
+
   it("skips, naming the PR, when another run already claimed the PR", async () => {
     const { passHost, calls } = passHostFake({ threads: [botThread()], containsBase: true, markBuildingResult: false });
 
