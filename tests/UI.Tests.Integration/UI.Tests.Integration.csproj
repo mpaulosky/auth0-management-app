@@ -14,11 +14,13 @@
 		<PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
 		<PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
 		<PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
+		<PackageReference Include="NSubstitute" />
 		<PackageReference Include="xunit.v3.mtp-v2" />
 	</ItemGroup>
 
 	<ItemGroup>
 		<Using Include="FluentAssertions" />
+		<Using Include="NSubstitute" />
 		<Using Include="Xunit" />
 	</ItemGroup>
 
