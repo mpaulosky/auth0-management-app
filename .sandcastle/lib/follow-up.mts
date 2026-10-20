@@ -10,10 +10,10 @@
 // that's only behind main, and handing an issue back when its latest PR
 // closed without merging (a full run only). It leaves alone a PR whose issue
 // is labelled sandcastle:building, which another run, or this one, holds
-// while it builds or passes on it (#53). A PR that needs more than that (DIRTY, a red
-// check, an unresolved bot or owner thread) is logged here and returned as a
-// PassTarget: the agent pass that fixes it lives in lib/follow-up-pass.mts
-// (#78).
+// while it builds or passes on it (#53). A PR that needs more than that
+// (DIRTY, a red check, an unresolved bot or owner thread) is logged here and
+// returned as a PassTarget: the agent pass that fixes it lives in
+// lib/follow-up-pass.mts (#78).
 // ---------------------------------------------------------------------------
 
 import { discardClosedWork, isIssueBranch, type BranchRefs } from "./branches.mts";
@@ -305,8 +305,9 @@ export type SweepResult = { needsPass: number[]; passes: PassTarget[] };
 const carriedReviewLabel = new Set<number>();
 
 // Reads the host's login, the in-scope issues and the open PRs once, then
-// for each PR either skips it (sweepSkipReason) or applies `decide`, logging
-// what happened. A PR whose sandcastle:needs-human someone other than the
+// for each PR either skips it (sweepSkipReason, which also skips a PR whose
+// issue is labelled sandcastle:building) or applies `decide`, logging what
+// happened. A PR whose sandcastle:needs-human someone other than the
 // repository owner removed gets it back instead, and is left alone (#146).
 // Each PR runs in its own try/catch, so one failure doesn't stop the rest.
 // An updated PR reaches `outcomes` as "updated", and every PR that reached
@@ -318,8 +319,7 @@ const carriedReviewLabel = new Set<number>();
 // labelled sandcastle:needs-human and with no open PR, whose latest Sandcastle
 // PR closed without merging (closedWithoutMerging), each in its own try/catch
 // too. A follow-up-only run passes false (#53): it touches only open PRs, so it
-// and a full run can't both hand back one issue. A PR whose issue is labelled
-// sandcastle:building is skipped (sweepSkipReason). Every swept PR
+// and a full run can't both hand back one issue. Every swept PR
 // (sweepSkipReason applies isSandcastlePullRequest's tests) that has never
 // carried REVIEW_LABEL gets it first (labelForReview).
 export function sweepPullRequests(
