@@ -630,6 +630,33 @@ public class CachedManagementApiTests
 		reached.Should().BeTrue("a write that threw may still have reached Auth0, so the entries it makes stale are dropped anyway");
 	}
 
+	[Theory]
+	[InlineData("UpdateProfileFields", "GetUser")]
+	[InlineData("UpdateProfileFields", "SearchUsers")]
+	[InlineData("AssignRole", "ListRoleMembers")]
+	[InlineData("RemoveRole", "GetUser")]
+	[InlineData("CreateRole", "ListRoles")]
+	public async Task Write_Throws_DoesNotCacheReadsUntilTheWindowHasPassed(string write, string read)
+	{
+		// Arrange
+		using Scenario scenario = new();
+		scenario.Throwing = true;
+		Func<Task> act = async () => await ApiCalls.InvokeAsync(scenario.Api, write, Ct);
+		await act.Should().ThrowAsync<Exception>();
+		scenario.Throwing = false;
+
+		// Act
+		await ReadAsync(scenario.Api, read);
+		bool reachedWithinWindow = await scenario.ReachesAuth0Async(async () => await ReadAsync(scenario.Api, read));
+		scenario.Advance(TimeSpan.FromSeconds(11));
+		await ReadAsync(scenario.Api, read);
+		bool reachedAfterWindow = await scenario.ReachesAuth0Async(async () => await ReadAsync(scenario.Api, read));
+
+		// Assert
+		reachedWithinWindow.Should().BeTrue("the write that threw may still land at Auth0, so what a read sees now isn't kept");
+		reachedAfterWindow.Should().BeFalse("once the window has passed, reads are cached again");
+	}
+
 	[Fact]
 	public async Task CreateRoleAsync_Created_EvictsTheRoleListOnly()
 	{

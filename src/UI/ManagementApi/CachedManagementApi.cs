@@ -33,6 +33,11 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 	private static readonly TimeSpan UserLifetime = TimeSpan.FromSeconds(60);
 	private static readonly TimeSpan RolesLifetime = TimeSpan.FromMinutes(5);
 	private static readonly TimeSpan MembersLifetime = TimeSpan.FromSeconds(60);
+
+	// How long no read is cached after a write threw. The write may still reach Auth0 after the exception, such as when
+	// the caller's token fired or the HttpClient timed out once the request was sent, so a read in that gap could cache
+	// the state from before it.
+	private static readonly TimeSpan UncertainWriteWindow = TimeSpan.FromSeconds(10);
 	private static readonly object RolesKey = new();
 
 	private readonly MemoryCache _cache = new(new MemoryCacheOptions { SizeLimit = SizeLimit });
@@ -44,6 +49,9 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 
 	// Counts the writes that have evicted entries. A read compares it before and after calling Auth0.
 	private long _evictions;
+
+	// While the clock is before this, reads aren't cached: a write threw and may still land at Auth0.
+	private DateTimeOffset _uncacheableUntil;
 
 	/// <summary>
 	///   Initializes a new instance of the <see cref="CachedManagementApi" /> class.
@@ -84,46 +92,27 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 	public async Task<Result> UpdateProfileFieldsAsync(string userId, ProfileFieldsChange change,
 		CancellationToken cancellationToken)
 	{
-		try
+		// Search pages and Role members carry the User's name, email and picture in their UserSummary rows.
+		return await WriteAsync(() => _inner.UpdateProfileFieldsAsync(userId, change, cancellationToken), () =>
 		{
-			return await _inner.UpdateProfileFieldsAsync(userId, change, cancellationToken).ConfigureAwait(false);
-		}
-		finally
-		{
-			// Search pages and Role members carry the User's name, email and picture in their UserSummary rows.
-			Evict(() =>
-			{
-				_cache.Remove(new UserKey(userId));
-				_searchPages.EvictAll();
-				_roleMembers.EvictAll();
-			});
-		}
+			_cache.Remove(new UserKey(userId));
+			_searchPages.EvictAll();
+			_roleMembers.EvictAll();
+		}).ConfigureAwait(false);
 	}
 
 	/// <inheritdoc />
 	public async Task<Result> AssignRoleAsync(string userId, string roleId, CancellationToken cancellationToken)
 	{
-		try
-		{
-			return await _inner.AssignRoleAsync(userId, roleId, cancellationToken).ConfigureAwait(false);
-		}
-		finally
-		{
-			EvictRoleChange(userId, roleId);
-		}
+		return await WriteAsync(() => _inner.AssignRoleAsync(userId, roleId, cancellationToken),
+			() => EvictRoleChange(userId, roleId)).ConfigureAwait(false);
 	}
 
 	/// <inheritdoc />
 	public async Task<Result> RemoveRoleAsync(string userId, string roleId, CancellationToken cancellationToken)
 	{
-		try
-		{
-			return await _inner.RemoveRoleAsync(userId, roleId, cancellationToken).ConfigureAwait(false);
-		}
-		finally
-		{
-			EvictRoleChange(userId, roleId);
-		}
+		return await WriteAsync(() => _inner.RemoveRoleAsync(userId, roleId, cancellationToken),
+			() => EvictRoleChange(userId, roleId)).ConfigureAwait(false);
 	}
 
 	/// <inheritdoc />
@@ -135,14 +124,8 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 	/// <inheritdoc />
 	public async Task<Result<RoleSummary>> CreateRoleAsync(NewRole role, CancellationToken cancellationToken)
 	{
-		try
-		{
-			return await _inner.CreateRoleAsync(role, cancellationToken).ConfigureAwait(false);
-		}
-		finally
-		{
-			Evict(() => _cache.Remove(RolesKey));
-		}
+		return await WriteAsync(() => _inner.CreateRoleAsync(role, cancellationToken),
+			() => _cache.Remove(RolesKey)).ConfigureAwait(false);
 	}
 
 	/// <inheritdoc />
@@ -217,7 +200,7 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 		// Checked and stored under the lock the evictions run under, so no write can evict between the two.
 		lock (_writeLock)
 		{
-			if (_evictions == evictionsBefore)
+			if (_evictions == evictionsBefore && _timeProvider.GetUtcNow() >= _uncacheableUntil)
 			{
 				_cache.Set(key, new Entry<T>(result, now + lifetime), options);
 			}
@@ -228,19 +211,38 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 
 	private void EvictRoleChange(string userId, string roleId)
 	{
-		Evict(() =>
-		{
-			_cache.Remove(new UserKey(userId));
-			_cache.Remove(new MembersKey(roleId));
-		});
+		_cache.Remove(new UserKey(userId));
+		_cache.Remove(new MembersKey(roleId));
 	}
 
-	private void Evict(Action evict)
+	// Runs the write, then evicts whatever its outcome. When the write threw, it also stops reads from being cached for
+	// a while, because the eviction can't cover a write that lands at Auth0 afterwards.
+	private async Task<T> WriteAsync<T>(Func<Task<T>> write, Action evict)
 	{
-		lock (_writeLock)
+		bool threw = false;
+
+		try
 		{
-			_evictions++;
-			evict();
+			return await write().ConfigureAwait(false);
+		}
+		catch (Exception)
+		{
+			threw = true;
+
+			throw;
+		}
+		finally
+		{
+			lock (_writeLock)
+			{
+				_evictions++;
+				evict();
+
+				if (threw)
+				{
+					_uncacheableUntil = _timeProvider.GetUtcNow() + UncertainWriteWindow;
+				}
+			}
 		}
 	}
 
