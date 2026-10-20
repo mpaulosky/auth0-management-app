@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { execFileSync } from "node:child_process";
-import { COPILOT_REVIEWER, REVIEW_LABEL, REVIEW_LABEL_DEFINITION, SANDCASTLE_LABELS } from "./config.mts";
+import { COPILOT_REVIEWER, REVIEW_LABEL, REVIEW_LABEL_DEFINITION, SANDCASTLE_LABELS, SANDCASTLE_WORKFLOW } from "./config.mts";
 import {
   addIssueLabel,
   addPullRequestLabel,
@@ -1726,5 +1726,168 @@ describe("hostCommentedWith", () => {
     const { run } = recordingGh([comment("unrelated", "host")]);
 
     assert.equal(hostCommentedWith(9, marker, run, "o/r", "host"), false);
+  });
+});
+
+// #53: a run started by pull_request_review or pull_request_target reports the
+// job's own `Sandcastle` check on the PR's head while it runs, and Fail on
+// hand-backs turns it red for a hand-back on any issue. No follow-up pass can
+// fix it and it isn't CI's result, so the sweep and the passes leave it out,
+// whatever mode the run is in. It is told apart by its workflow, not its name:
+// that also drops the "Choose the run mode" job, and a Sandcastle run GitHub
+// cancelled while it waited in the concurrency group.
+describe("the job's own Sandcastle check", () => {
+  const HEAD_OID = "a".repeat(40);
+  type Context = Record<string, unknown>;
+  const checkRun = (name: string, status: string, conclusion: string | null, workflow: string | null | undefined): Context => ({
+    __typename: "CheckRun",
+    name,
+    status,
+    conclusion,
+    completedAt: status === "COMPLETED" ? "2026-10-10T09:00:00Z" : null,
+    checkSuite: {
+      workflowRun: workflow === undefined ? null : { databaseId: 77, workflow: workflow === null ? null : { name: workflow } },
+    },
+  });
+  const status = (context: string, state: string): Context => ({ __typename: "StatusContext", context, state, createdAt: "2026-10-10T09:00:00Z" });
+  const own = (name: string, runStatus: string, conclusion: string | null) => checkRun(name, runStatus, conclusion, SANDCASTLE_WORKFLOW);
+
+  const sweepPage = (contexts: Context[]) =>
+    JSON.stringify({
+      data: {
+        repository: {
+          pullRequests: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                id: "PR_1",
+                number: 42,
+                url: "https://github.com/o/r/pull/42",
+                isDraft: false,
+                isCrossRepository: false,
+                baseRefName: "main",
+                headRefName: "feature/42-add-search",
+                headRefOid: HEAD_OID,
+                body: "<!-- sandcastle:pr -->\nCloses #42",
+                author: { login: "host" },
+                mergeStateStatus: "CLEAN",
+                labels: { pageInfo: { hasNextPage: false }, nodes: [] },
+                reviewRequests: { pageInfo: { hasNextPage: false }, nodes: [] },
+                reviews: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+                reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] },
+                commits: {
+                  nodes: [{ commit: { oid: HEAD_OID, statusCheckRollup: { contexts: { pageInfo: { hasNextPage: false }, nodes: contexts } } } }],
+                },
+                timelineItems: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+              },
+            ],
+          },
+        },
+      },
+    });
+  const headPage = (contexts: Context[], hasNextPage = false) =>
+    JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: HEAD_OID,
+            commits: { nodes: [{ commit: { oid: HEAD_OID, statusCheckRollup: { contexts: { pageInfo: { hasNextPage }, nodes: contexts } } } }] },
+          },
+        },
+      },
+    });
+
+  const sweepChecks = (contexts: Context[]) => {
+    const { run } = recordingGh([sweepPage(contexts)]);
+    return openPullRequestsForSweep(run, "o/r")[0]!.checks.map((check) => check.name);
+  };
+  const headChecks = (contexts: Context[]) => {
+    const { run } = recordingGh([headPage(contexts)]);
+    return headChecksOf(7, run, "o/r").checks.map((check) => check.name);
+  };
+
+  const readers: [reader: string, read: (contexts: Context[]) => string[]][] = [
+    ["openPullRequestsForSweep", sweepChecks],
+    ["headChecksOf", headChecks],
+  ];
+  for (const [reader, read] of readers) {
+    describe(reader, () => {
+      for (const [label, context] of [
+        ["running", own("Sandcastle", "IN_PROGRESS", null)],
+        ["queued", own("Sandcastle", "QUEUED", null)],
+        ["red", own("Sandcastle", "COMPLETED", "FAILURE")],
+        ["cancelled", own("Sandcastle", "COMPLETED", "CANCELLED")],
+        ["the mode job, running", own("Choose the run mode", "IN_PROGRESS", null)],
+      ] as [string, Context][]) {
+        it(`drops a check of the Sandcastle workflow: ${label}`, () => {
+          assert.deepEqual(read([checkRun("build", "COMPLETED", "SUCCESS", "CI"), context]), ["build"]);
+        });
+      }
+
+      it("keeps a check named Sandcastle that another workflow reported", () => {
+        assert.deepEqual(read([checkRun("Sandcastle", "COMPLETED", "FAILURE", "CI")]), ["Sandcastle"]);
+      });
+
+      it("keeps a check with no workflow run, such as code scanning's CodeQL", () => {
+        assert.deepEqual(read([checkRun("CodeQL", "COMPLETED", "SUCCESS", undefined)]), ["CodeQL"]);
+      });
+
+      it("keeps a check whose workflow run names no workflow", () => {
+        assert.deepEqual(read([checkRun("build", "COMPLETED", "SUCCESS", null)]), ["build"]);
+      });
+
+      it("keeps every status context, even one named Sandcastle", () => {
+        assert.deepEqual(read([status("Sandcastle", "FAILURE"), status("ci/legacy", "SUCCESS")]), ["Sandcastle", "ci/legacy"]);
+      });
+
+      it("keeps a check of another workflow whose name only contains Sandcastle's", () => {
+        assert.deepEqual(read([checkRun("build", "COMPLETED", "SUCCESS", `${SANDCASTLE_WORKFLOW} docs`)]), ["build"]);
+      });
+
+      it("leaves no checks when the run's own is the only one", () => {
+        assert.deepEqual(read([own("Sandcastle", "IN_PROGRESS", null)]), []);
+      });
+    });
+  }
+
+  it("still marks a PR truncated when its check list was cut off, whatever the filter drops", () => {
+    const page = JSON.parse(sweepPage([own("Sandcastle", "IN_PROGRESS", null)])) as {
+      data: { repository: { pullRequests: { nodes: { commits: { nodes: { commit: { statusCheckRollup: { contexts: { pageInfo: { hasNextPage: boolean } } } } }[] } }[] } } };
+    };
+    page.data.repository.pullRequests.nodes[0]!.commits.nodes[0]!.commit.statusCheckRollup.contexts.pageInfo.hasNextPage = true;
+    const { run } = recordingGh([JSON.stringify(page)]);
+
+    const [pr] = openPullRequestsForSweep(run, "o/r");
+
+    assert.equal(pr!.truncated, true);
+  });
+
+  it("headChecksOf still throws when the checks are truncated, even if every one read is the run's own", () => {
+    const { run } = recordingGh([headPage([own("Sandcastle", "IN_PROGRESS", null)], true)]);
+
+    assert.throws(() => headChecksOf(7, run, "o/r"), /truncated/i);
+  });
+
+  it("keeps the Actions run behind each check headChecksOf still returns", () => {
+    const { run } = recordingGh([headPage([own("Sandcastle", "IN_PROGRESS", null), checkRun("build", "COMPLETED", "FAILURE", "CI")])]);
+
+    const { checks } = headChecksOf(7, run, "o/r");
+
+    assert.deepEqual(checks, [{ name: "build", completed: true, green: false, completedAt: "2026-10-10T09:00:00Z", runId: 77 }]);
+  });
+
+  // The names come from the query's selection: without the workflow's name in
+  // both queries, no check could be told apart from the run's own.
+  it("selects each check's workflow name in both queries", () => {
+    const sweep = recordingGh([sweepPage([])]);
+    const head = recordingGh([headPage([])]);
+
+    openPullRequestsForSweep(sweep.run, "o/r");
+    headChecksOf(7, head.run, "o/r");
+
+    for (const { calls } of [sweep, head]) {
+      const query = calls[0]!.args.find((arg) => arg.startsWith("query="));
+      assert.match(query ?? "", /checkSuite\s*\{\s*workflowRun\s*\{[^}]*workflow\s*\{\s*name\s*\}/);
+    }
   });
 });

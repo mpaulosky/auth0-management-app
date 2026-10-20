@@ -116,7 +116,12 @@ export function isSandcastlePullRequest(pr: PullRequestIdentity, host: string): 
 // into main, not an issue branch, the issue isn't open and in scope, a draft,
 // labelled sandcastle:needs-human, not the host's, no PR_MARKER, or
 // truncated. Undefined when none applies, so the sweep decides from it.
-export function sweepSkipReason(pr: SweepPullRequest, inScope: ReadonlySet<number>, host: string): string | undefined {
+export function sweepSkipReason(
+  pr: SweepPullRequest,
+  inScope: ReadonlySet<number>,
+  host: string,
+  _building: ReadonlySet<number> = new Set(),
+): string | undefined {
   if (pr.isCrossRepository !== false) return "it's from a fork";
   if (pr.baseRefName !== "main") return `it's into ${pr.baseRefName}, not main`;
   const issueNumber = issueNumberOf(pr.headRefName);
@@ -313,6 +318,7 @@ export function sweepPullRequests(
   waiting: WaitingPrReport = waitingPrReport,
   unlabelled: Pick<UnlabelledPrReport, "record" | "resolve" | "retain"> = unlabelledPrReport,
   carried: Set<number> = carriedReviewLabel,
+  _handBackClosed: boolean = true,
 ): SweepResult {
   const host = github.hostLogin();
   const issues = github.inScopeIssues();

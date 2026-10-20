@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { BranchRefs } from "./branches.mts";
-import { COPILOT_REVIEWER, PR_MARKER, REVIEW_LABEL } from "./config.mts";
+import { BUILDING_LABEL, COPILOT_REVIEWER, PR_MARKER, REVIEW_LABEL } from "./config.mts";
 import type { ClosedPullRequest, IssueEvent, PullRequestIdentity, TimelineLabelEvent } from "./github.mts";
 import {
   closedPrHandBackComment,
@@ -1419,5 +1419,171 @@ describe("sweepPullRequests' review label", () => {
 
     assert.doesNotThrow(() => run(github));
     assert.doesNotThrow(() => run(failingTimeline));
+  });
+});
+
+// #53: a full run and a follow-up run can go at the same time, and both take
+// sandcastle:building on a PR's issue before they pass on it or build it. The
+// sweep leaves a PR whose issue holds the label alone, so neither run updates
+// the branch, re-asks Copilot or relabels a PR the other is working on.
+describe("sweepSkipReason's building guard", () => {
+  it("skips a PR whose issue another run holds sandcastle:building on, naming the label", () => {
+    const reason = sweepSkipReason(pr(), IN_SCOPE, HOST, new Set([42]));
+
+    assert.ok(reason);
+    assert.ok(reason.includes(BUILDING_LABEL), reason);
+  });
+
+  it("has no skip reason when only another issue is being built", () => {
+    assert.equal(sweepSkipReason(pr(), IN_SCOPE, HOST, new Set([43])), undefined);
+  });
+
+  it("has no skip reason when no issue is being built", () => {
+    assert.equal(sweepSkipReason(pr(), IN_SCOPE, HOST, new Set()), undefined);
+  });
+});
+
+describe("sweepPullRequests' building guard", () => {
+  const run = (github: FollowUpGitHub, lines: string[] = []) =>
+    sweepPullRequests(github, (line) => lines.push(line), NOW, new OutcomeReport(), new WaitingPrReport(), new UnlabelledPrReport(), new Set<number>());
+
+  for (const label of [BUILDING_LABEL, "Sandcastle:Building"]) {
+    it(`makes no write for a PR whose issue is labelled ${label}, however far behind main or unreviewed it is`, () => {
+      const { github, requestedReviews, updatedBranches, handBacks, addedPrLabels } = stubGithub({
+        prs: [pr({ mergeStateStatus: "BEHIND", reviews: [], reviewRequests: [] })],
+        issues: [{ number: 42, labels: [label] }],
+      });
+
+      run(github);
+
+      assert.deepEqual(updatedBranches, []);
+      assert.deepEqual(requestedReviews, []);
+      assert.deepEqual(handBacks, []);
+      assert.deepEqual(addedPrLabels, [], "the sweep labelled a PR another run is working on");
+    });
+
+    it(`leaves a PR whose issue is labelled ${label} out of needsPass and passes`, () => {
+      const { github } = stubGithub({
+        prs: [pr({ mergeStateStatus: "DIRTY" })],
+        issues: [{ number: 42, labels: [label] }],
+      });
+
+      const result = run(github);
+
+      assert.deepEqual(result, { needsPass: [], passes: [] });
+    });
+  }
+
+  it("logs why it skipped the PR, naming sandcastle:building", () => {
+    const { github } = stubGithub({ prs: [pr({ mergeStateStatus: "DIRTY" })], issues: [{ number: 42, labels: [BUILDING_LABEL] }] });
+    const lines: string[] = [];
+
+    run(github, lines);
+
+    assert.ok(lines.some((line) => line.includes("#101") && line.includes(BUILDING_LABEL)), lines.join("\n"));
+  });
+
+  it("doesn't add its PR to the run report's waiting list", () => {
+    const { github } = stubGithub({
+      prs: [pr({ threads: [{ resolved: false, byBot: false, author: "someone" }] })],
+      isOwner: () => false,
+      issues: [{ number: 42, labels: [BUILDING_LABEL] }],
+    });
+    const waiting = new WaitingPrReport();
+
+    sweepPullRequests(github, () => {}, NOW, new OutcomeReport(), waiting, new UnlabelledPrReport(), new Set<number>());
+
+    assert.deepEqual(waiting.items(), []);
+  });
+
+  it("still decides another PR in the same sweep whose issue isn't being built", () => {
+    const held = pr({ number: 101, mergeStateStatus: "BEHIND" });
+    const other = pr({
+      number: 102,
+      id: "PR_102",
+      headRefName: "feature/43-add-sorting",
+      headRefOid: "b".repeat(40),
+      mergeStateStatus: "BEHIND",
+      reviews: [{ author: COPILOT_REVIEWER, commitOid: "b".repeat(40) }],
+      labels: [REVIEW_LABEL],
+    });
+    const { github, updatedBranches } = stubGithub({
+      prs: [held, other],
+      issues: [
+        { number: 42, labels: [BUILDING_LABEL] },
+        { number: 43, labels: [] },
+      ],
+    });
+
+    run(github);
+
+    assert.deepEqual(updatedBranches, [{ number: 102, expectedHeadSha: "b".repeat(40) }]);
+  });
+
+  it("sweeps a PR as usual when its issue carries no sandcastle:building", () => {
+    const { github, updatedBranches } = stubGithub({ prs: [pr({ mergeStateStatus: "BEHIND" })], issues: [{ number: 42, labels: ["sandcastle:ready"] }] });
+
+    run(github);
+
+    assert.deepEqual(updatedBranches, [{ number: 101, expectedHeadSha: "a".repeat(40) }]);
+  });
+});
+
+// #53: a follow-up-only run touches only open PRs. The closed-without-merging
+// hand-back is an issue-level step a full run does, so a full run and a
+// follow-up run can't both hand back one issue and post two comments.
+describe("sweepPullRequests' closed-PR hand-back switch", () => {
+  const run = (github: FollowUpGitHub, handBackClosed?: boolean) =>
+    sweepPullRequests(
+      github,
+      () => {},
+      NOW,
+      new OutcomeReport(),
+      new WaitingPrReport(),
+      new UnlabelledPrReport(),
+      new Set<number>(),
+      handBackClosed,
+    );
+
+  it("neither reads the closed PRs nor hands an issue back when handBackClosed is false", () => {
+    const { github, handBacks, closedCalls } = stubGithub({ prs: [], closed: [closedPr()] });
+
+    run(github, false);
+
+    assert.deepEqual(closedCalls, []);
+    assert.deepEqual(handBacks, []);
+  });
+
+  it("still sweeps the open PRs when handBackClosed is false", () => {
+    const { github, updatedBranches } = stubGithub({ prs: [pr({ mergeStateStatus: "BEHIND" })], closed: [closedPr()] });
+
+    run(github, false);
+
+    assert.equal(updatedBranches.length, 1);
+  });
+
+  it("still returns the PRs that need a pass when handBackClosed is false", () => {
+    const { github } = stubGithub({ prs: [pr({ mergeStateStatus: "DIRTY" })] });
+
+    const result = run(github, false);
+
+    assert.deepEqual(result.needsPass, [101]);
+  });
+
+  it("hands an issue back by default, as a full run does", () => {
+    const { github, handBacks, closedCalls } = stubGithub({ prs: [], closed: [closedPr()] });
+
+    run(github);
+
+    assert.deepEqual(closedCalls, [HOST]);
+    assert.equal(handBacks.length, 1);
+  });
+
+  it("hands an issue back when handBackClosed is true", () => {
+    const { github, handBacks } = stubGithub({ prs: [], closed: [closedPr()] });
+
+    run(github, true);
+
+    assert.equal(handBacks.length, 1);
   });
 });

@@ -92,6 +92,24 @@ export function budgetMinutesFrom(env: Record<string, string | undefined>): numb
   return Number(value);
 }
 
+// SANDCASTLE_MODE (#53).
+export type RunMode = "full" | "follow-up";
+
+// Thrown by runModeFrom for a value that isn't empty or "follow-up".
+export class RunModeError extends Error {}
+
+// SANDCASTLE_MODE from `env`: unset or exactly "" gives "full", exactly
+// "follow-up" gives "follow-up". Anything else throws RunModeError, with no
+// trim: the workflow writes the value exactly, so an odd one stops the run.
+export function runModeFrom(_env: Record<string, string | undefined>): RunMode {
+  throw new Error("Not implemented");
+}
+
+// The `name:` of .github/workflows/sandcastle.yml. Its check runs on a PR's
+// head are the job's own, never something a follow-up pass can fix (#53). Keep
+// it in step with the workflow's name.
+export const SANDCASTLE_WORKFLOW = "Sandcastle";
+
 // How many issues one intake run judges. A malformed or truncated <intake>
 // block costs every verdict in it, so a large backlog is judged in several
 // runs of this many issues each (#224, #227).
