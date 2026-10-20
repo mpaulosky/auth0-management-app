@@ -82,6 +82,11 @@ Saved search for everything waiting on a human: `is:open label:sandcastle:needs-
 5. **Critique**: defer, in code, picks whose predicted files overlap another pick or an open PR, then have the critique defer picks that aren't safe to build alongside the others.
 6. **Build**: one sandbox per picked issue runs the role team, the gate and publishes a PR.
 
+A follow-up run (`SANDCASTLE_MODE=follow-up`, see **Follow-up runs** in [Trigger and run environment](#trigger-and-run-environment)) does one sweep and the passes it
+finds, then exits, through `lib/follow-up-run.mts`: no umbrellas, intake, gate, plan, build or second round.
+It has no next round to sweep a PR again, so when the sweep couldn't follow up a PR, the run still does the other PRs' passes,
+records the PR in the run report as `follow-up failed`, and exits 1 once the report is written (it isn't reported as a crash).
+
 The queue is the `Sandcastle` label in Actions. A local run must name its scope, either an issue number or a dev label such as `Sandcastle:dev` through an environment variable, so it
 never competes with Actions for work ([trigger decision](https://github.com/mpaulosky/Blazor-Server/issues/61)). Every phase works only on issues and PRs in that scope, and only on
 issues the owner approved (see **Labels**).
@@ -101,6 +106,8 @@ skipped. A PR is Sandcastle's only when the repository owner opened it (the host
 writes when it publishes, so a collaborator's PR on a matching branch is never swept.
 The Copilot-review, CI-completion and Claude-Review-completion triggers only start a run; this check decides which PRs it touches.
 A swept PR that has never carried `review:claude` gets it first (see **Labelling the PR** in [The gate](#the-gate)).
+A PR whose issue carries `sandcastle:building` is skipped too: another run is passing on it or a build is opening it ([#53](https://github.com/mpaulosky/auth0-management-app/issues/53)).
+A full run removes any `sandcastle:building` label it still holds before its sweep, so it never skips a PR of its own.
 
 **Settled.** A PR gets a pass only when every check run on its head has completed and Copilot has reviewed the head (a Copilot review with `commit.oid == headRefOid`, and Copilot not in
 `reviewRequests`). A red check or an unresolved bot or owner thread gets a pass as soon as the checks have completed,
@@ -158,6 +165,7 @@ count as giving up: the human who opened them is already involved, and the job s
 
 **Closed PRs.** If a PR closes without merging while its issue is open, the host adds `sandcastle:needs-human` to the issue with the comment "PR #x was closed without merging; remove the
 label to rebuild". The next build of that issue starts fresh from `main`: the host deletes the old remote branch before `createSandbox()`.
+Only a full run hands back an issue this way, so a full run and a follow-up run can't both post the comment.
 
 ## Phase 2: Intake
 
@@ -434,16 +442,31 @@ by `pull_request_review`, `workflow_run` or `pull_request_target` (the follow-up
 group `sandcastle-follow-up` instead, and the run step sets `SANDCASTLE_MODE=follow-up`. The host then only sweeps and runs follow-up passes, so a PR's review or CI
 result is answered beside a running build rather than after it. A small first job, **Choose the run mode**, carries the event filter and decides the mode once; the Sandcastle
 job's concurrency group and `SANDCASTLE_MODE` both read its output. Computing them separately could disagree: the group is evaluated when the job is queued and a step's `env`
-when it starts, maybe hours later, and the variable can change in between. Until the host supports the mode, the variable stays unset, and every run takes `sandcastle` as
-before.
+when it starts, maybe hours later, and the variable can change in between. The host supports the mode, so the owner can set the variable; until then every run takes
+`sandcastle` as before. An empty `SANDCASTLE_MODE` is a full run, and any value but `follow-up` fails the run before it touches git, `gh` or a sandbox
+(`runModeFrom` in `lib/config.mts`).
 
-With the variable set, a full run and a follow-up run can be going at once, and a full run still sweeps at the start of each round. Before the variable is set, the host must
-keep the two off the same PR. For example, a full run skips its sweep while follow-up runs are on, or each PR is locked while a run works on it. Otherwise both can push to
-the same branch, and both count follow-up passes, so the pass limit runs out twice as fast.
+With the variable set, a full run and a follow-up run can be going at once, and a full run still sweeps at the start of each round, as the backstop for a follow-up event
+that was dropped or a pass that failed. `sandcastle:building` keeps the two off the same PR. A pass claims it on the PR's issue before it touches the branch and reads the PR
+again after the claim, a build claims it on its issue, and the sweep skips a PR whose issue carries it. So neither run updates the branch of, re-asks Copilot on, passes on
+or pushes to a PR the other is working on, and they can't both count a pass. A follow-up run also leaves closed-PR hand-backs (see **Closed PRs**) to full runs.
+The sweep reads `sandcastle:building` once, before its per-PR reads, and reads the issue's labels again right before an update-branch or a Copilot re-request, so a
+claim made meanwhile stops the write. A follow-up run ends red when the sweep couldn't follow up a PR, including one whose owner check couldn't finish, since it has no next
+round. Three gaps remain:
+
+- **The claim's race.** The claim reads the issue's labels, then adds the label. Two runs that do that within one round trip both think they hold it. A pass pushes plain,
+  never `--force`, so the second push is rejected and posts nothing; only when neither pushes can both post a reply and a pass marker.
+- **The re-read's window.** A claim made between the sweep's fresh read and its write isn't seen. If the pass pushes first, or a second sweep updates the same BEHIND PR
+  first, `update-branch` gets a 422 on `expected_head_sha`. `updatePullRequestBranch` throws `HeadMovedError` for that refusal and the sweep logs it and skips the PR,
+  since the head moved and the other run has it; it isn't a failure, so it doesn't end a follow-up run red. Any other `update-branch` failure still does.
+- **A follow-up event can be dropped.** A follow-up run that finds a PR held by the full run skips it and exits. A review that landed after the full run's pass read its
+  threads then waits for the full run's next round, the next CI completion or the scheduled run, as it did before follow-up runs.
 
 **The run's own check:** a run started by a PR event (`pull_request_review`, `pull_request_target`) reports the `Sandcastle` job as a check on that PR's head (and **Choose the run mode**,
-which finishes before it starts). It runs while the run does, and Fail on hand-backs turns it red when the run hands back anything, even an unrelated issue. The host must leave that check
-out when it reads a PR's checks. Otherwise the sweep waits on its own running check, or flags a red one no pass can fix.
+which finishes before it starts). It runs while the run does, and Fail on hand-backs turns it red when the run hands back anything, even an unrelated issue. So in every mode,
+the sweep and a pass's read of the head's checks leave out each check run of the `Sandcastle` workflow (`SANDCASTLE_WORKFLOW` in `lib/config.mts`, kept in step with the
+workflow's `name:`). They match the workflow, not the check's name, which also drops a run GitHub cancelled while it waited in its concurrency group. A check another
+workflow names `Sandcastle`, a check with no workflow run (code scanning's `CodeQL`) and every status are kept.
 
 **Time:** the job has `timeout-minutes: 350`, and no new round starts after 4 hours. A usage or rate-limit error ends the run cleanly like the time budget: it doesn't fail roles or
 bounce issues. The next trigger resumes the work.

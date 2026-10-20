@@ -8,22 +8,26 @@
 // itself published (see isSandcastlePullRequest), and acts on the ones that
 // need no agent: re-requesting a stale Copilot review, updating a branch
 // that's only behind main, and handing an issue back when its latest PR
-// closed without merging. A PR that needs more than that (DIRTY, a red
-// check, an unresolved bot or owner thread) is logged here and returned as a
-// PassTarget: the agent pass that fixes it lives in lib/follow-up-pass.mts
-// (#78).
+// closed without merging (a full run only). It leaves alone a PR whose issue
+// is labelled sandcastle:building, which another run, or this one, holds
+// while it builds or passes on it (#53). A PR that needs more than that
+// (DIRTY, a red check, an unresolved bot or owner thread) is logged here and
+// returned as a PassTarget: the agent pass that fixes it lives in
+// lib/follow-up-pass.mts (#78).
 // ---------------------------------------------------------------------------
 
 import { discardClosedWork, isIssueBranch, type BranchRefs } from "./branches.mts";
-import { COPILOT_REREQUEST_AFTER_MS, PR_MARKER, REVIEW_LABEL } from "./config.mts";
+import { BUILDING_LABEL, COPILOT_REREQUEST_AFTER_MS, PR_MARKER, REVIEW_LABEL } from "./config.mts";
 import {
   addPullRequestLabel,
   closedPullRequests,
   handBack,
   hasCarriedReviewLabel,
   hasLabel,
+  HeadMovedError,
   isCopilot,
   issueEvents,
+  issueLabels,
   labelTimeline,
   openPullRequestsForSweep,
   pushAccess,
@@ -113,15 +117,27 @@ export function isSandcastlePullRequest(pr: PullRequestIdentity, host: string): 
 }
 
 // The first reason the sweep skips `pr`, checked in this order: a fork, not
-// into main, not an issue branch, the issue isn't open and in scope, a draft,
-// labelled sandcastle:needs-human, not the host's, no PR_MARKER, or
-// truncated. Undefined when none applies, so the sweep decides from it.
-export function sweepSkipReason(pr: SweepPullRequest, inScope: ReadonlySet<number>, host: string): string | undefined {
+// into main, not an issue branch, the issue isn't open and in scope, the
+// issue is in `building` (labelled sandcastle:building), a draft, labelled
+// sandcastle:needs-human, not the host's, no PR_MARKER, or truncated.
+// Undefined when none applies, so the sweep decides from it. The building
+// skip keeps a full run and a follow-up run, which can go at the same time
+// (#53), off a PR the other is passing on or a build is opening: neither
+// updates its branch, re-asks Copilot or relabels it.
+export function sweepSkipReason(
+  pr: SweepPullRequest,
+  inScope: ReadonlySet<number>,
+  host: string,
+  building: ReadonlySet<number> = new Set(),
+): string | undefined {
   if (pr.isCrossRepository !== false) return "it's from a fork";
   if (pr.baseRefName !== "main") return `it's into ${pr.baseRefName}, not main`;
   const issueNumber = issueNumberOf(pr.headRefName);
   if (issueNumber === undefined) return `${pr.headRefName} isn't an issue branch`;
   if (!inScope.has(issueNumber)) return `#${issueNumber} isn't an open Sandcastle issue`;
+  if (building.has(issueNumber)) {
+    return `#${issueNumber} is labelled ${BUILDING_LABEL}, so another run is building it or passing on its PR`;
+  }
   if (pr.isDraft) return "it's a draft";
   if (hasLabel(pr, NEEDS_HUMAN)) return `it's labelled ${NEEDS_HUMAN}`;
   if (pr.author !== host) return `${pr.author ?? "a deleted account"} opened it, not ${host}`;
@@ -252,6 +268,10 @@ export type FollowUpGitHub = {
   // live: lib/queue.mts#loadQueue(), so the sweep sees only this run's
   // scope, approved by the owner (#146).
   inScopeIssues(): { number: number; labels: string[] }[];
+  // The labels the issue carries now, read fresh just before a write to its PR:
+  // the sweep's `inScopeIssues` snapshot is older than the per-PR reads (#53).
+  // live: issueLabels(issueNumber).
+  issueLabels(issueNumber: number): string[];
   labelTimeline(issueNumber: number): TimelineLabelEvent[];
   requestCopilotReview(pullRequestId: string): void;
   updateBranch(number: number, expectedHeadSha: string): void;
@@ -271,6 +291,7 @@ export const liveFollowUpGitHub: FollowUpGitHub = {
   openPullRequests: () => openPullRequestsForSweep(),
   closedPullRequests: (author) => closedPullRequests(author),
   inScopeIssues: () => loadQueue().map((issue) => ({ number: issue.number, labels: issue.labels })),
+  issueLabels: (issueNumber) => issueLabels(issueNumber),
   labelTimeline: (issueNumber) => labelTimeline(issueNumber),
   requestCopilotReview: (pullRequestId) => requestCopilotReview(pullRequestId),
   updateBranch: (number, expectedHeadSha) => updatePullRequestBranch(number, expectedHeadSha),
@@ -291,20 +312,25 @@ export type SweepResult = { needsPass: number[]; passes: PassTarget[] };
 const carriedReviewLabel = new Set<number>();
 
 // Reads the host's login, the in-scope issues and the open PRs once, then
-// for each PR either skips it (sweepSkipReason) or applies `decide`, logging
-// what happened. A PR whose sandcastle:needs-human someone other than the
+// for each PR either skips it (sweepSkipReason, which also skips a PR whose
+// issue is labelled sandcastle:building) or applies `decide`, logging what
+// happened. A PR whose sandcastle:needs-human someone other than the
 // repository owner removed gets it back instead, and is left alone (#146).
 // Each PR runs in its own try/catch, so one failure doesn't stop the rest.
 // An updated PR reaches `outcomes` as "updated", and every PR that reached
 // `decide` with unresolved threads opened by someone other than the
 // repository owner or a bot (the same test lib/follow-up-pass.mts#threadsForRole
 // uses) replaces `waiting`'s list, so the run report shows the latest sweep's
-// view, and `unlabelled` drops every PR no longer open. Once that's done, hands
-// back any in-scope issue, not labelled sandcastle:needs-human and with no
-// open PR, whose latest Sandcastle PR closed without merging
-// (closedWithoutMerging), each in its own try/catch too. Every swept PR
+// view, and `unlabelled` drops every PR no longer open. Once that's done, and
+// only when `handBackClosed` is true, hands back any in-scope issue, not
+// labelled sandcastle:needs-human and with no open PR, whose latest Sandcastle
+// PR closed without merging (closedWithoutMerging), each in its own try/catch
+// too. A follow-up-only run passes false (#53): it touches only open PRs, so it
+// and a full run can't both hand back one issue. Every swept PR
 // (sweepSkipReason applies isSandcastlePullRequest's tests) that has never
-// carried REVIEW_LABEL gets it first (labelForReview).
+// carried REVIEW_LABEL gets it first (labelForReview). `onPrError` hears about
+// each PR whose follow-up threw, after the warning is logged, so a follow-up-only
+// run, which has no next round to sweep it again, can end red (#53).
 export function sweepPullRequests(
   github: FollowUpGitHub = liveFollowUpGitHub,
   log: (line: string) => void = console.log,
@@ -313,10 +339,13 @@ export function sweepPullRequests(
   waiting: WaitingPrReport = waitingPrReport,
   unlabelled: Pick<UnlabelledPrReport, "record" | "resolve" | "retain"> = unlabelledPrReport,
   carried: Set<number> = carriedReviewLabel,
+  handBackClosed: boolean = true,
+  onPrError: (pr: number, error: unknown) => void = () => {},
 ): SweepResult {
   const host = github.hostLogin();
   const issues = github.inScopeIssues();
   const inScope = new Set(issues.map((issue) => issue.number));
+  const building = new Set(issues.filter((issue) => hasLabel(issue, BUILDING_LABEL)).map((issue) => issue.number));
   const openPrs = github.openPullRequests();
   const needsPass: number[] = [];
   const passes: PassTarget[] = [];
@@ -324,7 +353,7 @@ export function sweepPullRequests(
 
   for (const pr of openPrs) {
     try {
-      const skip = sweepSkipReason(pr, inScope, host);
+      const skip = sweepSkipReason(pr, inScope, host, building);
       if (skip !== undefined) {
         log(`  · PR #${pr.number} isn't swept: ${skip}.`);
         continue;
@@ -333,7 +362,10 @@ export function sweepPullRequests(
       // (#146): put the label back and leave the PR alone this round.
       const origin = labelOriginFixes(pr.labels, github.pullRequestEvents(pr.number), github.isOwner, PR_LABEL_RULES);
       if (origin.unknown.length > 0) {
-        log(`  · PR #${pr.number} isn't swept: couldn't check whether the repository owner removed ${NEEDS_HUMAN}.`);
+        const reason = `couldn't check whether the repository owner removed ${NEEDS_HUMAN}`;
+        log(`  · PR #${pr.number} isn't swept: ${reason}.`);
+        // A follow-up run has no next round to sweep it again, so it ends red.
+        onPrError(pr.number, new Error(reason));
         continue;
       }
       const restore = origin.fixes.find((fix) => fix.action === "restore");
@@ -350,6 +382,18 @@ export function sweepPullRequests(
       const humanThreads = pr.threads.filter((thread) => !thread.resolved && !thread.byBot && github.isOwner(thread.author) !== true).length;
       if (humanThreads > 0) waitingPrs.push({ pr: pr.number, threads: humanThreads });
       const decision = decide(pr, now, github.isOwner);
+      // `building` is a snapshot from before the per-PR reads above, so another
+      // run may have claimed the issue since. Read it again just before a write
+      // that run's pass would race (update-branch moves the head; a Copilot
+      // request is noise on a PR it's passing on). A held PR is left for that
+      // run, as sweepSkipReason leaves it.
+      if (
+        (decision.action === "update-branch" || decision.action === "request-review") &&
+        hasLabel({ labels: github.issueLabels(issueNumberOf(pr.headRefName) ?? -1) }, BUILDING_LABEL)
+      ) {
+        log(`  · PR #${pr.number} isn't swept: its issue became labelled ${BUILDING_LABEL} since the sweep began, so another run is working on it.`);
+        continue;
+      }
       followUp(pr, decision, github, log, outcomes);
       if (decision.action === "needs-pass") {
         needsPass.push(pr.number);
@@ -357,10 +401,12 @@ export function sweepPullRequests(
       }
     } catch (error) {
       log(`  ⚠ Couldn't follow up PR #${pr.number}, so it's swept again next round: ${error}`);
+      onPrError(pr.number, error);
     }
   }
   waiting.replace(waitingPrs);
   unlabelled.retain(new Set(openPrs.map((pr) => pr.number)));
+  if (!handBackClosed) return { needsPass, passes };
 
   // Any same-repo open PR on an issue's branch, the host's or not, means the
   // issue isn't waiting on a closed one.
@@ -478,7 +524,15 @@ function followUp(
       log(`  ↻ PR #${pr.number}: asked Copilot again to review ${pr.headRefOid.slice(0, 7)}`);
       return;
     case "update-branch":
-      github.updateBranch(pr.number, pr.headRefOid);
+      try {
+        github.updateBranch(pr.number, pr.headRefOid);
+      } catch (error) {
+        if (!(error instanceof HeadMovedError)) throw error;
+        // Another run, or a push, moved the head since the sweep read it:
+        // nothing is wrong, and that run's own sweep or pass has it.
+        log(`  · PR #${pr.number} isn't updated: its head moved since the sweep read it, so another run got there first.`);
+        return;
+      }
       outcomes.record({ kind: "pr", number: pr.number, outcome: "updated", detail: "was only behind main" });
       log(`  ⤴ PR #${pr.number} (${pr.headRefName}) was only behind main: updated it on GitHub`);
       return;
