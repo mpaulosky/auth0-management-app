@@ -63,7 +63,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 350
     # A follow-up-only run (SANDCASTLE_FOLLOW_UP_JOB) queues in its own group,
-    # beside a build rather than behind it. The same condition sets
+    # beside a build rather than behind it. Every pull_request_target run that
+    # passes the if: is about a PR (the label, or a hand-back removal that
+    # re-queues it for the sweep), so it counts. The same condition sets
     # SANDCASTLE_MODE in the Run Sandcastle step: keep the two in step. Two
     # runs can then be going at once, so the host must keep them off the same
     # PR (#53) before the variable is set.
@@ -71,7 +73,7 @@ jobs:
       group: >-
         ${{ vars.SANDCASTLE_FOLLOW_UP_JOB == 'true'
           && (github.event_name == 'pull_request_review' || github.event_name == 'workflow_run'
-            || (github.event_name == 'pull_request_target' && github.event.action == 'labeled'))
+            || github.event_name == 'pull_request_target')
           && 'sandcastle-follow-up' || 'sandcastle' }}
       cancel-in-progress: false
     # Label events start a run only when the owner adds Sandcastle or removes a
@@ -88,7 +90,8 @@ jobs:
         && github.event.sender.login == github.repository_owner)
       || ((github.event_name == 'issues' || github.event_name == 'pull_request_target') && github.event.action == 'unlabeled'
         && (github.event.label.name == 'sandcastle:needs-info' || github.event.label.name == 'sandcastle:needs-human')
-        && github.event.sender.login == github.repository_owner)
+        && github.event.sender.login == github.repository_owner
+        && (github.event_name == 'issues' || github.event.pull_request.head.repo.full_name == github.repository))
       || (github.event_name == 'pull_request_target' && github.event.action == 'labeled'
         && vars.SANDCASTLE_FOLLOW_UP_LABEL == 'true'
         && github.event.label.name == 'sandcastle:follow-up'
@@ -205,7 +208,7 @@ jobs:
           SANDCASTLE_MODE: >-
             ${{ vars.SANDCASTLE_FOLLOW_UP_JOB == 'true'
               && (github.event_name == 'pull_request_review' || github.event_name == 'workflow_run'
-                || (github.event_name == 'pull_request_target' && github.event.action == 'labeled'))
+                || github.event_name == 'pull_request_target')
               && 'follow-up' || '' }}
           GH_TOKEN: ${{ secrets.SANDCASTLE_GH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

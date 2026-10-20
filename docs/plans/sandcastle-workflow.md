@@ -406,7 +406,8 @@ Triggers:
 
 - `issues: labeled` where the label is exactly `Sandcastle`;
 - `issues` / `pull_request_target: unlabeled` where the label is exactly `sandcastle:needs-info` or `sandcastle:needs-human`. A PR's label events come from
-  `pull_request_target`, not `pull_request`, because GitHub starts no `pull_request` run on a PR with merge conflicts; the job checks out `main` either way;
+  `pull_request_target`, not `pull_request`, because GitHub starts no `pull_request` run on a PR with merge conflicts; the job checks out `main` either way. A PR's
+  removal counts only for a same-repo PR, since `pull_request_target` gives a fork's PR the secrets too;
 - `pull_request_review` submitted by Copilot, and `workflow_run` completed for `Build and Test Suite` or `Claude Review` (the `name:` of `ci.yml` and of
   `claude-review.yml`, since `workflow_run` matches workflow names, not file names), only for same-repo `feature/*` / `fix/*` / `hotfix/*` heads, so a fork never runs with
   secrets. Claude Review is followed by its completion because it posts with `GITHUB_TOKEN`, whose review starts no `pull_request_review` run, so without it a Claude review
@@ -429,7 +430,8 @@ with the write token, and every other event runs the host code checked out from 
 pending slot and can't displace a real pending run. One run going and at most one pending in the group. Every run re-reads the whole queue, so collapsed triggers lose nothing.
 
 **Follow-up runs** ([#53](https://github.com/mpaulosky/auth0-management-app/issues/53)): with the repository variable `SANDCASTLE_FOLLOW_UP_JOB` set to `true`, a run started
-by `pull_request_review`, `workflow_run` or `pull_request_target: labeled` takes the group `sandcastle-follow-up` instead, and the run step sets `SANDCASTLE_MODE=follow-up`. The host
+by `pull_request_review`, `workflow_run` or `pull_request_target` (the follow-up label, or a hand-back removal on a PR, which re-queues it for the sweep) takes the
+group `sandcastle-follow-up` instead, and the run step sets `SANDCASTLE_MODE=follow-up`. The host
 then only sweeps and runs follow-up passes, so a PR's review or CI result is answered beside a running build rather than after it. The two expressions share one condition, so a
 follow-up-group run always has the mode set. Until the host supports the mode, the variable stays unset, and every run takes `sandcastle` as before.
 
