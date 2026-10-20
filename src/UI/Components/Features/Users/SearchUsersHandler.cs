@@ -24,32 +24,21 @@ namespace UI.Components.Features.Users;
 /// </summary>
 public sealed class SearchUsersHandler
 {
-	// The Admin list hardly ever changes between searches, and each lookup costs two or more rate-limited requests.
-	private static readonly TimeSpan AdminIdsLifetime = TimeSpan.FromSeconds(60);
-
 	private readonly IManagementApi _managementApi;
 	private readonly IValidator<SearchUsersQuery> _validator;
-	private readonly TimeProvider _time;
-
-	// The handler is a singleton, so one lookup serves every circuit. Two searches that miss together both fetch and the
-	// later write wins, which is harmless.
-	private volatile CachedAdminIds? _adminIds;
 
 	/// <summary>
 	///   Initializes a new instance of <see cref="SearchUsersHandler" />.
 	/// </summary>
 	/// <param name="managementApi">The Management API seam.</param>
 	/// <param name="validator">The validator for <see cref="SearchUsersQuery" />.</param>
-	/// <param name="time">The clock that ages the cached <c>Admin</c> ids.</param>
-	public SearchUsersHandler(IManagementApi managementApi, IValidator<SearchUsersQuery> validator, TimeProvider time)
+	public SearchUsersHandler(IManagementApi managementApi, IValidator<SearchUsersQuery> validator)
 	{
 		ArgumentNullException.ThrowIfNull(managementApi);
 		ArgumentNullException.ThrowIfNull(validator);
-		ArgumentNullException.ThrowIfNull(time);
 
 		_managementApi = managementApi;
 		_validator = validator;
-		_time = time;
 	}
 
 	/// <summary>
@@ -95,7 +84,7 @@ public sealed class SearchUsersHandler
 			pageCount = UserPaging.ReachablePageCount(search.Value!.Total);
 		}
 
-		Result<CachedAdminIds> adminIds = await FindAdminIdsAsync(cancellationToken).ConfigureAwait(false);
+		Result<AdminIds> adminIds = await FindAdminIdsAsync(cancellationToken).ConfigureAwait(false);
 		if (adminIds.Failure)
 		{
 			return FailedWith<UserListPage>(adminIds);
@@ -117,49 +106,36 @@ public sealed class SearchUsersHandler
 	private Task<Result<UserPage>> SearchAsync(string? luceneQuery, int page, CancellationToken cancellationToken) =>
 		_managementApi.SearchUsersAsync(new UserSearch(luceneQuery, page, UserPaging.PageSize), cancellationToken);
 
-	// One request for the Role list and one for Admin's members, never one per User, and then not again for a minute.
-	private async Task<Result<CachedAdminIds>> FindAdminIdsAsync(CancellationToken cancellationToken)
+	// One request for the Role list and one for Admin's members, never one per User. CachedManagementApi keeps both for a short
+	// time and drops the members when a Role write makes them stale, so this doesn't cache them a second time.
+	private async Task<Result<AdminIds>> FindAdminIdsAsync(CancellationToken cancellationToken)
 	{
-		CachedAdminIds? cached = _adminIds;
-		if (cached is not null && _time.GetUtcNow() < cached.ExpiresAt)
-		{
-			return Result.Ok(cached);
-		}
-
 		Result<IReadOnlyList<RoleSummary>> roles = await _managementApi.ListRolesAsync(cancellationToken).ConfigureAwait(false);
 		if (roles.Failure)
 		{
-			return FailedWith<CachedAdminIds>(roles);
+			return FailedWith<AdminIds>(roles);
 		}
 
 		RoleSummary? admin = roles.Value!.FirstOrDefault(role =>
 			string.Equals(role.Name, ApplicationConstants.AdminRole, StringComparison.Ordinal));
-		CachedAdminIds fresh;
 		if (admin is null)
 		{
-			fresh = new CachedAdminIds(ImmutableHashSet<string>.Empty, false, _time.GetUtcNow() + AdminIdsLifetime);
+			return Result.Ok(new AdminIds(ImmutableHashSet<string>.Empty, false));
 		}
-		else
+
+		Result<RoleMembers> members = await _managementApi.ListRoleMembersAsync(admin.Id, cancellationToken)
+			.ConfigureAwait(false);
+		if (members.Failure)
 		{
-			Result<RoleMembers> members = await _managementApi.ListRoleMembersAsync(admin.Id, cancellationToken)
-				.ConfigureAwait(false);
-			if (members.Failure)
-			{
-				return FailedWith<CachedAdminIds>(members);
-			}
-
-			fresh = new CachedAdminIds(members.Value!.Users.Select(user => user.Id).ToImmutableHashSet(StringComparer.Ordinal),
-				members.Value.Truncated, _time.GetUtcNow() + AdminIdsLifetime);
+			return FailedWith<AdminIds>(members);
 		}
 
-		// Only a successful lookup is kept, so a rate limit is retried on the next search.
-		_adminIds = fresh;
-
-		return Result.Ok(fresh);
+		return Result.Ok(new AdminIds(members.Value!.Users.Select(user => user.Id).ToImmutableHashSet(StringComparer.Ordinal),
+			members.Value.Truncated));
 	}
 
 	private static Result<T> FailedWith<T>(Result failure) =>
 		Result.Fail<T>(failure.Error ?? string.Empty, failure.ErrorCode, failure.Details);
 
-	private sealed record CachedAdminIds(ImmutableHashSet<string> Ids, bool Truncated, DateTimeOffset ExpiresAt);
+	private sealed record AdminIds(ImmutableHashSet<string> Ids, bool Truncated);
 }
