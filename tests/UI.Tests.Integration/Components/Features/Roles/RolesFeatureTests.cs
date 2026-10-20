@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 
 using UI.Components.Features.Roles;
+using UI.Components.Features.Users;
 using UI.ManagementApi;
 using UI.Tests.Integration.Fixtures;
 
@@ -54,8 +55,6 @@ public class RolesFeatureTests : IClassFixture<UiWebApplicationFactory>
 		registrations.Should().ContainSingle("AddRolesFeature() calls AddManagementApi(), which registers IManagementApi once");
 	}
 
-	// The Users slice isn't in this branch, so the second registrant is a plain AddManagementApi() call, which is all
-	// AddUsersFeature() adds to the seam.
 	[Fact]
 	public void AddRolesFeature_AnotherSliceAlsoRegistersTheManagementApi_RegistersIManagementApiOnce()
 	{
@@ -63,7 +62,7 @@ public class RolesFeatureTests : IClassFixture<UiWebApplicationFactory>
 		using WebApplicationFactory<Program> factory = _factory.WithWebHostBuilder(builder =>
 			builder.ConfigureTestServices(services =>
 			{
-				services.AddManagementApi();
+				services.AddUsersFeature();
 				services.AddRolesFeature();
 			}));
 
