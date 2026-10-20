@@ -153,27 +153,50 @@ export class HumanThreadReport {
 // The one report every follow-up pass this run makes records into.
 export const humanThreadReport = new HumanThreadReport();
 
-// A PR the host opened or reused without REVIEW_LABEL because adding it failed
-// (lib/github.mts#openPullRequest): Claude never reviews it until a person
+// A PR the host opened, reused or swept without REVIEW_LABEL because adding it
+// failed, or, for a reused PR, reading whether it ever carried it failed
+// (lib/github.mts#openPullRequest, lib/follow-up.mts#sweepPullRequests, whose
+// failed reads only warn): Claude never reviews it until a person
 // adds the label, and the run log alone is a line nobody reads in an
 // unattended run.
 export type UnlabelledPrEntry = { pr: number; url: string };
 
-// Every such PR this run left, so the run report names them.
+// Every such PR this run left, once each, so the run report names them. A
+// later round's sweep that labels the PR, or finds it has carried the label,
+// resolves it, and one that finds it no longer open drops it, so the run ends
+// red only for the open PRs still unlabelled.
 export class UnlabelledPrReport {
-  private readonly entries: UnlabelledPrEntry[] = [];
+  private readonly entries = new Map<number, UnlabelledPrEntry>();
 
   record(entry: UnlabelledPrEntry): void {
-    this.entries.push(entry);
+    this.entries.set(entry.pr, entry);
+  }
+
+  resolve(pr: number): void {
+    this.entries.delete(pr);
+  }
+
+  // Drops every PR not in `open`: one merged or closed since it was recorded
+  // is never swept again, so nothing else would resolve it.
+  retain(open: ReadonlySet<number>): void {
+    for (const pr of this.entries.keys()) {
+      if (!open.has(pr)) this.entries.delete(pr);
+    }
   }
 
   items(): readonly UnlabelledPrEntry[] {
-    return this.entries;
+    return [...this.entries.values()];
   }
 }
 
 // The one report every failed review-label add records into.
 export const unlabelledPrReport = new UnlabelledPrReport();
+
+// Whether main.mts must exit non-zero for the PRs it left without REVIEW_LABEL:
+// a failed label add ends the run green otherwise, and nobody is notified.
+export function unlabelledPrExitCode(entries: readonly UnlabelledPrEntry[]): number {
+  return entries.length > 0 ? 1 : 0;
+}
 
 // One round where intake (lib/intake.mts#intakeRound) stopped rather than
 // judge every issue: it hit INTAKE_FAILED_RUNS_LIMIT failed runs or

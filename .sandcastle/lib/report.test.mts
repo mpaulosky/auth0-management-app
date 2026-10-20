@@ -3,11 +3,13 @@ import { describe, it } from "node:test";
 import {
   handBacksJson,
   intakeStopExitCode,
+  unlabelledPrExitCode,
   IntakeStopReport,
   OutcomeReport,
   REPORT_DIR,
   renderSummary,
   targetUrl,
+  UnlabelledPrReport,
   UsageReport,
   WaitingPrReport,
   writeRunReport,
@@ -127,6 +129,50 @@ describe("intakeStopExitCode", () => {
 
   it("is 1 when intake recorded any stop this run, whatever else happened", () => {
     assert.equal(intakeStopExitCode([{ reason: "8 intake runs in a row failed", unjudged: [1], firstError: "boom" }]), 1);
+  });
+});
+
+describe("UnlabelledPrReport", () => {
+  it("lists each PR once, with the latest url recorded for it", () => {
+    const report = new UnlabelledPrReport();
+
+    report.record({ pr: 9, url: "https://github.com/o/r/pull/9" });
+    report.record({ pr: 9, url: "https://github.com/o/r/pull/9#again" });
+
+    assert.deepEqual(report.items(), [{ pr: 9, url: "https://github.com/o/r/pull/9#again" }]);
+  });
+
+  it("drops a PR once it's resolved, and ignores one it never recorded", () => {
+    const report = new UnlabelledPrReport();
+    report.record({ pr: 9, url: "https://github.com/o/r/pull/9" });
+    report.record({ pr: 10, url: "https://github.com/o/r/pull/10" });
+
+    report.resolve(9);
+    report.resolve(11);
+
+    assert.deepEqual(report.items(), [{ pr: 10, url: "https://github.com/o/r/pull/10" }]);
+  });
+
+  it("keeps only the PRs still open when told which are", () => {
+    const report = new UnlabelledPrReport();
+    report.record({ pr: 9, url: "https://github.com/o/r/pull/9" });
+    report.record({ pr: 10, url: "https://github.com/o/r/pull/10" });
+
+    report.retain(new Set([10, 11]));
+
+    assert.deepEqual(report.items(), [{ pr: 10, url: "https://github.com/o/r/pull/10" }]);
+  });
+});
+
+// #51: a PR left without review:claude must end the run red, since the owner's
+// PAT means GitHub notifies nobody and the run would otherwise end green.
+describe("unlabelledPrExitCode", () => {
+  it("is 0 when no PR was left without review:claude", () => {
+    assert.equal(unlabelledPrExitCode([]), 0);
+  });
+
+  it("is 1 when any PR was left without review:claude", () => {
+    assert.equal(unlabelledPrExitCode([{ pr: 9, url: "https://github.com/o/r/pull/9" }]), 1);
   });
 });
 

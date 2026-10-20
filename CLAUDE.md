@@ -13,8 +13,9 @@ AppHost and ServiceDefaults, and their tests. User and Role management is being 
 searches the Tenant's Users at `/admin/users`. The slices call the Management API through one deep interface,
 `IManagementApi` in `src/UI/ManagementApi/` (registered by `AddManagementApi()`, which `AddUsersFeature()` calls), that
 returns `Result` and our own records, with the SDK, the cached client-credentials token and settings under
-`Auth0:Management:*` behind it, and a token bucket that throttles every call to stay under Auth0's rate limits (see
-`docs/adr/0009-one-deep-management-api-seam.md`).
+`Auth0:Management:*` behind it, a token bucket that throttles every call to stay under Auth0's rate limits, and
+`CachedManagementApi` in front, which caches successful reads for a short time and clears what each write makes stale
+(see `docs/adr/0009-one-deep-management-api-seam.md`).
 `mpaulosky/Articles` (`src/Web/Components/Features/UserManagement/`) is a reference for the SDK calls, not for that seam.
 
 ## Auth0 Management API
@@ -121,9 +122,9 @@ Don't start work on an issue labelled `sandcastle:building`: a Sandcastle run is
 that build ends. Check before running `/implement-spec` or opening a branch for an issue.
 
 Claude reviews a PR only when it has the `review:claude` label. Add the label to every PR you open. Sandcastle adds it to
-the PRs it opens itself. Add it by hand to a PR the run report lists under **Pull requests without `review:claude`**, and
-to any open Sandcastle PR that has never had it: one opened before Sandcastle labelled its PRs, or one whose run stopped
-between creating it and labelling it.
+the PRs it opens itself, and its follow-up sweep adds it to any open Sandcastle PR it sweeps that has never had it, such as
+one whose run stopped between creating it and labelling it. A run that couldn't add the label ends red: add it by hand to
+each PR the run report lists under **Pull requests without `review:claude`**.
 
 Watch every PR you open until it merges: Sandcastle's follow-up sweep acts only on the PRs Sandcastle opened itself, so
 nothing else answers a hand-opened PR's review threads or fixes its red checks, and PR Auto-Merge holds it on every

@@ -79,7 +79,7 @@ describe("main.mts's queue-scope wiring", () => {
     const mainMts = read(".sandcastle/main.mts");
     const scopeCall = mainMts.indexOf("queueScopeFrom(");
     const protectCall = mainMts.indexOf("protectHostGit()");
-    const ensureLabelsCall = mainMts.indexOf("ensureLabels()");
+    const ensureLabelsCall = mainMts.indexOf("ensureHostLabels()");
 
     assert.notEqual(scopeCall, -1, "main.mts doesn't call queueScopeFrom(");
     assert.ok(scopeCall < protectCall, "main.mts doesn't resolve the queue scope before protectHostGit()");
@@ -334,6 +334,40 @@ describe("main.mts's intake-stop exit code", () => {
     const assignment = mainMts.slice(exitCodeAssignment, mainMts.indexOf(";", exitCodeAssignment));
     assert.match(assignment, /intakeStopExitCode\(/, "main.mts doesn't derive the exit code from intakeStopExitCode(");
     assert.match(assignment, /intakeStopReport\.items\(\)/, "main.mts doesn't pass intakeStopReport.items() to the exit-code decision");
+  });
+});
+
+// #51: a PR left without review:claude ends the run red, but only once the run
+// report is written, the same way an intake stop does.
+describe("main.mts's unlabelled-PR exit code", () => {
+  it("ends the run non-zero from unlabelledPrExitCode(unlabelledPrs) after writing the run report", () => {
+    const mainMts = read(".sandcastle/main.mts");
+    const writeReportCall = mainMts.indexOf("writeRunReport(");
+    const exitCall = mainMts.indexOf("unlabelledPrExitCode(", writeReportCall);
+
+    assert.notEqual(writeReportCall, -1, "main.mts doesn't call writeRunReport(");
+    assert.notEqual(exitCall, -1, "main.mts doesn't call unlabelledPrExitCode( after writeRunReport(");
+    const statementStart = mainMts.lastIndexOf("process.exitCode", exitCall);
+    assert.ok(statementStart > writeReportCall, "main.mts doesn't set process.exitCode from unlabelledPrExitCode( after writeRunReport(");
+    assert.match(mainMts.slice(exitCall, mainMts.indexOf(";", exitCall)), /unlabelledPrs|unlabelledPrReport\.items\(\)/);
+  });
+
+  it("keeps the intake-stop exit code alongside it", () => {
+    const mainMts = read(".sandcastle/main.mts");
+
+    assert.match(mainMts.slice(mainMts.indexOf("writeRunReport(")), /intakeStopExitCode\(/);
+  });
+});
+
+// #51: review:claude is created at startup through ensureHostLabels, which
+// adds it to SANDCASTLE_LABELS' labels without putting it in that list.
+describe("main.mts's startup labels", () => {
+  it("creates the host's labels, review:claude included, through ensureHostLabels() rather than ensureLabels()", () => {
+    const mainMts = read(".sandcastle/main.mts");
+
+    assert.match(mainMts, /\bensureHostLabels\(\)/, "main.mts doesn't call ensureHostLabels()");
+    assert.doesNotMatch(mainMts, /\bensureLabels\(\)/, "main.mts still calls ensureLabels() on its own");
+    assert.ok(mainMts.indexOf("ensureHostLabels()") < mainMts.indexOf("startedUp = true;"), "main.mts creates the labels after startup finished");
   });
 });
 
