@@ -1003,6 +1003,28 @@ describe("lib/status.mts' imports", () => {
     assert.ok(!source.includes("liveFollowUpGitHub.inScopeIssues"));
   });
 
+  it("reaches only the read members of liveFollowUpGitHub", () => {
+    const reads = ["hostLogin", "openPullRequests", "isOwner", "pullRequestEvents", "pullRequestBodyEdits", "followsHandOffs"];
+    const used = [...source.matchAll(/\bliveFollowUpGitHub\.(\w+)/g)].map((match) => match[1]!);
+
+    assert.ok(used.length > 0);
+    for (const member of used) {
+      assert.ok(reads.includes(member), `lib/status.mts uses liveFollowUpGitHub.${member}, which isn't a read`);
+    }
+    // Passing the whole host along, or spreading it, would reach its writes too.
+    const body = imports.reduce((rest, line) => rest.replace(line, ""), source);
+    assert.equal([...body.matchAll(/\bliveFollowUpGitHub\b(?!\.)/g)].length, 0);
+  });
+
+  it("uses liveQueueGitHub only inside readInScopeIssues, which wraps it in withoutLabelWrites", () => {
+    const uses = [...source.matchAll(/\bliveQueueGitHub\(\)/g)];
+
+    assert.equal(uses.length, 1);
+    assert.match(source, /readInScopeIssues\(liveQueueGitHub\(\)\)/);
+    assert.match(source, /loadQueue\(scope, withoutLabelWrites\(github\)/);
+    assert.doesNotMatch(source, /loadQueue\([^)]*liveQueueGitHub/);
+  });
+
   it("always reads the default Sandcastle queue scope", () => {
     assert.ok(!source.includes("SANDCASTLE_ISSUE"));
     assert.ok(!source.includes("SANDCASTLE_LABEL"));
