@@ -30,20 +30,26 @@ import { claimBuildingLabel, releaseBuildingLabel } from "./building.mts";
 import { runCheckpoint, runGate, tail, type GateRun } from "./checkpoint.mts";
 import {
   BUILDING_LABEL,
+  FOLLOW_UP_LABEL,
   FOLLOW_UP_MARKER,
   FOLLOW_UP_PASS_CAP,
   FOLLOW_UP_REPLY_MARKER,
   GATE_COMMENT_LINES,
   GATE_FIXER_ATTEMPTS,
+  SESSION_REPLY_MARKER,
 } from "./config.mts";
 import { UncountedStopError } from "./errors.mts";
 import type { CheckState, PassTarget } from "./follow-up.mts";
 import {
+  bodyEdits,
   commentOnPullRequest,
   failedCheckLogs,
   handBack,
   headChecksOf,
+  isCopilot,
+  issueEvents,
   markerComments,
+  pullRequestText,
   pushAccess,
   replyToReviewThread,
   rerunFailedChecksOnce,
@@ -59,7 +65,7 @@ import { repoGitDir, worktreeLinkProblems } from "./host-safety.mts";
 import { plainText, withoutReferences } from "./intake.mts";
 import { runLimits, type RunLimits } from "./limits.mts";
 import { followUpPromptArgs, gateFixerPromptArgs, type PassBrief } from "./prompts.mts";
-import { ownerCheck, type IsOwner } from "./queue.mts";
+import { approval, ownerCheck, type IsOwner } from "./queue.mts";
 import { humanThreadReport, outcomeReport, type HumanThreadEntry, type OutcomeEntry, type OutcomeReport } from "./report.mts";
 import { containsSandboxSecret, sandboxSecrets } from "./sandbox-env.mts";
 import { describeSecretMatch, firstSecretMatch, type SecretMatch } from "./scan.mts";
@@ -99,7 +105,10 @@ export type PromptThread = {
 // author is a bot goes to the role as "bot". A thread the repository owner
 // opened goes to the role as "owner", unless the last comment by the owner or
 // `hostLogin` is the host's own reply (by `hostLogin`, opening with
-// FOLLOW_UP_REPLY_MARKER, lib/config.mts): that means the host already
+// FOLLOW_UP_REPLY_MARKER, lib/config.mts, or carrying SESSION_REPLY_MARKER:
+// the owner's session posts with the host's token and its replies count as
+// the host's, so a hand-off PR's first pass doesn't answer again the threads
+// the session declined, #58): that means the host already
 // answered it and is waiting on the owner, so it's dropped from every list
 // rather than handed to the role again. Comments by anyone else don't count
 // either way, so a stranger can neither hide an owner thread by quoting the
@@ -123,7 +132,8 @@ export function threadsForRole(
   const leftForHuman: ReviewThread[] = [];
   const unknown: ReviewThread[] = [];
   const hostReply = (comment: ReviewThread["comments"][number] | undefined) =>
-    comment?.author === hostLogin && comment.body.startsWith(FOLLOW_UP_REPLY_MARKER);
+    comment?.author === hostLogin &&
+    (comment.body.startsWith(FOLLOW_UP_REPLY_MARKER) || comment.body.includes(SESSION_REPLY_MARKER));
   for (const thread of threads) {
     if (thread.resolved) continue;
     const first = thread.comments[0];
@@ -222,8 +232,8 @@ export type ResolveRule = "every-bot-thread" | "fixed-review-threads";
 
 // Whether `login` is Copilot's code-review account or Claude Review's
 // github-actions, with or without "[bot]", case-insensitively.
-export function isReviewBot(_login: string | null): boolean {
-  throw new Error("Not implemented");
+export function isReviewBot(login: string | null): boolean {
+  return isCopilot(login) || login?.toLowerCase().replace(/\[bot\]$/, "") === "github-actions";
 }
 
 // One verdict matched to the thread it answers (see threadActions), and how
@@ -239,11 +249,14 @@ export type ThreadAction = { thread: PromptThread; verdict: ThreadVerdict; resol
 // 12 relies on `actions` holding at most one entry per thread). `resolve` is
 // ADDRESSED for "fixed" or "outdated", WONT_FIX for "declined" (INVALID
 // instead when the verdict's `invalid` is set), and always undefined for an
-// owner thread.
+// owner thread. Under "fixed-review-threads" (#58, #54's decline rule), a bot
+// thread is resolved only when isReviewBot opened it (its first comment, which
+// threadsForRole always keeps) and the verdict is "fixed"; any other gets a
+// reply and stays open for the owner.
 export function threadActions(
   verdicts: readonly ThreadVerdict[],
   given: readonly PromptThread[],
-  _rule: ResolveRule = "every-bot-thread",
+  rule: ResolveRule = "every-bot-thread",
 ): { actions: ThreadAction[]; ignored: string[] } {
   const byId = new Map(given.map((thread) => [thread.threadId, thread]));
   const answered = new Set<string>();
@@ -256,9 +269,16 @@ export function threadActions(
       continue;
     }
     answered.add(verdict.threadId);
-    actions.push({ thread, verdict, resolve: thread.from === "owner" ? undefined : resolutionOf(verdict) });
+    actions.push({ thread, verdict, resolve: resolutionFor(thread, verdict, rule) });
   }
   return { actions, ignored };
+}
+
+// How `verdict` resolves `thread` under `rule`, if at all (see threadActions).
+function resolutionFor(thread: PromptThread, verdict: ThreadVerdict, rule: ResolveRule): Resolution | undefined {
+  if (thread.from === "owner") return undefined;
+  if (rule === "every-bot-thread") return resolutionOf(verdict);
+  return verdict.verdict === "fixed" && isReviewBot(thread.comments[0]?.author ?? null) ? "ADDRESSED" : undefined;
 }
 
 // How a verdict on a bot thread resolves it (see threadActions).
@@ -578,8 +598,18 @@ export const livePassHost: PassHost = {
   contains: (commit, ancestor) => originRefs.contains(commit, ancestor),
   markBuilding: (issue) => claimBuildingLabel(issue),
   unmarkBuilding: (issue) => releaseBuildingLabel(issue),
-  pullRequestBrief: () => {
-    throw new Error("Not implemented");
+  pullRequestBrief: (pr) => {
+    // The text first, then the events and edits, so an edit made before the
+    // text was read shows up below and a stranger's text never passes.
+    const text = pullRequestText(pr);
+    const approved = approval(
+      FOLLOW_UP_LABEL,
+      issueEvents(pr),
+      bodyEdits(pr, undefined, undefined, "pullRequest"),
+      livePassHost.isOwner,
+    );
+    if (!approved.approved) throw new Error(approved.reason);
+    return text;
   },
   createSandbox: (branch) => createCheckedSandbox(branch),
   worktreeProblems: (path) => worktreeLinkProblems(path, repoGitDir()),
@@ -628,7 +658,7 @@ async function sandboxContains(sandbox: Pick<sandcastle.Sandbox, "exec">, commit
 // rethrown.
 async function followUpVerdicts(
   sandbox: sandcastle.Sandbox,
-  issue: SandcastleIssue,
+  brief: PassBrief,
   target: PassTarget,
   forRole: PromptThread[],
   mergeNote: string,
@@ -643,7 +673,7 @@ async function followUpVerdicts(
       "follow-up",
       {
         promptFile: "./.sandcastle/roles/follow-up.md",
-        promptArgs: followUpPromptArgs({ kind: "issue", issue }, target.headRefName, target.number, forRole, mergeNote, ciLog),
+        promptArgs: followUpPromptArgs(brief, target.headRefName, target.number, forRole, mergeNote, ciLog),
       },
       host.limits,
     );
@@ -748,7 +778,9 @@ export function planRedCi(gatePassed: boolean, redChecks: readonly CheckState[])
 }
 
 // Runs one follow-up pass on `target`, a PR the sweep (lib/follow-up.mts)
-// marked as needing one, for its issue. See this module's header and the
+// marked as needing one, from `brief`: its issue, or for a hand-off PR the
+// PR's own text (#58), whose pass claims sandcastle:building on the PR itself
+// and resolves only the review bots' threads it fixed. See this module's header and the
 // design note at .sandcastle/work/78/design.md for the step-by-step: reset
 // the PR's worktree to its head, merge main in when the PR needs it, run the
 // follow-up role, gate and push, then reply to and resolve the role's
@@ -760,8 +792,8 @@ export async function runPass(
   base: string,
   host: PassHost = livePassHost,
 ): Promise<PassOutcome> {
-  if (brief.kind !== "issue") throw new Error("Not implemented");
-  const { issue } = brief;
+  const claim = brief.kind === "issue" ? brief.issue.number : target.number;
+  const rule: ResolveRule = brief.kind === "issue" ? "every-bot-thread" : "fixed-review-threads";
   const log = (line: string) => host.log(`  PR #${target.number} ${line}`);
   const skip = (reason: string): PassOutcome => {
     log(`isn't given a follow-up pass this round: ${reason}.`);
@@ -777,16 +809,16 @@ export async function runPass(
 
   // Claimed as a build claims it, so two runs never pass on one PR or share
   // its worktree, and a build of the same issue stands aside meanwhile.
-  if (!host.markBuilding(issue.number)) return skip(`another run marked #${issue.number} ${BUILDING_LABEL}`);
+  if (!host.markBuilding(claim)) return skip(`another run marked #${claim} ${BUILDING_LABEL}`);
   try {
     const plan = planPass(target, base, host, skip, true);
     if (!("forRole" in plan)) return plan;
-    return await passOnMarkedIssue(target, issue, base, host, plan);
+    return await passOnMarkedIssue(target, brief, rule, base, host, plan);
   } finally {
     try {
-      host.unmarkBuilding(issue.number);
+      host.unmarkBuilding(claim);
     } catch (error) {
-      console.error(`  ⚠ #${issue.number}: removing ${BUILDING_LABEL} failed, so it's tried again when this run exits: ${error}`);
+      console.error(`  ⚠ #${claim}: removing ${BUILDING_LABEL} failed, so it's tried again when this run exits: ${error}`);
     }
   }
 }
@@ -889,7 +921,8 @@ type PassPlan = {
 // sandbox to closing it.
 async function passOnMarkedIssue(
   target: PassTarget,
-  issue: SandcastleIssue,
+  brief: PassBrief,
+  rule: ResolveRule,
   base: string,
   host: PassHost,
   { forRole, leftForHuman, needsMerge, redChecks, passCount }: PassPlan,
@@ -1004,7 +1037,7 @@ async function passOnMarkedIssue(
     let verdicts: ThreadVerdict[] = [];
     const roleRuns = merged === "conflicts" || forRole.length > 0 || ciLog !== undefined;
     if (roleRuns) {
-      const role = await followUpVerdicts(sandbox, issue, target, forRole, mergeNote, ciLog, host, stop);
+      const role = await followUpVerdicts(sandbox, brief, target, forRole, mergeNote, ciLog, host, stop);
       if (!Array.isArray(role)) return role;
       verdicts = role;
       log("follow-up finished");
@@ -1032,7 +1065,7 @@ async function passOnMarkedIssue(
           runRoleInSandbox(
             sandbox,
             "gate-fixer",
-            { promptFile: "./.sandcastle/roles/gate-fixer.md", promptArgs: gateFixerPromptArgs({ kind: "issue", issue }, branch, at, gateOutput) },
+            { promptFile: "./.sandcastle/roles/gate-fixer.md", promptArgs: gateFixerPromptArgs(brief, branch, at, gateOutput) },
             host.limits,
           ),
         uncounted: (error) => error instanceof UncountedStopError,
@@ -1114,7 +1147,7 @@ async function passOnMarkedIssue(
     // give-up below for a check still red after its re-run never throws the
     // role's verdicts away unanswered (#79): the push, if any, has already
     // landed, so there's nothing left to lose by answering threads first.
-    const matched = threadActions(verdicts, forRole);
+    const matched = threadActions(verdicts, forRole, rule);
     const { kept: actions, unverified } = await fixesInPush(sandbox, matched.actions, { gated, head: target.headRefOid, base, hostMerge });
     if (unverified.length > 0) log(`left ${unverified.length} "fixed" verdict(s) unanswered: their commit isn't one this pass added`);
     const { ignored } = matched;
@@ -1226,7 +1259,9 @@ function answerThreads(actions: readonly ThreadAction[], host: PassHost, log: (l
 // main.mts's pass phase: fetches every target's branch serially first (a
 // failed fetch skips that PR for the round, as prepareBranches'
 // lib/branches.mts#fetchMain-style fetches do), then runs runPass for each
-// PR whose issue is in `issues` with Promise.allSettled, logging each
+// PR whose issue is in `issues`, and each hand-off PR whose brief
+// host.pullRequestBrief reads (#58; one it can't read is skipped before its
+// fetch), with Promise.allSettled, logging each
 // outcome. A rejection is logged and the PR is swept again next round. Once
 // every pass has settled, the first UncountedStopError among them (a usage
 // or time-budget stop from the follow-up role or the gate-fixer) is
@@ -1244,14 +1279,25 @@ export async function followUpPassPhase(
 ): Promise<PassOutcome[]> {
   const byNumber = new Map(issues.map((issue) => [issue.number, issue]));
   const outcomes: PassOutcome[] = targets.map(() => ({ kind: "skipped", reason: "not started" }));
-  const started: { index: number; issue: SandcastleIssue }[] = [];
+  const started: { index: number; brief: PassBrief }[] = [];
   // Serially, because concurrent fetches contend on the same ref lock.
   for (const [index, target] of targets.entries()) {
-    if (target.issueNumber === undefined) throw new Error("Not implemented");
-    const issue = byNumber.get(target.issueNumber);
-    if (issue === undefined) {
-      outcomes[index] = { kind: "skipped", reason: `#${target.issueNumber} isn't in this round's queue` };
-      continue;
+    let brief: PassBrief;
+    if (target.issueNumber === undefined) {
+      try {
+        brief = { kind: "pull-request", pr: host.pullRequestBrief(target.number) };
+      } catch (error) {
+        host.log(`  ⚠ PR #${target.number}: couldn't read its brief, so it's passed on next round: ${error}`);
+        outcomes[index] = { kind: "skipped", reason: "couldn't read its brief" };
+        continue;
+      }
+    } else {
+      const issue = byNumber.get(target.issueNumber);
+      if (issue === undefined) {
+        outcomes[index] = { kind: "skipped", reason: `#${target.issueNumber} isn't in this round's queue` };
+        continue;
+      }
+      brief = { kind: "issue", issue };
     }
     try {
       host.fetchBranch(target.headRefName);
@@ -1260,10 +1306,10 @@ export async function followUpPassPhase(
       outcomes[index] = { kind: "skipped", reason: `fetching ${target.headRefName} failed` };
       continue;
     }
-    started.push({ index, issue });
+    started.push({ index, brief });
   }
 
-  const settled = await Promise.allSettled(started.map(({ index, issue }) => runPass(targets[index]!, { kind: "issue", issue }, base, host)));
+  const settled = await Promise.allSettled(started.map(({ index, brief }) => runPass(targets[index]!, brief, base, host)));
   let stop: UncountedStopError | undefined;
   for (const [position, result] of settled.entries()) {
     const { index } = started[position]!;
