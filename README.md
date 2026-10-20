@@ -49,6 +49,8 @@ Early stage. Built so far:
 - A Profile page that lists the signed-in User's own claims, and an Admin page only an Admin can open.
 - A Users page at `/admin/users` where an Admin searches and pages through the Tenant's Users, with an **Admin** badge on
   those who hold the Role. The Management API calls sit behind one interface.
+- A Roles page at `/admin/roles` with a tile for each Role and a table of Users with a column per Role. Picking a tile
+  filters the table to that Role's Users.
 - A light/dark **Theme** and a **Palette** that tints the accent and the surfaces, both kept in cookies.
 - The Aspire AppHost, the ServiceDefaults and the tests for all of the above.
 
@@ -72,6 +74,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.22](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.22) | 2026-10-20 | feat(Roles): List the Roles and the Users who hold them | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-69-feat-roles-list-the-roles-and-the-users-who-hold-them.md) |
 | [v0.0.21](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.21) | 2026-10-20 | feat(sandcastle): Follow up on hand-opened PRs labelled for it | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-70-feat-sandcastle-follow-up-on-hand-opened-prs-labelled-for-it.md) |
 | [v0.0.20](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.20) | 2026-10-20 | feat(Users): List and search the Tenant's Users | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-59-feat-users-list-and-search-the-tenant-s-users.md) |
 | [v0.0.19](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.19) | 2026-10-20 | ci(sandcastle): Answer PR follow-ups without waiting behind a build | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-64-ci-sandcastle-answer-pr-follow-ups-without-waiting-behind-a-build.md) |
@@ -81,7 +84,6 @@ Blue, the default, renders no attribute.
 | [v0.0.15](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.15) | 2026-10-19 | chore(scripts): Watch every hand-opened PR until it merges | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-54-chore-scripts-watch-every-hand-opened-pr-until-it-merges.md) |
 | [v0.0.14](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.14) | 2026-10-19 | ci(sandcastle): Start a follow-up pass when Claude Review completes | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-46-ci-sandcastle-start-a-follow-up-pass-when-claude-review-completes.md) |
 | [v0.0.13](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.13) | 2026-10-19 | feat(sandcastle): Label each PR Sandcastle opens review:claude | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-45-feat-sandcastle-label-each-pr-sandcastle-opens-review-claude.md) |
-| [v0.0.12](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.12) | 2026-10-19 | feat(ManagementApi): Add the Management API seam | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-47-feat-managementapi-add-the-management-api-seam.md) |
 
 <!-- RELEASES_END -->
 
@@ -197,7 +199,7 @@ A Role you add to or remove from yourself takes effect at your next sign-in, whe
 
 ### Management API application
 
-The app needs these settings to start, since the Users page calls the Management API. Under the AppHost, they're
+The app needs these settings to start, since the Users and Roles pages call the Management API. Under the AppHost, they're
 read from the same user secrets and passed on to WebApp.
 
 1. Create an application of type **Machine to Machine** and authorize it for the **Auth0 Management API**.
@@ -224,7 +226,8 @@ read from the same user secrets and passed on to WebApp.
    ```
 
    Outside Development, set `Auth0__Management__Domain`, `Auth0__Management__ClientId` and
-   `Auth0__Management__ClientSecret` instead.
+   `Auth0__Management__ClientSecret` instead. `aspire run` passes these to `WebApp` the same way it passes the sign-in
+   settings, and the app won't start without them.
 
 Auth0 lets the app change a User's Profile Fields only where Auth0 owns them: Users in a database connection, or Users
 from a social or enterprise connection whose profile isn't synced at each login. Otherwise the identity provider
@@ -237,7 +240,7 @@ src/AppHost/                     -- Aspire AppHost: runs the UI as the WebApp re
 src/Domain/                      -- Shared Kernel: Result, Result<T>, ApplicationConstants
 src/ServiceDefaults/             -- Aspire service defaults: OpenTelemetry and health checks
 src/UI/                          -- Blazor Web App (server-rendered)
-src/UI/Components/Features/      -- One folder per feature slice (Authentication, Profile, Admin, Themes, Palettes, Users)
+src/UI/Components/Features/      -- One folder per feature slice (Authentication, Profile, Admin, Themes, Palettes, Users, Roles)
 src/UI/Security/                 -- Cross-cutting code that isn't a component, such as LocalReturnUrl
 src/UI/Styles/                   -- Tailwind CSS v4 source
 tests/AppHost.Tests.Integration/ -- AppHost integration tests (Aspire.Hosting.Testing)
