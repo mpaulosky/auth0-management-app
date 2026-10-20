@@ -16,6 +16,7 @@ using UI.Components.Features.Authentication;
 using UI.Components.Features.Palettes;
 using UI.Components.Features.Roles;
 using UI.Components.Features.Themes;
+using UI.Components.Features.Users;
 using UI.Components.Layout;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
@@ -37,6 +38,7 @@ builder.Services.AddAuthenticationFeature(builder.Configuration);
 builder.Services.AddPaletteFeature();
 builder.Services.AddRolesFeature();
 builder.Services.AddThemeFeature();
+builder.Services.AddUsersFeature();
 builder.Services.AddCascadingAuthenticationState();
 
 WebApplication app = builder.Build();

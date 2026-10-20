@@ -17,16 +17,42 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace AppHost.Tests.Integration;
 
+// The Users slice registers the Management API seam, which validates Auth0:Management:* on start. WebApp only starts
+// under the AppHost when those settings reach it, as the sign-in application's Auth0__* settings do.
 public class ManagementSettingsForwardingTests
 {
-	[Theory]
-	[InlineData("Auth0__Management__Domain", "management.placeholder.invalid")]
-	[InlineData("Auth0__Management__ClientId", "placeholder-management-client-id")]
-	[InlineData("Auth0__Management__ClientSecret", "placeholder-management-client-secret")]
-	public async Task WebApp_ManagementSettingsConfigured_ReceivesEach(string variable, string expected)
+	[Fact]
+	public async Task WebApp_ManagementSettingsConfigured_ReceivesTheDomainClientIdAndClientSecret()
 	{
 		// Arrange
-		await using IDistributedApplicationTestingBuilder builder = await DistributedApplicationTestingBuilder
+		await using IDistributedApplicationTestingBuilder builder = await CreateBuilderWithBothApplicationsAsync();
+
+		// Act
+		Dictionary<string, string> environment = await GetWebAppEnvironmentAsync(builder);
+
+		// Assert
+		environment.Should().Contain("Auth0__Management__Domain", "management.placeholder.invalid");
+		environment.Should().Contain("Auth0__Management__ClientId", "placeholder-management-client-id");
+		environment.Should().Contain("Auth0__Management__ClientSecret", "placeholder-management-client-secret");
+	}
+
+	[Fact]
+	public async Task WebApp_ManagementSettingsConfigured_KeepsTheSignInApplicationsSettingsApart()
+	{
+		// Arrange
+		await using IDistributedApplicationTestingBuilder builder = await CreateBuilderWithBothApplicationsAsync();
+
+		// Act
+		Dictionary<string, string> environment = await GetWebAppEnvironmentAsync(builder);
+
+		// Assert
+		environment.Should().Contain("Auth0__ClientId", "placeholder-client-id");
+		environment.Should().Contain("Auth0__ClientSecret", "placeholder-client-secret");
+	}
+
+	private static async Task<IDistributedApplicationTestingBuilder> CreateBuilderWithBothApplicationsAsync()
+	{
+		IDistributedApplicationTestingBuilder builder = await DistributedApplicationTestingBuilder
 			.CreateAsync<global::Projects.AppHost>(TestContext.Current.CancellationToken);
 		builder.Configuration["Auth0:Domain"] = "auth0.placeholder.invalid";
 		builder.Configuration["Auth0:ClientId"] = "placeholder-client-id";
@@ -35,11 +61,7 @@ public class ManagementSettingsForwardingTests
 		builder.Configuration["Auth0:Management:ClientId"] = "placeholder-management-client-id";
 		builder.Configuration["Auth0:Management:ClientSecret"] = "placeholder-management-client-secret";
 
-		// Act
-		Dictionary<string, string> environment = await GetWebAppEnvironmentAsync(builder);
-
-		// Assert
-		environment.Should().Contain(variable, expected);
+		return builder;
 	}
 
 	private static async Task<Dictionary<string, string>> GetWebAppEnvironmentAsync(
