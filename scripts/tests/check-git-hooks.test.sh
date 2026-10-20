@@ -9,6 +9,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$ROOT/scripts/check-git-hooks.sh"
 BASH_BIN="$(command -v bash)"
 
+command -v jq > /dev/null 2>&1 || { echo "check-git-hooks.test.sh needs jq" >&2; exit 1; }
+
 PASSED=0
 FAILED=0
 
@@ -39,11 +41,11 @@ run_hook() {
   STATUS=$?
 }
 
-# new_repo <name> [hooksPath]: a fresh repository, with core.hooksPath set
-# only when a value is given.
+# new_repo <name> [hooksPath]: a fresh repository with a .github/hooks
+# directory, with core.hooksPath set only when a value is given.
 new_repo() {
   local dir="$WORK/$1"
-  mkdir -p "$dir"
+  mkdir -p "$dir/.github/hooks"
   git init --quiet "$dir"
   if [[ $# -ge 2 ]]; then
     git -C "$dir" config core.hooksPath "$2"
@@ -87,6 +89,11 @@ expect_warning "hooksPath empty warns" "$(new_repo empty "")"
 expect_warning "hooksPath .githooks warns" "$(new_repo wrong-value .githooks)"
 expect_warning "hooksPath .git/hooks warns" "$(new_repo default-dir .git/hooks)"
 expect_silent "hooksPath .github/hooks prints nothing" "$(new_repo correct .github/hooks)"
+expect_silent "hooksPath .github/hooks/ (trailing slash) prints nothing" "$(new_repo trailing-slash .github/hooks/)"
+expect_silent "hooksPath ./.github/hooks prints nothing" "$(new_repo dot-slash ./.github/hooks)"
+repo="$(new_repo absolute)"
+git -C "$repo" config core.hooksPath "$repo/.github/hooks"
+expect_silent "hooksPath as an absolute path to .github/hooks prints nothing" "$repo"
 
 # The setting is shared by a repository's worktrees, and the session may
 # start in a subdirectory.
@@ -95,6 +102,17 @@ mkdir -p "$repo/src/deep"
 expect_warning "hooksPath unset warns from a subdirectory" "$repo/src/deep"
 git -C "$repo" config core.hooksPath .github/hooks
 expect_silent "hooksPath .github/hooks prints nothing from a subdirectory" "$repo/src/deep"
+
+# Where .git/config can't be written, as in Sandcastle's sandbox, the warning
+# can't be acted on, so the hook stays silent.
+repo="$(new_repo read-only-config)"
+chmod a-w "$repo/.git/config"
+if [[ -w "$repo/.git/config" ]]; then
+  echo "skip - running as a user who can write a read-only file, so the read-only config case can't be set up"
+else
+  expect_silent "a read-only .git/config prints nothing" "$repo"
+fi
+chmod u+w "$repo/.git/config"
 
 # Never fails the session.
 mkdir -p "$WORK/not-a-repo"
