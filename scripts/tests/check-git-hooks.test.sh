@@ -52,11 +52,14 @@ new_repo() {
 }
 
 # expect_warning <label> <dir>: exit 0 and a warning that says the pre-push
-# gate won't run and names the fix.
+# gate won't run and names the fix. Claude Code shows systemMessage to the
+# person only when the output parses as JSON.
 expect_warning() {
   run_hook "$2"
   local problems=()
   [[ $STATUS -eq 0 ]] || problems+=("exit $STATUS, want 0")
+  jq -e '.systemMessage and .hookSpecificOutput.additionalContext' <<< "$OUTPUT" > /dev/null 2>&1 \
+    || problems+=("output isn't JSON with systemMessage and hookSpecificOutput.additionalContext")
   [[ "$OUTPUT" == *"pre-push"* ]] || problems+=("output doesn't mention the pre-push gate")
   [[ "$OUTPUT" == *"won't run"* ]] || problems+=("output doesn't say the gate won't run")
   [[ "$OUTPUT" == *"git config core.hooksPath .github/hooks"* ]] || problems+=("output doesn't name the fix")
@@ -73,7 +76,7 @@ expect_silent() {
   if [[ $STATUS -eq 0 && -z "$OUTPUT" ]]; then
     pass "$1"
   else
-    fail "$1" "exit $STATUS, want 0" "output: $OUTPUT"
+    fail "$1" "exit $STATUS and output: $OUTPUT" "want exit 0 and no output"
   fi
 }
 
