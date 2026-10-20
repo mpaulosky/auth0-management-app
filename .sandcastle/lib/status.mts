@@ -56,9 +56,11 @@ export type CheckSummary = { total: number; running: number; red: string[] };
 // Why a PR is held: the sweep skips it (sweepSkipReason or an admission
 // check), puts back a hand-back label a stranger removed, or decides about it
 // with `decide`. `handsBack` says the next pass hands the PR back, because it
-// needs a pass and has used FOLLOW_UP_PASS_CAP of them.
+// needs a pass and has used FOLLOW_UP_PASS_CAP of them. `unknown` on a skip
+// says an owner check couldn't answer, which makes the status partial, as it
+// ends a follow-up run red.
 export type HeldReason =
-  | { kind: "skipped"; reason: string }
+  | { kind: "skipped"; reason: string; unknown: boolean }
   | { kind: "restore"; label: string; reason: string }
   | { kind: "decided"; decision: SweepDecision; handsBack: boolean };
 
@@ -140,7 +142,7 @@ export function heldReason(
 ): HeldReason {
   switch (admission.kind) {
     case "skipped":
-      return { kind: "skipped", reason: admission.reason };
+      return { kind: "skipped", reason: admission.reason, unknown: admission.unknown };
     case "restore":
       return { kind: "restore", label: admission.label, reason: admission.reason };
     case "swept": {
@@ -261,7 +263,7 @@ function pullRequestLines(status: PullRequestStatus): string[] {
 function heldText(held: HeldReason): string {
   switch (held.kind) {
     case "skipped":
-      return `the sweep skips it: ${held.reason}`;
+      return `the sweep skips it: ${held.reason}${held.unknown ? " (an owner check couldn't answer, so this status is partial)" : ""}`;
     case "restore":
       return `the next sweep puts ${held.label} back (${held.reason}), and leaves the PR alone this round`;
     case "decided":
@@ -296,9 +298,17 @@ function yesNo(value: boolean): string {
   return value ? "yes" : "no";
 }
 
+// Whether an owner check failed for the PR: its admission was skipped for
+// want of an answer, or an unresolved thread's author couldn't be checked.
+// The sweep ends a follow-up run red for the first, and `decide` doesn't count
+// the second, so the entry is incomplete.
+function ownerCheckFailed(status: PullRequestStatus): boolean {
+  return "held" in status && ((status.held.kind === "skipped" && status.held.unknown) || status.threads.unknown > 0);
+}
+
 // Prints the status and returns the exit code: 1 when the status, a PR's
-// entry or the runs couldn't be read, so a script can tell a partial status
-// from a whole one; 0 otherwise.
+// entry or the runs couldn't be read, or an owner check couldn't answer, so a
+// script can tell a partial status from a whole one; 0 otherwise.
 export function statusCommand(
   github: StatusGitHub = liveStatusGitHub,
   now: number = Date.now(),
@@ -312,7 +322,8 @@ export function statusCommand(
     return 1;
   }
   out(renderStatus(report));
-  return report.pullRequests.some((status) => "error" in status) || "error" in report.runs ? 1 : 0;
+  const partial = report.pullRequests.some((status) => "error" in status || ownerCheckFailed(status)) || "error" in report.runs;
+  return partial ? 1 : 0;
 }
 
 // A QueueGitHub whose label writes do nothing, so loadQueue's fixes (removing

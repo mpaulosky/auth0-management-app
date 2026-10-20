@@ -353,7 +353,13 @@ describe("heldReason", () => {
   it("passes a skip through unchanged", () => {
     const admission = { kind: "skipped", reason: "it's a draft", unknown: false } as const;
 
-    assert.deepEqual(heldReason(admission, pr(), NOW, isOwner, HOST, 0), { kind: "skipped", reason: "it's a draft" });
+    assert.deepEqual(heldReason(admission, pr(), NOW, isOwner, HOST, 0), { kind: "skipped", reason: "it's a draft", unknown: false });
+  });
+
+  it("keeps the flag that an owner check couldn't answer on a skip", () => {
+    const admission = { kind: "skipped", reason: "couldn't check", unknown: true } as const;
+
+    assert.deepEqual(heldReason(admission, pr(), NOW, isOwner, HOST, 0), { kind: "skipped", reason: "couldn't check", unknown: true });
   });
 
   it("passes a restore through unchanged", () => {
@@ -410,7 +416,7 @@ describe("buildStatus' list of Sandcastle PRs", () => {
 
     const { report } = run({ prs: [labelled] });
 
-    assert.deepEqual(entry(report, 101).held, { kind: "skipped", reason: sweepSkipReason(labelled, IN_SCOPE, HOST, new Set(), true) });
+    assert.deepEqual(entry(report, 101).held, { kind: "skipped", reason: sweepSkipReason(labelled, IN_SCOPE, HOST, new Set(), true), unknown: false });
   });
 
   it("lists a labelled PR even when the run doesn't follow hand-offs, as a skip", () => {
@@ -793,6 +799,31 @@ describe("statusCommand", () => {
 
     assert.equal(code, 1);
     assert.ok(out.join("\n").includes("PR #101"), out.join("\n"));
+  });
+
+  it("exits 1 when the owner check failed for the label that handed a PR off", () => {
+    const { github } = stub({ prs: [handOff()] });
+    const out: string[] = [];
+
+    const code = statusCommand({ ...github, isOwner: () => undefined }, NOW, (text) => void out.push(text));
+
+    assert.equal(code, 1);
+    assert.ok(out.join("\n").includes("this status is partial"), out.join("\n"));
+  });
+
+  it("exits 1 when the owner check failed for the actor who removed sandcastle:needs-human", () => {
+    const events = [{ event: "unlabeled", actor: "stranger", label: "sandcastle:needs-human", createdAt: "2026-10-10T09:00:00Z" } as const];
+    const { github } = stub({ prs: [pr()], events: { 101: [...events] } });
+
+    const code = statusCommand({ ...github, isOwner: () => undefined }, NOW, () => {});
+
+    assert.equal(code, 1);
+  });
+
+  it("exits 1 when a thread's author couldn't be checked", () => {
+    const { github } = stub({ prs: [pr({ threads: [thread("ghost")] })] });
+
+    assert.equal(statusCommand(github, NOW, () => {}), 1);
   });
 
   it("exits 1 when the runs couldn't be read", () => {
