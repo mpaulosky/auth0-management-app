@@ -41,6 +41,7 @@ import {
   labelsOn,
   labelTimeline,
   listSandcastleIssues,
+  markerCommentReads,
   markerComments,
   markerCommentsSince,
   openIssuesWithComment,
@@ -56,6 +57,7 @@ import {
   replyToReviewThread,
   requestCopilotReview,
   rerunFailedChecksOnce,
+  sandcastleWorkflowRuns,
   resolveReviewThread,
   reviewThreadsOf,
   sameRepoBlockers,
@@ -809,6 +811,110 @@ describe("markerComments", () => {
   });
 });
 
+// #65: the status command counts follow-up passes from the same reads
+// markerComments counts from, so the two can't disagree.
+describe("markerCommentReads", () => {
+  it("reads the comments, the label timeline and the creation time with the same gh calls markerComments makes, and counts nothing", () => {
+    const comment = { body: "<!-- sandcastle:follow-up --> pass 1", createdAt: "2026-01-05T00:00:00Z", author: "host" };
+    const event = { event: "unlabeled", label: "sandcastle:needs-human", createdAt: "2026-01-03T00:00:00Z" };
+    const { calls, run } = recordingGh([JSON.stringify(comment), JSON.stringify(event), "2025-12-01T00:00:00Z\n"]);
+
+    const reads = markerCommentReads(69, "o/r", run);
+
+    assert.deepEqual(reads, { comments: [comment], timeline: [event], createdAt: "2025-12-01T00:00:00Z" });
+    assert.deepEqual(calls.map((call) => call.args.slice(0, 4)), [
+      ["api", "--paginate", "repos/o/r/issues/69/comments", "--jq"],
+      ["api", "--paginate", "repos/o/r/issues/69/timeline", "--jq"],
+      ["api", "repos/o/r/issues/69", "--jq", ".created_at"],
+    ]);
+  });
+
+  it("makes no write call", () => {
+    const { calls, run } = recordingGh(["", "", "2025-12-01T00:00:00Z\n"]);
+
+    markerCommentReads(69, "o/r", run);
+
+    for (const call of calls) {
+      assert.equal(call.args[0], "api");
+      assert.equal(call.args.includes("--method") || call.args.includes("-X") || call.args.includes("-f"), false);
+    }
+  });
+});
+
+describe("sandcastleWorkflowRuns", () => {
+  const STATUSES = ["in_progress", "queued", "requested", "waiting", "pending"];
+  const ghRun = (databaseId: number, status: string, createdAt: string, overrides: Record<string, unknown> = {}) => ({
+    databaseId,
+    status,
+    event: "issues",
+    displayTitle: `Run ${databaseId}`,
+    headBranch: "main",
+    createdAt,
+    url: `https://github.com/o/r/actions/runs/${databaseId}`,
+    ...overrides,
+  });
+
+  it("runs one gh run list per unfinished status, newest limit 100, for Sandcastle's workflow", () => {
+    const { calls, run } = recordingGh(STATUSES.map(() => "[]"));
+
+    sandcastleWorkflowRuns(run, "o/r");
+
+    assert.deepEqual(
+      calls.map((call) => call.args),
+      STATUSES.map((status) => [
+        "run", "list", "--repo", "o/r", "--workflow", SANDCASTLE_WORKFLOW, "--status", status, "--limit", "100",
+        "--json", "databaseId,status,event,displayTitle,headBranch,createdAt,url",
+      ]),
+    );
+  });
+
+  it("merges the answers, drops a duplicate id and sorts the runs oldest first", () => {
+    const { run } = recordingGh([
+      JSON.stringify([ghRun(3, "in_progress", "2026-10-20T11:40:00Z")]),
+      JSON.stringify([ghRun(5, "queued", "2026-10-20T11:50:00Z"), ghRun(2, "queued", "2026-10-20T11:30:00Z")]),
+      JSON.stringify([ghRun(5, "queued", "2026-10-20T11:50:00Z")]),
+      "[]",
+      "[]",
+    ]);
+
+    const runs = sandcastleWorkflowRuns(run, "o/r");
+
+    assert.deepEqual(runs.map((entry) => entry.id), [2, 3, 5]);
+  });
+
+  it("maps databaseId to id and keeps the status, event, title, branch, time and url", () => {
+    const { run } = recordingGh([JSON.stringify([ghRun(3, "in_progress", "2026-10-20T11:40:00Z", { headBranch: "feature/65-x" })]), "[]", "[]", "[]", "[]"]);
+
+    const runs = sandcastleWorkflowRuns(run, "o/r");
+
+    assert.deepEqual(runs, [
+      {
+        id: 3,
+        status: "in_progress",
+        event: "issues",
+        displayTitle: "Run 3",
+        headBranch: "feature/65-x",
+        createdAt: "2026-10-20T11:40:00Z",
+        url: "https://github.com/o/r/actions/runs/3",
+      },
+    ]);
+  });
+
+  it("throws when an answer isn't an array, rather than report no runs", () => {
+    const { calls, run } = recordingGh([JSON.stringify({ message: "rate limited" })]);
+
+    assert.throws(() => sandcastleWorkflowRuns(run, "o/r"), /^(?!.*Not implemented)/s);
+    assert.equal(calls.length > 0, true);
+  });
+
+  it("throws when a run in the answer lacks its id", () => {
+    const { calls, run } = recordingGh([JSON.stringify([{ status: "queued", event: "issues" }])]);
+
+    assert.throws(() => sandcastleWorkflowRuns(run, "o/r"), /^(?!.*Not implemented)/s);
+    assert.equal(calls.length > 0, true);
+  });
+});
+
 describe("issue labels", () => {
   it("adds a label to an issue in the named repository", () => {
     const { calls, run } = recordingGh();
@@ -1221,6 +1327,7 @@ describe("openPullRequestsForSweep", () => {
                 id: "PR_1",
                 number: 42,
                 url: "https://github.com/o/r/pull/42",
+                title: "Add search",
                 isDraft: false,
                 isCrossRepository: false,
                 baseRefName: "main",
@@ -1291,6 +1398,25 @@ describe("openPullRequestsForSweep", () => {
     ]);
     assert.deepEqual(pr!.checks, [{ name: "build", completed: true, green: true, completedAt: "2026-10-01T00:00:00Z" }]);
     assert.equal(pr!.truncated, false);
+  });
+
+  it("reads the PR's title, for the status command (#65), and asks the query for it", () => {
+    const { calls, run } = recordingGh([JSON.stringify(page())]);
+
+    const [pr] = openPullRequestsForSweep(run, "o/r");
+
+    assert.equal(pr!.title, "Add search");
+    assert.match(calls[0]!.args.join(" "), /number url title isDraft/);
+  });
+
+  it("gives a PR whose title came back null an empty title", () => {
+    const untitled = page();
+    (untitled.data.repository.pullRequests.nodes[0] as unknown as Record<string, unknown>).title = null;
+    const { run } = recordingGh([JSON.stringify(untitled)]);
+
+    const [pr] = openPullRequestsForSweep(run, "o/r");
+
+    assert.equal(pr!.title, "");
   });
 
   it("marks a thread whose newest comments leave older ones out", () => {

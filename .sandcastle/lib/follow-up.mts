@@ -101,13 +101,16 @@ export type SweepPullRequest = PullRequestIdentity & {
   truncated: boolean;
   // The PR's page, for the run report.
   url: string;
+  // The PR's title, for the status command (#65).
+  title: string;
 };
 
 // Whether a login is Copilot's code-review account (see
 // lib/github.mts#isCopilot, which openPullRequestsForSweep also reads with).
 export { isCopilot };
 
-const NEEDS_HUMAN = "sandcastle:needs-human";
+// The label a hand-back puts on a PR, which the sweep leaves alone (and the status command names).
+export const NEEDS_HUMAN = "sandcastle:needs-human";
 
 // The PR-level counterpart of lib/queue.mts#ISSUE_LABEL_RULES: a PR's
 // needs-human removal counts as a re-queue only when the repository owner
@@ -158,7 +161,7 @@ export function isHostReply(comment: { author: string | null; body: string } | n
 // repository owner or, on a bot thread, a bot is the host's own reply. A
 // stranger's comment after it doesn't count, so it can't put an answered thread
 // back on the PR's to-do list.
-function answeredByHost(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string | undefined): boolean {
+export function answeredByHost(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string | undefined): boolean {
   if (hostLogin === undefined) {
     return false;
   }
@@ -256,6 +259,37 @@ export function sweepSkipReason(
   if (!pr.body.includes(PR_MARKER)) return "its body doesn't carry the Sandcastle PR marker";
   if (pr.truncated) return "it has more reviews, threads or checks than one read holds";
   return undefined;
+}
+
+// What every PR in one sweep is judged against, read once (#65).
+export type SweepContext = {
+  host: string;
+  issues: { number: number; labels: string[] }[];
+  inScope: ReadonlySet<number>;
+  building: ReadonlySet<number>;
+  handOffs: boolean;
+};
+
+// Reads the host's login, the in-scope issues and whether this run follows
+// hand-offs, in that order, for sweepPullRequests and the status command (#65).
+export function sweepContext(_github: Pick<FollowUpGitHub, "hostLogin" | "inScopeIssues" | "followsHandOffs">): SweepContext {
+  throw new Error("Not implemented");
+}
+
+// Whether the sweep goes on to `decide` about a PR, without writing anything (#65).
+export type SweepAdmission =
+  | { kind: "swept"; subject: SweepSubject }
+  | { kind: "skipped"; reason: string; unknown: boolean }
+  | { kind: "restore"; label: string; reason: string };
+
+// The checks sweepPullRequests makes before `decide`: sweepSkipReason, the
+// subject, the hand-off approval and the needs-human origin check (#65).
+export function admitToSweep(
+  _pr: SweepPullRequest,
+  _context: SweepContext,
+  _github: Pick<FollowUpGitHub, "isOwner" | "pullRequestEvents" | "pullRequestBodyEdits">,
+): SweepAdmission {
+  throw new Error("Not implemented");
 }
 
 // What the sweep does about one PR, decided by `decide`.

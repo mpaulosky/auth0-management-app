@@ -369,7 +369,7 @@ query($owner: String!, $name: String!, $cursor: String) {
     pullRequests(states: OPEN, baseRefName: "main", first: 50, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        id number url isDraft isCrossRepository baseRefName headRefName headRefOid body mergeStateStatus
+        id number url title isDraft isCrossRepository baseRefName headRefName headRefOid body mergeStateStatus
         author { login }
         labels(first: 50) { pageInfo { hasNextPage } nodes { name } }
         reviewRequests(first: 20) {
@@ -429,6 +429,7 @@ type SweepNode = {
   id: string;
   number: number;
   url: string;
+  title: string | null;
   isDraft: boolean;
   isCrossRepository: boolean;
   baseRefName: string;
@@ -492,6 +493,7 @@ function sweepPullRequest(node: SweepNode): SweepPullRequest {
     id: node.id,
     number: node.number,
     url: node.url,
+    title: "",
     author: authorLogin(node.author),
     body: node.body ?? "",
     baseRefName: node.baseRefName,
@@ -1486,6 +1488,31 @@ export function markerComments(
   const timeline = labelTimeline(number, run, repo);
   const createdAt = ghWithStderr(run, ["api", `repos/${repo}/issues/${number}`, "--jq", ".created_at"]).trim();
   return markerCommentsSince(comments, timeline, label, marker, createdAt, poster);
+}
+
+// The raw reads markerCommentsSince counts from: the comments, the label
+// timeline and when the issue or PR was created (#65).
+export type CommentReads = { comments: TimestampedComment[]; timeline: TimelineLabelEvent[]; createdAt: string };
+
+// Reads what markerComments counts from, without counting (#65).
+export function markerCommentReads(_number: number, _repo: string = repoName(), _run: typeof execFileSync = execFileSync): CommentReads {
+  throw new Error("Not implemented");
+}
+
+// One run of Sandcastle's workflow that hasn't completed, as `gh run list --json` gives it.
+export type WorkflowRun = {
+  id: number;
+  status: string;
+  event: string;
+  displayTitle: string;
+  headBranch: string | null;
+  createdAt: string;
+  url: string;
+};
+
+// Sandcastle's workflow runs that haven't completed, oldest first (#65).
+export function sandcastleWorkflowRuns(_run: typeof execFileSync = execFileSync, _repo: string = repoName()): WorkflowRun[] {
+  throw new Error("Not implemented");
 }
 
 // A label only the host or a human applies to hand work back: the issue's or
