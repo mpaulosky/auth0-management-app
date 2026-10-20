@@ -361,6 +361,12 @@ export const FOLLOW_UP_MARKER = "<!-- sandcastle:follow-up -->";
 // so an author check alone can't tell the two apart (#78).
 export const FOLLOW_UP_REPLY_MARKER = "<!-- sandcastle:follow-up-reply -->";
 
+// Marks the follow-up pass's hand-back PR comment (lib/follow-up-pass.mts), so
+// scripts/watch-pr.sh, which skips any comment carrying a sandcastle: marker,
+// doesn't report it as the owner's feedback: the host posts it from the same
+// login the owner may be. Distinct from FOLLOW_UP_MARKER, which counts passes.
+export const GIVE_UP_MARKER = "<!-- sandcastle:give-up -->";
+
 // Passes per PR, counted by FOLLOW_UP_MARKER comments since
 // sandcastle:needs-human was last removed from it (lib/follow-up-pass.mts,
 // "Giving up" in docs/plans/sandcastle-workflow.md, #78).

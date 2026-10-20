@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import type { Sandbox, SandboxRunOptions } from "@ai-hero/sandcastle";
 import { createCheckedSandbox } from "./build.mts";
-import { FOLLOW_UP_MARKER, FOLLOW_UP_PASS_CAP, FOLLOW_UP_REPLY_MARKER, SESSION_REPLY_MARKER } from "./config.mts";
+import { FOLLOW_UP_MARKER, FOLLOW_UP_PASS_CAP, FOLLOW_UP_REPLY_MARKER, GIVE_UP_MARKER, SESSION_REPLY_MARKER } from "./config.mts";
 import { UncountedStopError } from "./errors.mts";
 import type { CheckState, PassTarget } from "./follow-up.mts";
 import {
@@ -564,6 +564,14 @@ describe("giveUpComment", () => {
     assert.match(comment, /the gate is still red/);
     assert.match(comment, /FAIL/);
     assert.match(comment, /```/);
+  });
+
+  it("opens with its marker, so scripts/watch-pr.sh doesn't report it as the owner's feedback", () => {
+    assert.ok(giveUpComment("a conflict couldn't be resolved", undefined).startsWith(`${GIVE_UP_MARKER}\n`));
+  });
+
+  it("isn't counted as a follow-up pass", () => {
+    assert.ok(!giveUpComment("a conflict couldn't be resolved", undefined).includes(FOLLOW_UP_MARKER));
   });
 
   it("names how to re-queue the PR", () => {
