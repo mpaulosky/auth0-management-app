@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { BranchRefs } from "./branches.mts";
-import { COPILOT_REVIEWER, PR_MARKER } from "./config.mts";
+import { COPILOT_REVIEWER, PR_MARKER, REVIEW_LABEL } from "./config.mts";
 import type { ClosedPullRequest, IssueEvent, PullRequestIdentity, TimelineLabelEvent } from "./github.mts";
 import {
   closedPrHandBackComment,
@@ -17,7 +17,7 @@ import {
   type FollowUpGitHub,
   type SweepPullRequest,
 } from "./follow-up.mts";
-import { OutcomeReport, WaitingPrReport } from "./report.mts";
+import { OutcomeReport, UnlabelledPrReport, WaitingPrReport } from "./report.mts";
 
 const HOST = "sandcastle-bot";
 const BRANCH = "feature/42-add-search";
@@ -28,8 +28,10 @@ const IN_SCOPE = new Set([42]);
 // with every check green; tests override just the fields their scenario
 // needs.
 function pr(overrides: Partial<SweepPullRequest> = {}): SweepPullRequest {
+  const number = overrides.number ?? 101;
   return {
-    number: 101,
+    number,
+    url: `https://github.com/o/r/pull/${number}`,
     author: HOST,
     body: `${PR_MARKER}\nCloses #42`,
     baseRefName: "main",
@@ -467,6 +469,8 @@ function stubGithub({
   timelines = {},
   isOwner = () => true,
   pullRequestEvents = () => [],
+  failTimelineFor = [],
+  failAddLabelFor = [],
 }: {
   prs?: SweepPullRequest[];
   closed?: ClosedPullRequest[];
@@ -475,6 +479,9 @@ function stubGithub({
   timelines?: Record<number, TimelineLabelEvent[]>;
   isOwner?: (login: string | null) => boolean | undefined;
   pullRequestEvents?: (number: number) => IssueEvent[];
+  // PR numbers whose label timeline read, or label add, throws.
+  failTimelineFor?: number[];
+  failAddLabelFor?: number[];
 } = {}) {
   const requestedReviews: string[] = [];
   const updatedBranches: { number: number; expectedHeadSha: string }[] = [];
@@ -489,13 +496,19 @@ function stubGithub({
       return closed;
     },
     inScopeIssues: () => issues,
-    labelTimeline: (issueNumber) => timelines[issueNumber] ?? [],
+    labelTimeline: (issueNumber) => {
+      if (failTimelineFor.includes(issueNumber)) throw new Error("gh api failed: HTTP 502");
+      return timelines[issueNumber] ?? [];
+    },
     requestCopilotReview: (pullRequestId) => void requestedReviews.push(pullRequestId),
     updateBranch: (number, expectedHeadSha) => void updatedBranches.push({ number, expectedHeadSha }),
     handBack: (issueNumber, reason, body) => void handBacks.push({ issueNumber, reason, body }),
     isOwner,
     pullRequestEvents,
-    addPullRequestLabel: (number, label) => void addedPrLabels.push({ number, label }),
+    addPullRequestLabel: (number, label) => {
+      if (failAddLabelFor.includes(number)) throw new Error("gh pr edit failed: HTTP 502");
+      addedPrLabels.push({ number, label });
+    },
   };
   return { github, requestedReviews, updatedBranches, handBacks, closedCalls, addedPrLabels };
 }
@@ -845,8 +858,9 @@ describe("sweepPullRequests", () => {
     const ownerRemoved: IssueEvent[] = [
       { event: "unlabeled", actor: "owner", label: "sandcastle:needs-human", createdAt: "2026-10-10T09:00:00Z" },
     ];
+    // Carries review:claude, so the sweep's review label (#51) adds nothing.
     const { updatedBranches, addedPrLabels, github } = stubGithub({
-      prs: [pr({ mergeStateStatus: "BEHIND" })],
+      prs: [pr({ mergeStateStatus: "BEHIND", labels: [REVIEW_LABEL] })],
       isOwner: (login) => login === "owner",
       pullRequestEvents: () => ownerRemoved,
     });
@@ -1170,5 +1184,240 @@ describe("startFromMain", () => {
 
     assert.throws(() => startFromMain(issueNumber, BRANCH, base, github, refs), /HTTP 502/);
     assert.ok(!calls.some((call) => call.startsWith("delete")), calls.join("\n"));
+  });
+});
+
+// #51: the sweep labels each Sandcastle PR that never carried REVIEW_LABEL, so
+// a PR whose run stopped between `gh pr create` and the label, or one already
+// open when #45 merged, still gets Claude's review.
+describe("sweepPullRequests' review label", () => {
+  const labeled = (label: string, event: "labeled" | "unlabeled" = "labeled"): TimelineLabelEvent => ({
+    event,
+    label,
+    createdAt: "2026-10-10T08:00:00Z",
+  });
+  const run = (github: FollowUpGitHub, unlabelled = new UnlabelledPrReport(), carried = new Set<number>()) => {
+    sweepPullRequests(github, () => {}, NOW, new OutcomeReport(), new WaitingPrReport(), unlabelled, carried);
+    return unlabelled;
+  };
+  // Counts the label-event reads of each PR, so a test can pin how often the
+  // sweep reads one across rounds.
+  const countingReads = (github: FollowUpGitHub) => {
+    const reads: number[] = [];
+    const read = github.labelTimeline;
+    github.labelTimeline = (number) => {
+      reads.push(number);
+      return read(number);
+    };
+    return reads;
+  };
+
+  // A labeled event never leaves the timeline, so the cap's PRs, swept every
+  // round without the label, are read once per run rather than once per round.
+  it("reads a PR's label events once a run once it finds the PR has carried review:claude", () => {
+    const { github, addedPrLabels } = stubGithub({
+      prs: [pr({ labels: [] })],
+      timelines: { 101: [labeled(REVIEW_LABEL), labeled(REVIEW_LABEL, "unlabeled")] },
+    });
+    const reads = countingReads(github);
+    const carried = new Set<number>();
+
+    run(github, new UnlabelledPrReport(), carried);
+    run(github, new UnlabelledPrReport(), carried);
+
+    assert.deepEqual(reads, [101]);
+    assert.deepEqual(addedPrLabels, []);
+  });
+
+  it("reads a PR's label events again the next round when the read failed", () => {
+    const { github } = stubGithub({ prs: [pr({ labels: [] })], failTimelineFor: [101] });
+    const reads = countingReads(github);
+    const carried = new Set<number>();
+
+    run(github, new UnlabelledPrReport(), carried);
+    run(github, new UnlabelledPrReport(), carried);
+
+    assert.deepEqual(reads, [101, 101]);
+  });
+
+  it("adds review:claude to a host PR that has never carried it", () => {
+    const { github, addedPrLabels } = stubGithub({ prs: [pr({ labels: [] })], timelines: { 101: [labeled("docs-only")] } });
+
+    run(github);
+
+    assert.deepEqual(addedPrLabels, [{ number: 101, label: REVIEW_LABEL }]);
+  });
+
+  it("adds review:claude to a host PR with no label history at all", () => {
+    const { github, addedPrLabels } = stubGithub({ prs: [pr({ labels: [] })] });
+
+    run(github);
+
+    assert.deepEqual(addedPrLabels, [{ number: 101, label: REVIEW_LABEL }]);
+  });
+
+  it("leaves a host PR alone when review:claude was taken off it, so PR Auto-Merge's review cap holds", () => {
+    const { github, addedPrLabels } = stubGithub({
+      prs: [pr({ labels: [] })],
+      timelines: { 101: [labeled(REVIEW_LABEL), labeled(REVIEW_LABEL, "unlabeled")] },
+    });
+
+    const unlabelled = run(github);
+
+    assert.deepEqual(addedPrLabels, []);
+    assert.deepEqual(unlabelled.items(), []);
+  });
+
+  it("matches the label in its timeline case-insensitively, as GitHub does", () => {
+    const { github, addedPrLabels } = stubGithub({
+      prs: [pr({ labels: [] })],
+      timelines: { 101: [labeled("Review:Claude"), labeled("Review:Claude", "unlabeled")] },
+    });
+
+    run(github);
+
+    assert.deepEqual(addedPrLabels, []);
+  });
+
+  it("leaves a host PR alone when it carries review:claude now", () => {
+    const { github, addedPrLabels } = stubGithub({ prs: [pr({ labels: [REVIEW_LABEL] })] });
+
+    run(github);
+
+    assert.deepEqual(addedPrLabels, []);
+  });
+
+  it("doesn't read the timeline of a PR that carries review:claude now", () => {
+    const { github, addedPrLabels } = stubGithub({ prs: [pr({ labels: [REVIEW_LABEL] })], failTimelineFor: [101] });
+
+    const unlabelled = run(github);
+
+    assert.deepEqual(addedPrLabels, []);
+    assert.deepEqual(unlabelled.items(), []);
+  });
+
+  for (const [name, overrides] of [
+    ["a fork's PR", { isCrossRepository: true }],
+    ["a collaborator's PR", { author: "a-collaborator" }],
+    ["a PR without PR_MARKER", { body: "Closes #42" }],
+    ["a PR into another base", { baseRefName: "develop" }],
+    ["a PR not on an issue branch", { headRefName: "chore/42-add-search" }],
+  ] as [string, Partial<SweepPullRequest>][]) {
+    it(`never labels ${name}`, () => {
+      const { github, addedPrLabels } = stubGithub({ prs: [pr({ labels: [], ...overrides })] });
+
+      const unlabelled = run(github);
+
+      assert.deepEqual(addedPrLabels, []);
+      assert.deepEqual(unlabelled.items(), []);
+    });
+  }
+
+  it("records a PR whose label add fails in unlabelledPrReport, warns, and goes on to the next PR", () => {
+    const first = pr({ number: 101, labels: [] });
+    const second = pr({ number: 102, id: "PR_102", headRefName: "feature/43-add-sorting", labels: [] });
+    const { github, addedPrLabels } = stubGithub({
+      prs: [first, second],
+      issues: [
+        { number: 42, labels: [] },
+        { number: 43, labels: [] },
+      ],
+      failAddLabelFor: [101],
+    });
+    const lines: string[] = [];
+    const unlabelled = new UnlabelledPrReport();
+
+    sweepPullRequests(github, (line) => lines.push(line), NOW, new OutcomeReport(), new WaitingPrReport(), unlabelled);
+
+    assert.equal(unlabelled.items().length, 1);
+    assert.equal(unlabelled.items()[0]!.pr, 101);
+    assert.match(unlabelled.items()[0]!.url, /101/);
+    assert.deepEqual(addedPrLabels, [{ number: 102, label: REVIEW_LABEL }]);
+    assert.ok(lines.some((line) => line.includes("#101") && line.includes(REVIEW_LABEL)), lines.join("\n"));
+  });
+
+  // A PR whose label PR Auto-Merge took off at the review cap is read every
+  // round, so a failed read mustn't tell the owner to add the label by hand:
+  // that would bypass the cap.
+  it("records nothing for a PR whose timeline read fails, warns that the next round checks again, and goes on to the next PR", () => {
+    const first = pr({ number: 101, labels: [] });
+    const second = pr({ number: 102, id: "PR_102", headRefName: "feature/43-add-sorting", labels: [] });
+    const { github, addedPrLabels } = stubGithub({
+      prs: [first, second],
+      issues: [
+        { number: 42, labels: [] },
+        { number: 43, labels: [] },
+      ],
+      failTimelineFor: [101],
+    });
+    const lines: string[] = [];
+    const unlabelled = new UnlabelledPrReport();
+
+    sweepPullRequests(github, (line) => lines.push(line), NOW, new OutcomeReport(), new WaitingPrReport(), unlabelled);
+
+    assert.deepEqual(unlabelled.items(), []);
+    assert.deepEqual(addedPrLabels, [{ number: 102, label: REVIEW_LABEL }]);
+    assert.ok(lines.some((line) => line.includes("#101") && /next round/.test(line) && !/by hand/.test(line)), lines.join("\n"));
+  });
+
+  it("takes a PR back out of unlabelledPrReport once a later sweep adds the label", () => {
+    const unlabelled = new UnlabelledPrReport();
+    const failing = stubGithub({ prs: [pr({ labels: [] })], failAddLabelFor: [101] });
+    run(failing.github, unlabelled);
+    const succeeding = stubGithub({ prs: [pr({ labels: [] })] });
+
+    run(succeeding.github, unlabelled);
+
+    assert.deepEqual(unlabelled.items(), []);
+  });
+
+  it("lists a PR once however many sweeps fail to label it", () => {
+    const unlabelled = new UnlabelledPrReport();
+    const { github } = stubGithub({ prs: [pr({ labels: [] })], failAddLabelFor: [101] });
+
+    run(github, unlabelled);
+    run(github, unlabelled);
+
+    assert.deepEqual(unlabelled.items().map((entry) => entry.pr), [101]);
+  });
+
+  it("takes a PR out of unlabelledPrReport once it's no longer open, and keeps an open one the sweep skips", () => {
+    const unlabelled = new UnlabelledPrReport();
+    unlabelled.record({ pr: 100, url: "https://github.com/o/r/pull/100" });
+    unlabelled.record({ pr: 101, url: "https://github.com/o/r/pull/101" });
+    const { github } = stubGithub({ prs: [pr({ labels: [], author: "a-collaborator" })] });
+
+    run(github, unlabelled);
+
+    assert.deepEqual(unlabelled.items().map((entry) => entry.pr), [101]);
+  });
+
+  it("takes a PR back out of unlabelledPrReport once a later sweep finds it has carried the label", () => {
+    const unlabelled = new UnlabelledPrReport();
+    unlabelled.record({ pr: 101, url: "https://github.com/o/r/pull/101" });
+    const { github } = stubGithub({
+      prs: [pr({ labels: [] })],
+      timelines: { 101: [labeled(REVIEW_LABEL), labeled(REVIEW_LABEL, "unlabeled")] },
+    });
+
+    run(github, unlabelled);
+
+    assert.deepEqual(unlabelled.items(), []);
+  });
+
+  it("still decides the PR's follow-up after a failed label add", () => {
+    const { github, updatedBranches } = stubGithub({ prs: [pr({ labels: [], mergeStateStatus: "BEHIND" })], failAddLabelFor: [101] });
+
+    run(github);
+
+    assert.deepEqual(updatedBranches, [{ number: 101, expectedHeadSha: "a".repeat(40) }]);
+  });
+
+  it("never throws for a failed label add or timeline read", () => {
+    const { github } = stubGithub({ prs: [pr({ labels: [] })], failAddLabelFor: [101] });
+    const { github: failingTimeline } = stubGithub({ prs: [pr({ labels: [] })], failTimelineFor: [101] });
+
+    assert.doesNotThrow(() => run(github));
+    assert.doesNotThrow(() => run(failingTimeline));
   });
 });
