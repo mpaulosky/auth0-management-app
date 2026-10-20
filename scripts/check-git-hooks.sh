@@ -9,7 +9,7 @@
 # are on. The warning is JSON: systemMessage shows it to the person, and
 # additionalContext tells the agent. Always exits 0, so it never stops a
 # session: outside a git repository, or without git, it prints nothing. It also
-# stays silent where .git/config can't be written (Sandcastle's sandbox), and in
+# stays silent where git can't write its config (Sandcastle's sandbox), and in
 # Claude Code cloud sessions and GitHub Actions runs, where hooks are meant to be off.
 # Uses only bash builtins and git, so a missing tool can't make it fail.
 set -uo pipefail
@@ -37,9 +37,13 @@ fi
 
 # Sandcastle's sandbox mounts .git/config read-only and pushes with hooks off on
 # purpose. Telling an agent there to turn them on is wrong and can't work, and
-# neither can a person who can't write the config.
-common="$(git rev-parse --path-format=absolute --git-common-dir 2> /dev/null)" || exit 0
-[[ -w "$common/config" ]] || exit 0
+# neither can a person who can't write the config. Ask git itself whether it can
+# write the setting: it writes config.lock and renames it over config, so the
+# config file's mode says nothing about it. The probe key is removed again.
+if ! git config --local sandcastle.hooksProbe 1 > /dev/null 2>&1; then
+  exit 0
+fi
+git config --local --unset sandcastle.hooksProbe > /dev/null 2>&1
 
 # Kept free of double quotes and backslashes, so it goes into the JSON as is.
 message="Git hooks are off in this clone: core.hooksPath isn't .github/hooks, so the pre-push gate won't run on a push. Turn them on with: git config core.hooksPath .github/hooks"

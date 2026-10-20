@@ -17,7 +17,11 @@ PASSED=0
 FAILED=0
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'chmod -R u+w "$WORK" 2> /dev/null; rm -rf "$WORK"' EXIT
+
+# Keep the developer's git config out of every git call here, the setup ones
+# included: commit signing or a global core.hooksPath would break or pollute them.
+export HOME="$WORK" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 pass() {
   PASSED=$((PASSED + 1))
@@ -126,16 +130,29 @@ expect_warning "hooksPath unset warns from a subdirectory" "$repo/src/deep"
 git -C "$repo" config core.hooksPath .github/hooks
 expect_silent "hooksPath .github/hooks prints nothing from a subdirectory" "$repo/src/deep"
 
-# Where .git/config can't be written, as in Sandcastle's sandbox, the warning
-# can't be acted on, so the hook stays silent.
-repo="$(new_repo read-only-config)"
+# git writes config.lock and renames it over config, so a config file whose mode
+# lacks write permission can still take the setting, and the warning stays.
+repo="$(new_repo read-only-config-mode)"
 chmod a-w "$repo/.git/config"
-if [[ -w "$repo/.git/config" ]]; then
-  echo "skip - running as a user who can write a read-only file, so the read-only config case can't be set up"
-else
-  expect_silent "a read-only .git/config prints nothing" "$repo"
-fi
+expect_warning "a .git/config without write permission still warns, since git can replace it" "$repo"
 chmod u+w "$repo/.git/config"
+if [[ -n "$(cd "$repo" && git config --local --get sandcastle.hooksProbe)" ]]; then
+  fail "the writability probe leaves no key behind in .git/config"
+else
+  pass "the writability probe leaves no key behind in .git/config"
+fi
+
+# Where git can't write its config, as in Sandcastle's sandbox, the warning
+# can't be acted on, so the hook stays silent. A git directory without write
+# permission is the same for git: it can't create config.lock.
+repo="$(new_repo read-only-git-dir)"
+chmod a-w "$repo/.git"
+if [[ -w "$repo/.git" ]]; then
+  echo "skip - running as a user who can write a read-only directory, so the read-only git directory case can't be set up"
+else
+  expect_silent "a git directory git can't write to prints nothing" "$repo"
+fi
+chmod u+w "$repo/.git"
 
 # Linked worktrees are where pushes come from (docs/PROCESS.md). The setting is
 # shared, and git resolves a relative core.hooksPath against the worktree's own
@@ -150,13 +167,13 @@ expect_warning "hooksPath unset warns from a linked worktree's subdirectory" "$W
 git -C "$repo" config core.hooksPath .github/hooks
 expect_silent "hooksPath .github/hooks prints nothing from a linked worktree" "$WORK/worktree-linked"
 git -C "$repo" config --unset core.hooksPath
-chmod a-w "$repo/.git/config"
-if [[ -w "$repo/.git/config" ]]; then
-  echo "skip - running as a user who can write a read-only file, so the read-only common config case can't be set up"
+chmod a-w "$repo/.git"
+if [[ -w "$repo/.git" ]]; then
+  echo "skip - running as a user who can write a read-only directory, so the read-only common git directory case can't be set up"
 else
-  expect_silent "a read-only common .git/config prints nothing from a linked worktree" "$WORK/worktree-linked"
+  expect_silent "a common git directory git can't write to prints nothing from a linked worktree" "$WORK/worktree-linked"
 fi
-chmod u+w "$repo/.git/config"
+chmod u+w "$repo/.git"
 
 # Cloud sessions and CI runs of Claude Code keep the hooks off on purpose.
 repo="$(new_repo remote-session)"
