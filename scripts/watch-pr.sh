@@ -7,12 +7,12 @@
 #   - the PR merged or closed;
 #   - it has a conflict with main or is behind it;
 #   - every check finished and one failed (no checks yet means not finished);
-#   - an unresolved review thread's last comment carries neither WATCH_PR_MARKER,
-#     which the session puts in every reply, nor SANDCASTLE_MARKER, so the
-#     owner's comments wake it even when the session or Sandcastle posts with
-#     the owner's token;
+#   - an unresolved review thread's last comment neither carries WATCH_PR_MARKER,
+#     which the session puts in every reply, nor opens with a Sandcastle marker
+#     (SANDCASTLE_MARKER), so the owner's comments wake it even when the session
+#     or Sandcastle posts with the owner's token;
 #   - a review requests changes, or a person (not a bot) left a review body or a
-#     PR comment without either marker, that it hasn't reported before;
+#     PR comment that does neither, that it hasn't reported before;
 #   - nothing changed for WATCH_PR_IDLE_MINUTES (default 30).
 #
 # Reported review and comment IDs are kept in the git common dir, so a restart
@@ -21,9 +21,10 @@
 set -euo pipefail
 
 readonly WATCH_PR_MARKER="<!-- claude-session -->"
-# The prefix of every marker Sandcastle opens its PR comments and thread replies
-# with (.sandcastle/lib/config.mts): its pass reports and hand-backs, not the owner.
-readonly SANDCASTLE_MARKER="<!-- sandcastle:"
+# A jq regex for the marker Sandcastle opens each of its PR comments and thread
+# replies with (.sandcastle/lib/config.mts). Anchored, so a review that only
+# quotes a marker, as one of Sandcastle's own code does, still wakes the session.
+readonly SANDCASTLE_MARKER='^<!-- sandcastle:[a-z-]+ -->'
 
 pr="${1:-}"
 if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
@@ -82,7 +83,7 @@ while true; do
 
 	threads="$(jq -r --arg m "$WATCH_PR_MARKER" --arg s "$SANDCASTLE_MARKER" '.reviewThreads.nodes[]
 		| select((.isResolved | not)
-			and ((.comments.nodes[0].body // "") | (contains($m) or contains($s)) | not)) | .id' <<<"$data")"
+			and ((.comments.nodes[0].body // "") | (contains($m) or test($s)) | not)) | .id' <<<"$data")"
 	if [[ -n "$threads" ]]; then
 		echo "Unresolved threads waiting on you:"
 		echo "$threads"
@@ -92,10 +93,10 @@ while true; do
 	feedback="$(jq -r --arg m "$WATCH_PR_MARKER" --arg s "$SANDCASTLE_MARKER" '
 		[(.reviews.nodes[]
 			| select(.state == "CHANGES_REQUESTED"
-				or (.author.__typename != "Bot" and .body != "" and (.body | (contains($m) or contains($s)) | not)))
+				or (.author.__typename != "Bot" and .body != "" and (.body | (contains($m) or test($s)) | not)))
 			| "review \(.id) by \(.author.login // "ghost") (\(.state))"),
 		 (.comments.nodes[]
-			| select(.author.__typename != "Bot" and (.body | (contains($m) or contains($s)) | not))
+			| select(.author.__typename != "Bot" and (.body | (contains($m) or test($s)) | not))
 			| "comment \(.id) by \(.author.login // "ghost")")]
 		| .[]' <<<"$data" | grep -vxFf "$seen_file" || true)"
 	if [[ -n "$feedback" ]]; then

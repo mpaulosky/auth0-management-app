@@ -37,6 +37,7 @@ import {
   GATE_COMMENT_LINES,
   GATE_FIXER_ATTEMPTS,
   GIVE_UP_MARKER,
+  WORKTREE_TAMPERED_MARKER,
 } from "./config.mts";
 import { UncountedStopError } from "./errors.mts";
 import { isHostReply, issueNumberOf, type CheckState, type PassTarget } from "./follow-up.mts";
@@ -1231,7 +1232,7 @@ async function passOnMarkedIssue(
       try {
         host.commentOnPullRequest(
           target.number,
-          `Sandcastle stopped: the worktree for \`${branch}\` no longer points at this repository, so it was left for a ` +
+          `${WORKTREE_TAMPERED_MARKER}\nSandcastle stopped: the worktree for \`${branch}\` no longer points at this repository, so it was left for a ` +
             "person to look at. Don't run git in it.",
         );
       } catch (error) {
