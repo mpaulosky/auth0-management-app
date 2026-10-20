@@ -441,9 +441,9 @@ With the variable set, a full run and a follow-up run can be going at once, and 
 keep the two off the same PR. For example, a full run skips its sweep while follow-up runs are on, or each PR is locked while a run works on it. Otherwise both can push to
 the same branch, and both count follow-up passes, so the pass limit runs out twice as fast.
 
-**The run's own check:** a run started by a PR event (`pull_request_review`, `pull_request_target`) reports the `Sandcastle` job as a check on that PR's head (and **Choose the run mode**, which finishes before it starts). It runs while the
-run does, and Fail on hand-backs turns it red when the run hands back anything, even an unrelated issue. The host must leave that check out when it reads a PR's checks.
-Otherwise the sweep waits on its own running check, or flags a red one no pass can fix.
+**The run's own check:** a run started by a PR event (`pull_request_review`, `pull_request_target`) reports the `Sandcastle` job as a check on that PR's head (and **Choose the run mode**,
+which finishes before it starts). It runs while the run does, and Fail on hand-backs turns it red when the run hands back anything, even an unrelated issue. The host must leave that check
+out when it reads a PR's checks. Otherwise the sweep waits on its own running check, or flags a red one no pass can fix.
 
 **Time:** the job has `timeout-minutes: 350`, and no new round starts after 4 hours. A usage or rate-limit error ends the run cleanly like the time budget: it doesn't fail roles or
 bounce issues. The next trigger resumes the work.
