@@ -20,7 +20,7 @@ import { outcomeReport, unlabelledPrReport, waitingPrReport } from "./report.mts
 // What followUpOnlyRun needs; tests pass a stub that records calls.
 export type FollowUpRunSteps = {
   startRound(): void;
-  sweep(): SweepResult;
+  sweep(): SweepResult & { failed: readonly number[] };
   fetchMain(): string;
   queue(): readonly SandcastleIssue[];
   passes(targets: readonly PassTarget[], issues: readonly SandcastleIssue[], base: string): Promise<PassOutcome[]>;
@@ -33,12 +33,15 @@ export type FollowUpRunSteps = {
 // PRs that have carried review:claude starts empty, since this run sweeps once.
 // It doesn't go through followUpPhase: that swallows a failed sweep because the
 // next round retries it, and this run has no next round, so a failure must
-// reach main.mts and end the run red rather than log "no PR needs a pass".
+// reach main.mts and end the run red rather than log "no PR needs a pass". The
+// sweep catches a failure on one PR itself, so the numbers of those PRs come
+// back in `failed` for followUpOnlyRun to end the run red on, after the passes.
 export function followUpRunSteps(github: FollowUpGitHub): FollowUpRunSteps {
   return {
     startRound: () => startQueueRound(),
-    sweep: () =>
-      sweepPullRequests(
+    sweep: () => {
+      const failed: number[] = [];
+      const result = sweepPullRequests(
         github,
         console.log,
         Date.now(),
@@ -47,7 +50,10 @@ export function followUpRunSteps(github: FollowUpGitHub): FollowUpRunSteps {
         unlabelledPrReport,
         new Set<number>(),
         false,
-      ),
+        (pr) => void failed.push(pr),
+      );
+      return { ...result, failed };
+    },
     fetchMain: () => fetchMain(),
     queue: () => loadQueue(),
     passes: (targets, issues, base) => followUpPassPhase(targets, issues, base),
@@ -60,14 +66,21 @@ export const liveFollowUpRunSteps: FollowUpRunSteps = followUpRunSteps(liveFollo
 
 // The sweep, then the follow-up passes it found, once. An UncountedStopError
 // from the passes propagates, so main.mts's catch ends the run "stopped", as
-// it does a full run.
+// it does a full run. A PR the sweep couldn't follow up isn't swept again by
+// this run, so once the passes for the others are done the run throws and ends
+// red, rather than logging "swept again next round" and ending green.
 export async function followUpOnlyRun(steps: FollowUpRunSteps = liveFollowUpRunSteps): Promise<void> {
   steps.startRound();
-  const { passes } = steps.sweep();
+  const { passes, failed } = steps.sweep();
   if (passes.length === 0) {
     steps.log("No open PR needs a follow-up pass. Exiting.");
-    return;
+  } else {
+    const base = steps.fetchMain();
+    await steps.passes(passes, steps.queue(), base);
   }
-  const base = steps.fetchMain();
-  await steps.passes(passes, steps.queue(), base);
+  if (failed.length > 0) {
+    throw new Error(
+      `The sweep couldn't follow up ${failed.map((pr) => `PR #${pr}`).join(", ")}, and a follow-up run has no next round to sweep again.`,
+    );
+  }
 }

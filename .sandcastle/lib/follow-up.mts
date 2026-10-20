@@ -321,7 +321,9 @@ const carriedReviewLabel = new Set<number>();
 // too. A follow-up-only run passes false (#53): it touches only open PRs, so it
 // and a full run can't both hand back one issue. Every swept PR
 // (sweepSkipReason applies isSandcastlePullRequest's tests) that has never
-// carried REVIEW_LABEL gets it first (labelForReview).
+// carried REVIEW_LABEL gets it first (labelForReview). `onPrError` hears about
+// each PR whose follow-up threw, after the warning is logged, so a follow-up-only
+// run, which has no next round to sweep it again, can end red (#53).
 export function sweepPullRequests(
   github: FollowUpGitHub = liveFollowUpGitHub,
   log: (line: string) => void = console.log,
@@ -331,6 +333,7 @@ export function sweepPullRequests(
   unlabelled: Pick<UnlabelledPrReport, "record" | "resolve" | "retain"> = unlabelledPrReport,
   carried: Set<number> = carriedReviewLabel,
   handBackClosed: boolean = true,
+  onPrError: (pr: number, error: unknown) => void = () => {},
 ): SweepResult {
   const host = github.hostLogin();
   const issues = github.inScopeIssues();
@@ -376,6 +379,7 @@ export function sweepPullRequests(
       }
     } catch (error) {
       log(`  ⚠ Couldn't follow up PR #${pr.number}, so it's swept again next round: ${error}`);
+      onPrError(pr.number, error);
     }
   }
   waiting.replace(waitingPrs);

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { PR_MARKER } from "./config.mts";
 import { UncountedStopError } from "./errors.mts";
 import type { PassOutcome } from "./follow-up-pass.mts";
 import { followUpOnlyRun, followUpRunSteps, type FollowUpRunSteps } from "./follow-up-run.mts";
@@ -20,7 +21,7 @@ const issues = [{ number: 42 }] as unknown as SandcastleIssue[];
 
 // FollowUpRunSteps stubs that record the order of their calls and what the
 // passes step was given.
-function steps(sweep: SweepResult, passes?: (targets: readonly PassTarget[]) => Promise<PassOutcome[]>) {
+function steps(sweep: SweepResult, passes?: (targets: readonly PassTarget[]) => Promise<PassOutcome[]>, failed: readonly number[] = []) {
   const calls: string[] = [];
   const logs: string[] = [];
   const given: { targets: readonly PassTarget[]; issues: readonly SandcastleIssue[]; base: string }[] = [];
@@ -28,7 +29,7 @@ function steps(sweep: SweepResult, passes?: (targets: readonly PassTarget[]) => 
     startRound: () => void calls.push("startRound"),
     sweep: () => {
       calls.push("sweep");
-      return sweep;
+      return { ...sweep, failed };
     },
     fetchMain: () => {
       calls.push("fetchMain");
@@ -87,6 +88,22 @@ describe("followUpOnlyRun", () => {
     await assert.rejects(followUpOnlyRun(stub), UncountedStopError);
   });
 
+  it("rejects, naming the PRs, when the sweep couldn't follow up some, after the other PRs' passes", async () => {
+    const { stub, calls } = steps({ needsPass: [101], passes: [target(101)] }, undefined, [102]);
+
+    await assert.rejects(followUpOnlyRun(stub), /PR #102/);
+
+    assert.deepEqual(calls, ["startRound", "sweep", "fetchMain", "queue", "passes"]);
+  });
+
+  it("rejects when the sweep couldn't follow up a PR and none needs a pass, instead of exiting green", async () => {
+    const { stub, logs } = steps({ needsPass: [], passes: [] }, undefined, [102]);
+
+    await assert.rejects(followUpOnlyRun(stub), /PR #102/);
+
+    assert.ok(logs.some((line) => line.includes("No open PR needs")), logs.join("\n"));
+  });
+
   it("resolves when the passes settle with skipped or failed outcomes", async () => {
     const { stub } = steps({ needsPass: [101], passes: [target(101)] }, async () => [{ kind: "push-failed", error: "rejected" }]);
 
@@ -128,6 +145,33 @@ describe("followUpRunSteps", () => {
 
     assert.deepEqual(closedCalls, []);
     assert.deepEqual(handBacks, []);
+  });
+
+  it("reports a PR whose follow-up threw as failed", () => {
+    const { github } = githubStub({
+      openPullRequests: () => [
+        {
+          number: 101,
+          author: "sandcastle-bot",
+          body: PR_MARKER,
+          baseRefName: "main",
+          headRefName: "feature/42-add-search",
+          isCrossRepository: false,
+          isDraft: false,
+          labels: [],
+          threads: [],
+          checks: [],
+          truncated: false,
+        } as unknown as ReturnType<FollowUpGitHub["openPullRequests"]>[number],
+      ],
+      pullRequestEvents: () => {
+        throw new Error("gh api failed: HTTP 502");
+      },
+    });
+
+    const { failed } = followUpRunSteps(github).sweep();
+
+    assert.deepEqual(failed, [101]);
   });
 
   it("lets a failed sweep reach the caller instead of logging that no PR needs a pass", async () => {
