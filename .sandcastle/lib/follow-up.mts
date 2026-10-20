@@ -137,7 +137,6 @@ export type SweepSubject = { kind: "issue"; issueNumber: number } | { kind: "pul
 // "issue" when isSandcastlePullRequest(pr, host) and its issue is in
 // `inScope`; otherwise "pull-request" when `handOffs`, the PR carries
 // FOLLOW_UP_LABEL and its branch is one isHandOffBranch accepts; otherwise
-// undefined.
 // undefined. A Sandcastle PR keeps its issue even when it carries the label;
 // one whose issue is out of scope becomes a hand-off, since the owner never
 // approved that issue's text for a prompt.
@@ -472,16 +471,13 @@ export function sweepPullRequests(
       // that run's pass would race (update-branch moves the head; a Copilot
       // request is noise on a PR it's passing on). A held PR is left for that
       // run, as sweepSkipReason leaves it. A hand-off PR's claim is on the PR.
-      if (
-        (decision.action === "update-branch" || decision.action === "request-review") &&
-        hasLabel(
-          { labels: subject.kind === "issue" ? github.issueLabels(subject.issueNumber) : github.pullRequestLabels(pr.number) },
-          BUILDING_LABEL,
-        )
-      ) {
-        const claimed = subject.kind === "issue" ? "its issue" : "it";
-        log(`  · PR #${pr.number} isn't swept: ${claimed} became labelled ${BUILDING_LABEL} since the sweep began, so another run is working on it.`);
-        continue;
+      if (decision.action === "update-branch" || decision.action === "request-review") {
+        const claimLabels = subject.kind === "issue" ? github.issueLabels(subject.issueNumber) : github.pullRequestLabels(pr.number);
+        if (hasLabel({ labels: claimLabels }, BUILDING_LABEL)) {
+          const claimed = subject.kind === "issue" ? "its issue" : "it";
+          log(`  · PR #${pr.number} isn't swept: ${claimed} became labelled ${BUILDING_LABEL} since the sweep began, so another run is working on it.`);
+          continue;
+        }
       }
       followUp(pr, decision, github, log, outcomes);
       if (decision.action === "needs-pass") {

@@ -38,7 +38,13 @@ export function slugFor(title: string): string {
 // since review-prompt.md passes {{BRANCH}} to the `git diff` it runs in the
 // sandbox, and anyone with push access could name a branch `fix/4-$(...)`.
 export function isIssueBranch(branch: string, issueNumber: number): boolean {
-  return new RegExp(`^(?:${issuePrefixes.join("|")})/${issueNumber}-[a-z0-9]+(?:-[a-z0-9]+)*$`).test(branch);
+  return issueBranchPattern(String(issueNumber)).test(branch);
+}
+
+// feature/, fix/ or hotfix/{issue}-{slug}, where `issue` is a regex source for
+// the issue number: one issue's number, or any number's.
+function issueBranchPattern(issue: string): RegExp {
+  return new RegExp(`^(?:${issuePrefixes.join("|")})/${issue}-[a-z0-9]+(?:-[a-z0-9]+)*$`);
 }
 
 // Whether a branch is one scripts/check-branch-name.sh accepts without --pr:
@@ -47,7 +53,7 @@ export function isIssueBranch(branch: string, issueNumber: number): boolean {
 // shell in the sandbox, and it keeps the host off dev, preview and dependabot/*.
 export function isHandOffBranch(branch: string): boolean {
   return (
-    new RegExp(`^(?:${issuePrefixes.join("|")})/[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*$`).test(branch) ||
+    issueBranchPattern("[0-9]+").test(branch) ||
     /^chore\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(branch)
   );
 }

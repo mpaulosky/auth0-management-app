@@ -104,13 +104,13 @@ export type PromptThread = {
 // 2). A resolved thread is dropped outright. A thread whose first comment's
 // author is a bot goes to the role as "bot". A thread the repository owner
 // opened goes to the role as "owner", unless the last comment by the owner or
-// `hostLogin` is the host's own reply (by `hostLogin`, opening with
-// FOLLOW_UP_REPLY_MARKER, lib/config.mts, or carrying SESSION_REPLY_MARKER:
-// the owner's session posts with the host's token and its replies count as
-// the host's, so a hand-off PR's first pass doesn't answer again the threads
-// the session declined, #58): that means the host already
-// answered it and is waiting on the owner, so it's dropped from every list
-// rather than handed to the role again. Comments by anyone else don't count
+// `hostLogin` is the host's own reply: one by `hostLogin` that opens with
+// FOLLOW_UP_REPLY_MARKER (lib/config.mts) or carries SESSION_REPLY_MARKER.
+// The second is the owner's session, which posts with the host's token, so a
+// hand-off PR's first pass doesn't answer again the threads the session
+// declined (#58). Either means the host already answered the thread and is
+// waiting on the owner, so it's dropped from every list rather than handed to
+// the role again. Comments by anyone else don't count
 // either way, so a stranger can neither hide an owner thread by quoting the
 // marker nor reopen one by replying after the host. A bot thread whose last
 // comment by a bot, the owner or the host is the host's own reply is dropped
@@ -779,9 +779,9 @@ export function planRedCi(gatePassed: boolean, redChecks: readonly CheckState[])
 
 // Runs one follow-up pass on `target`, a PR the sweep (lib/follow-up.mts)
 // marked as needing one, from `brief`: its issue, or for a hand-off PR the
-// PR's own text (#58), whose pass claims sandcastle:building on the PR itself
-// and resolves only the review bots' threads it fixed. See this module's header and the
-// design note at .sandcastle/work/78/design.md for the step-by-step: reset
+// PR's own text (#58). A hand-off PR's pass claims sandcastle:building on the
+// PR itself and resolves only the review bots' threads it fixed. See this
+// module's header and the design note at .sandcastle/work/78/design.md for the step-by-step: reset
 // the PR's worktree to its head, merge main in when the PR needs it, run the
 // follow-up role, gate and push, then reply to and resolve the role's
 // verdicts and post the pass summary. `base` is the commit fetchMain()
@@ -1258,11 +1258,10 @@ function answerThreads(actions: readonly ThreadAction[], host: PassHost, log: (l
 
 // main.mts's pass phase: fetches every target's branch serially first (a
 // failed fetch skips that PR for the round, as prepareBranches'
-// lib/branches.mts#fetchMain-style fetches do), then runs runPass for each
-// PR whose issue is in `issues`, and each hand-off PR whose brief
-// host.pullRequestBrief reads (#58; one it can't read is skipped before its
-// fetch), with Promise.allSettled, logging each
-// outcome. A rejection is logged and the PR is swept again next round. Once
+// lib/branches.mts#fetchMain-style fetches do), then runs runPass with
+// Promise.allSettled for each PR whose issue is in `issues` and each hand-off
+// PR whose brief host.pullRequestBrief reads (#58; one it can't read is
+// skipped before its fetch), logging each outcome. A rejection is logged and the PR is swept again next round. Once
 // every pass has settled, the first UncountedStopError among them (a usage
 // or time-budget stop from the follow-up role or the gate-fixer) is
 // rethrown, so main.mts's catch ends the run cleanly rather than the round
