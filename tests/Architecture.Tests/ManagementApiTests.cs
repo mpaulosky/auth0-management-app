@@ -118,6 +118,22 @@ public class ManagementApiTests
 	}
 
 	[Fact]
+	public void ManagementApi_CachedManagementApi_IsAnInternalSealedDecoratorOfTheInterface()
+	{
+		// Arrange
+		Assembly uiAssembly = typeof(App).Assembly;
+
+		// Act
+		Type? cached = uiAssembly.GetType($"{ManagementApiNamespace}.CachedManagementApi");
+
+		// Assert
+		cached.Should().NotBeNull("the cache is specified as CachedManagementApi in UI.ManagementApi");
+		cached!.IsNotPublic.Should().BeTrue("only the interface, the records and the registration are public");
+		cached.IsSealed.Should().BeTrue();
+		cached.GetInterfaces().Should().Contain(typeof(IManagementApi));
+	}
+
+	[Fact]
 	public void ManagementApi_Interface_HasExactlyTheTenUseCaseMethods()
 	{
 		// Arrange
