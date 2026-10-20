@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-10-20 | [feat(sandcastle): Label every Sandcastle PR that never had review:claude](2026-10-20-pr-55-feat-sandcastle-label-every-sandcastle-pr-that-never-had-review-claude.md) | release,automation |
 | 2026-10-19 | [chore(scripts): Watch every hand-opened PR until it merges](2026-10-19-pr-54-chore-scripts-watch-every-hand-opened-pr-until-it-merges.md) | release,automation |
 | 2026-10-19 | [ci(sandcastle): Start a follow-up pass when Claude Review completes](2026-10-19-pr-46-ci-sandcastle-start-a-follow-up-pass-when-claude-review-completes.md) | release,automation |
 | 2026-10-19 | [feat(sandcastle): Label each PR Sandcastle opens review:claude](2026-10-19-pr-45-feat-sandcastle-label-each-pr-sandcastle-opens-review-claude.md) | release,automation |
