@@ -370,6 +370,45 @@ public class RolesPageTests : BunitContext
 	}
 
 	[Fact]
+	public void Click_TryAgainAfterAPickedRoleIsRateLimited_ReloadsThatRole()
+	{
+		// Arrange
+		_api.ListRoleMembersAsync(EditorRole.Id, Arg.Any<CancellationToken>()).Returns(RateLimited<RoleMembers>());
+		IRenderedComponent<RolesPage> cut = RenderPage($"?role={EditorRole.Id}");
+		_api.ListRoleMembersAsync(EditorRole.Id, Arg.Any<CancellationToken>()).Returns(Members(Jane, Bob));
+		IElement recover = cut.Find("button:not([aria-pressed])");
+		recover.TextContent.Trim().Should().Be("Try again", "a rate limit can lift, so the Admin can retry the Role they asked for");
+
+		// Act
+		recover.Click();
+
+		// Assert
+		cut.WaitForAssertion(() =>
+		{
+			cut.FindAll("tbody tr").Should().HaveCount(2);
+			TileOf(cut, "Editor").GetAttribute("aria-pressed").Should().Be("true");
+		});
+		_api.DidNotReceive().SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public void Click_LinkToAnotherPageAfterPickingATile_DoesNotReloadTheRoles()
+	{
+		// Arrange
+		IRenderedComponent<RolesPage> cut = RenderPage();
+		TileOf(cut, "Editor").Click();
+		cut.WaitForAssertion(() => cut.FindAll("tbody tr").Should().HaveCount(2));
+		_api.ClearReceivedCalls();
+
+		// Act
+		Services.GetRequiredService<NavigationManager>().NavigateTo("/admin/users");
+
+		// Assert
+		_api.ReceivedCalls().Should().BeEmpty("the page is about to go, so a reload would only spend the Users page's rate limit");
+		TileOf(cut, "Editor").GetAttribute("aria-pressed").Should().Be("true");
+	}
+
+	[Fact]
 	public void Render_RoleInTheUrl_ShowsTheTableFilteredToThatRole()
 	{
 		// Arrange

@@ -215,13 +215,14 @@ public class GetRolesOverviewHandlerTests
 	}
 
 	[Theory]
-	[InlineData("ListRoles", "ManagementApi.RateLimited")]
-	[InlineData("ListRoleMembers", "ManagementApi.RateLimited")]
-	[InlineData("Search", "ManagementApi.RateLimited")]
-	public async Task HandleAsync_ManagementApiFails_ReturnsThatFailureUnchanged(string failingCall, string code)
+	[InlineData("ListRoles", "ManagementApi.RateLimited", ResultErrorCode.RateLimited)]
+	[InlineData("ListRoleMembers", "ManagementApi.RateLimited", ResultErrorCode.RateLimited)]
+	[InlineData("ListRoleMembers", "Role.Unauthorized", ResultErrorCode.Unauthorized)]
+	[InlineData("Search", "ManagementApi.RateLimited", ResultErrorCode.RateLimited)]
+	public async Task HandleAsync_ManagementApiFails_ReturnsThatFailureUnchanged(string failingCall, string code,
+		ResultErrorCode category)
 	{
 		// Arrange
-		ResultErrorCode category = code == "Role.NotFound" ? ResultErrorCode.NotFound : ResultErrorCode.RateLimited;
 		switch (failingCall)
 		{
 			case "ListRoles":

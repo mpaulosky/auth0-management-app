@@ -54,6 +54,14 @@
 	// current tab, does, and must reset the selection even though the address's role is the same as the page last read.
 	private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
 	{
+		// A move to another page, such as the Users tab or a row's link, removes this one: reloading it would only spend
+		// the Management API's rate limit that the next page needs.
+		string path = Navigation.ToBaseRelativePath(e.Location).Split('?', '#')[0];
+		if (!string.Equals(path, "admin/roles", StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
+
 		_ = InvokeAsync(() =>
 		{
 			ReadRoleId();

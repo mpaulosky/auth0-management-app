@@ -11,7 +11,7 @@
 {
 	<Alert Tone="@ToneOf(_failure)">@_failure.Error</Alert>
 	@* A button, not a link: a link to this same page is an enhanced navigation that doesn't reload the running page. *@
-	<button type="button" class="@LinkClass" @onclick="RecoverAsync">@(_selectedRoleId is null ? "Try again" : "Show all Roles")</button>
+	<button type="button" class="@LinkClass" @onclick="RecoverAsync">@(PickedRoleIsGone ? "Show all Roles" : "Try again")</button>
 }
 else if (_overview is null)
 {
@@ -127,6 +127,8 @@ else
 	[Parameter]
 	public int Visit { get; set; }
 
+	private bool PickedRoleIsGone => _selectedRoleId is not null && _failure?.ErrorCode == ResultErrorCode.NotFound;
+
 	private string SelectedRoleName =>
 		_overview?.Tiles.FirstOrDefault(tile => tile.Role.Id == _overview.SelectedRoleId)?.Role.Name ?? string.Empty;
 
@@ -181,10 +183,15 @@ else
 		await LoadAsync();
 	}
 
+	// Only a gone Role clears the pick; any other failure, such as a rate limit, retries the same selection.
 	private async Task RecoverAsync()
 	{
-		_selectedRoleId = null;
-		_writeUrl = true;
+		if (PickedRoleIsGone)
+		{
+			_selectedRoleId = null;
+			_writeUrl = true;
+		}
+
 		await LoadAsync();
 	}
 
