@@ -179,7 +179,17 @@
 
 			// Enter can cancel this wait after the delay has finished and before the dispatcher runs the search, so the
 			// token is checked again where the search starts.
-			await InvokeAsync(() => token.IsCancellationRequested ? Task.CompletedTask : SearchAsync(text, 1, notify: true));
+			// InvokeAsync doesn't redraw, and a failed search returns before it notifies the page, so the pane redraws itself.
+			await InvokeAsync(async () =>
+			{
+				if (token.IsCancellationRequested)
+				{
+					return;
+				}
+
+				await SearchAsync(text, 1, notify: true);
+				StateHasChanged();
+			});
 		}
 		catch (OperationCanceledException) when (token.IsCancellationRequested)
 		{

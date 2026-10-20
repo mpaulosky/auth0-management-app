@@ -703,6 +703,23 @@ public class UsersPageTests : BunitContext
 	}
 
 	[Fact]
+	public void Type_ThenTheDebounceElapsesAndAuth0RefusesTheSearch_ShowsAnErrorAlert()
+	{
+		// Arrange
+		const string message = "That search took Auth0 too long. Narrow the search.";
+		IRenderedComponent<UsersPage> cut = RenderPage();
+		_api.SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(
+			Result.Fail<UserPage>(message, ResultErrorCode.Validation, "User.SearchTooBroad")));
+
+		// Act
+		cut.Find(SearchBox).Input("jane");
+		_time.Advance(TimeSpan.FromMilliseconds(400));
+
+		// Assert
+		cut.WaitForAssertion(() => cut.Find("[role=alert]").TextContent.Should().Contain(message));
+	}
+
+	[Fact]
 	public void Search_QueryOverOneHundredCharacters_ShowsAnErrorAlertAndSendsNoSearch()
 	{
 		// Arrange
