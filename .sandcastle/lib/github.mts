@@ -6,7 +6,7 @@
 
 import { execFileSync } from "node:child_process";
 import { endOf } from "./checkpoint.mts";
-import { COPILOT_REVIEWER, QUEUE_LABEL, REVIEW_LABEL, REVIEW_LABEL_DEFINITION, SANDCASTLE_LABELS, type QueueScope, type SandcastleLabel } from "./config.mts";
+import { COPILOT_REVIEWER, QUEUE_LABEL, REVIEW_LABEL, REVIEW_LABEL_DEFINITION, SANDCASTLE_LABELS, SANDCASTLE_WORKFLOW, type QueueScope, type SandcastleLabel } from "./config.mts";
 import type { CheckState, SweepPullRequest } from "./follow-up.mts";
 import { handBackReport, targetUrl, unlabelledPrReport, type HandBackReport, type UnlabelledPrReport } from "./report.mts";
 import { sh } from "./shell.mts";
@@ -390,7 +390,7 @@ query($owner: String!, $name: String!, $cursor: String) {
                   pageInfo { hasNextPage }
                   nodes {
                     __typename
-                    ... on CheckRun { name status conclusion completedAt }
+                    ... on CheckRun { name status conclusion completedAt checkSuite { workflowRun { databaseId workflow { name } } } }
                     ... on StatusContext { context state createdAt }
                   }
                 }
@@ -419,7 +419,7 @@ type CheckContext = {
   context?: string;
   state?: string;
   createdAt?: string;
-  checkSuite?: { workflowRun?: { databaseId?: number } | null } | null;
+  checkSuite?: { workflowRun?: { databaseId?: number; workflow?: { name?: string } | null } | null } | null;
 };
 type SweepNode = {
   id: string;
@@ -443,7 +443,8 @@ type SweepNode = {
 
 // The open PRs into main with everything the follow-up sweep decides from
 // (lib/follow-up.mts#sweepPullRequests), through one GraphQL query paged by
-// hand, 50 PRs a page. Normalised to SweepPullRequest.
+// hand, 50 PRs a page. Normalised to SweepPullRequest, without the checks of
+// Sandcastle's own workflow (isSandcastleCheck).
 export function openPullRequestsForSweep(
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
@@ -502,7 +503,7 @@ function sweepPullRequest(node: SweepNode): SweepPullRequest {
       const author = first?.author;
       return { resolved: thread.isResolved, byBot: author?.__typename === "Bot", author: authorLogin(author) };
     }),
-    checks: nodesOf(contexts).map(checkState),
+    checks: nodesOf(contexts).filter((context) => !isSandcastleCheck(context)).map(checkState),
     copilotRequestedAt: nodesOf(node.timelineItems)
       .filter((event) => typeof event.createdAt === "string" && isCopilot(event.requestedReviewer?.login ?? null))
       .map((event) => event.createdAt as string),
@@ -513,6 +514,17 @@ function sweepPullRequest(node: SweepNode): SweepPullRequest {
       // nothing about whether the head is settled.
       (head?.oid !== undefined && head.oid !== node.headRefOid),
   };
+}
+
+// Whether `context` is a check run of Sandcastle's own workflow (#53): the
+// job, or the job that chooses its mode, which a run started by a PR's review
+// or label reports on the PR's head. It runs while the run does, Fail on
+// hand-backs turns it red for a hand-back on any issue, and GitHub cancels it
+// when a run waits too long in its concurrency group, so no pass can fix it.
+// Matched by workflow rather than check name, so a check another workflow
+// names "Sandcastle", and one with no workflow run, are kept.
+function isSandcastleCheck(context: CheckContext): boolean {
+  return context.__typename === "CheckRun" && context.checkSuite?.workflowRun?.workflow?.name === SANDCASTLE_WORKFLOW;
 }
 
 // A check run is green when it succeeded, or was neutral or skipped; a
@@ -674,7 +686,7 @@ query($owner: String!, $name: String!, $number: Int!) {
                 pageInfo { hasNextPage }
                 nodes {
                   __typename
-                  ... on CheckRun { name status conclusion completedAt checkSuite { workflowRun { databaseId } } }
+                  ... on CheckRun { name status conclusion completedAt checkSuite { workflowRun { databaseId workflow { name } } } }
                   ... on StatusContext { context state createdAt }
                 }
               }
@@ -687,7 +699,8 @@ query($owner: String!, $name: String!, $number: Int!) {
 }`;
 
 // The checks on PR `number`'s head, read fresh for a follow-up pass
-// (lib/follow-up-pass.mts#PassHost.checks), normalised as the sweep's are.
+// (lib/follow-up-pass.mts#PassHost.checks), normalised as the sweep's are and
+// without the checks of Sandcastle's own workflow (isSandcastleCheck).
 // Throws, rather than deciding from part of them, when the list is
 // truncated, the answer names no such PR, or the checks read are on a commit
 // other than its head.
@@ -721,7 +734,9 @@ export function headChecksOf(
   if (truncated(contexts)) throw new Error(`Pull request #${number}'s checks are truncated, so they can't be read in full`);
   return {
     headRefOid: pr.headRefOid,
-    checks: nodesOf(contexts).map((context) => ({ ...checkState(context), runId: context.checkSuite?.workflowRun?.databaseId })),
+    checks: nodesOf(contexts)
+      .filter((context) => !isSandcastleCheck(context))
+      .map((context) => ({ ...checkState(context), runId: context.checkSuite?.workflowRun?.databaseId })),
   };
 }
 

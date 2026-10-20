@@ -23,6 +23,14 @@
 //                               and the bot's and owner's review threads, and
 //                               the host gates and pushes the result, then
 //                               replies to and resolves the bot threads.
+//                               A run with SANDCASTLE_MODE=follow-up (#53)
+//                               does only the sweep, without the closed-PR
+//                               hand-backs, and its passes, once, then exits
+//                               (lib/follow-up-run.mts): no umbrellas, intake,
+//                               builds or second round. It runs beside a
+//                               full run, and the sweep skips a PR whose
+//                               issue is labelled sandcastle:building, which
+//                               a pass or a build holds while it works.
 //   Phase 0a (Intake):          One run judges every open issue that carries
 //                               none of sandcastle:ready, sandcastle:needs-info
 //                               and sandcastle:needs-human against the
@@ -114,6 +122,7 @@
 // Usage:
 //   SANDCASTLE_ISSUE=<n> pnpm run sandcastle         (only issue #n and its PR)
 //   SANDCASTLE_LABEL=<label> pnpm run sandcastle     (the issues labelled <label>, e.g. Sandcastle:dev)
+//   SANDCASTLE_MODE=follow-up SANDCASTLE_ISSUE=<n> pnpm run sandcastle (only the follow-up sweep and passes)
 
 import { existsSync, readFileSync } from "node:fs";
 import { buildIssue } from "./lib/build.mts";
@@ -128,11 +137,15 @@ import {
   QueueScopeError,
   queueScopeFrom,
   REVIEW_LABEL,
+  RunModeError,
+  runModeFrom,
   type QueueScope,
+  type RunMode,
 } from "./lib/config.mts";
 import { critiqueRound } from "./lib/critique.mts";
 import { UncountedStopError } from "./lib/errors.mts";
 import { followUpPassPhase } from "./lib/follow-up-pass.mts";
+import { followUpOnlyRun } from "./lib/follow-up-run.mts";
 import { followUpPhase } from "./lib/follow-up.mts";
 import { gateIssues } from "./lib/gate.mts";
 import { cacheHostLogin, ensureHostLabels, openPullRequests, repoName } from "./lib/github.mts";
@@ -188,6 +201,19 @@ try {
 }
 runLimits.start(budgetMinutes);
 console.log(`Time budget: ${budgetMinutes} minutes`);
+
+// The run mode too: the workflow sets SANDCASTLE_MODE=follow-up for a run
+// started by a review, a CI result or the follow-up label (#53), and an
+// unknown mode stops the run before it touches anything.
+let mode: RunMode;
+try {
+  mode = runModeFrom(process.env);
+} catch (error) {
+  if (!(error instanceof RunModeError)) throw error;
+  console.error(error.message);
+  process.exit(2);
+}
+console.log(mode === "full" ? "Mode: full" : "Mode: follow-up (the sweep and follow-up passes only)");
 
 // How the run ended, for the run report: set to "finished" or "stopped" by
 // the try below, so anything that throws past it reads as a crash.
@@ -255,7 +281,10 @@ try {
   // as unpicked work to come in every later round (#428).
   const overlapDeferred = new Map<number, OverlapHold>();
 
-  for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
+  // A follow-up run sweeps and passes once, then skips the round loop.
+  if (mode === "follow-up") await followUpOnlyRun();
+
+  for (let iteration = 1; mode === "full" && iteration <= MAX_ITERATIONS; iteration++) {
     // No new round once the budget has passed or the usage limit was hit.
     const stopReason = runLimits.stopReason();
     if (stopReason !== undefined) {
@@ -273,16 +302,18 @@ try {
     // Every phase below loads the queue; they share one read of each issue
     // this round.
     startQueueRound();
-    const { needsPass, passes } = followUpPhase();
-    umbrellaPhase();
 
     // No build of this run is going between rounds, so any label it still
-    // holds is one whose removal failed: try again before the work check
-    // and the gate, which would otherwise hold the issue back for the rest
-    // of the run.
+    // holds is one whose removal failed: try again before the sweep, which
+    // skips a PR whose issue is labelled sandcastle:building (#53), and the
+    // work check and the gate, which would otherwise hold the issue back for
+    // the rest of the run.
     for (const issueNumber of releaseAllBuildingLabels()) {
       console.log(`  🧹 #${issueNumber}: removed ${BUILDING_LABEL}, which an earlier round couldn't.`);
     }
+
+    const { needsPass, passes } = followUpPhase();
+    umbrellaPhase();
 
     // The early exit: before intake, the first step that can start Claude,
     // and before any sandbox needs the Docker image. A failed read here ends

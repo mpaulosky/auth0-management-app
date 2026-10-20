@@ -8,14 +8,16 @@
 // itself published (see isSandcastlePullRequest), and acts on the ones that
 // need no agent: re-requesting a stale Copilot review, updating a branch
 // that's only behind main, and handing an issue back when its latest PR
-// closed without merging. A PR that needs more than that (DIRTY, a red
+// closed without merging (a full run only). It leaves alone a PR whose issue
+// is labelled sandcastle:building, which another run, or this one, holds
+// while it builds or passes on it (#53). A PR that needs more than that (DIRTY, a red
 // check, an unresolved bot or owner thread) is logged here and returned as a
 // PassTarget: the agent pass that fixes it lives in lib/follow-up-pass.mts
 // (#78).
 // ---------------------------------------------------------------------------
 
 import { discardClosedWork, isIssueBranch, type BranchRefs } from "./branches.mts";
-import { COPILOT_REREQUEST_AFTER_MS, PR_MARKER, REVIEW_LABEL } from "./config.mts";
+import { BUILDING_LABEL, COPILOT_REREQUEST_AFTER_MS, PR_MARKER, REVIEW_LABEL } from "./config.mts";
 import {
   addPullRequestLabel,
   closedPullRequests,
@@ -113,20 +115,27 @@ export function isSandcastlePullRequest(pr: PullRequestIdentity, host: string): 
 }
 
 // The first reason the sweep skips `pr`, checked in this order: a fork, not
-// into main, not an issue branch, the issue isn't open and in scope, a draft,
-// labelled sandcastle:needs-human, not the host's, no PR_MARKER, or
-// truncated. Undefined when none applies, so the sweep decides from it.
+// into main, not an issue branch, the issue isn't open and in scope, the
+// issue is in `building` (labelled sandcastle:building), a draft, labelled
+// sandcastle:needs-human, not the host's, no PR_MARKER, or truncated.
+// Undefined when none applies, so the sweep decides from it. The building
+// skip keeps a full run and a follow-up run, which can go at the same time
+// (#53), off a PR the other is passing on or a build is opening: neither
+// updates its branch, re-asks Copilot or relabels it.
 export function sweepSkipReason(
   pr: SweepPullRequest,
   inScope: ReadonlySet<number>,
   host: string,
-  _building: ReadonlySet<number> = new Set(),
+  building: ReadonlySet<number> = new Set(),
 ): string | undefined {
   if (pr.isCrossRepository !== false) return "it's from a fork";
   if (pr.baseRefName !== "main") return `it's into ${pr.baseRefName}, not main`;
   const issueNumber = issueNumberOf(pr.headRefName);
   if (issueNumber === undefined) return `${pr.headRefName} isn't an issue branch`;
   if (!inScope.has(issueNumber)) return `#${issueNumber} isn't an open Sandcastle issue`;
+  if (building.has(issueNumber)) {
+    return `#${issueNumber} is labelled ${BUILDING_LABEL}, so another run is building it or passing on its PR`;
+  }
   if (pr.isDraft) return "it's a draft";
   if (hasLabel(pr, NEEDS_HUMAN)) return `it's labelled ${NEEDS_HUMAN}`;
   if (pr.author !== host) return `${pr.author ?? "a deleted account"} opened it, not ${host}`;
@@ -304,10 +313,13 @@ const carriedReviewLabel = new Set<number>();
 // `decide` with unresolved threads opened by someone other than the
 // repository owner or a bot (the same test lib/follow-up-pass.mts#threadsForRole
 // uses) replaces `waiting`'s list, so the run report shows the latest sweep's
-// view, and `unlabelled` drops every PR no longer open. Once that's done, hands
-// back any in-scope issue, not labelled sandcastle:needs-human and with no
-// open PR, whose latest Sandcastle PR closed without merging
-// (closedWithoutMerging), each in its own try/catch too. Every swept PR
+// view, and `unlabelled` drops every PR no longer open. Once that's done, and
+// only when `handBackClosed` is true, hands back any in-scope issue, not
+// labelled sandcastle:needs-human and with no open PR, whose latest Sandcastle
+// PR closed without merging (closedWithoutMerging), each in its own try/catch
+// too. A follow-up-only run passes false (#53): it touches only open PRs, so it
+// and a full run can't both hand back one issue. A PR whose issue is labelled
+// sandcastle:building is skipped (sweepSkipReason). Every swept PR
 // (sweepSkipReason applies isSandcastlePullRequest's tests) that has never
 // carried REVIEW_LABEL gets it first (labelForReview).
 export function sweepPullRequests(
@@ -318,11 +330,12 @@ export function sweepPullRequests(
   waiting: WaitingPrReport = waitingPrReport,
   unlabelled: Pick<UnlabelledPrReport, "record" | "resolve" | "retain"> = unlabelledPrReport,
   carried: Set<number> = carriedReviewLabel,
-  _handBackClosed: boolean = true,
+  handBackClosed: boolean = true,
 ): SweepResult {
   const host = github.hostLogin();
   const issues = github.inScopeIssues();
   const inScope = new Set(issues.map((issue) => issue.number));
+  const building = new Set(issues.filter((issue) => hasLabel(issue, BUILDING_LABEL)).map((issue) => issue.number));
   const openPrs = github.openPullRequests();
   const needsPass: number[] = [];
   const passes: PassTarget[] = [];
@@ -330,7 +343,7 @@ export function sweepPullRequests(
 
   for (const pr of openPrs) {
     try {
-      const skip = sweepSkipReason(pr, inScope, host);
+      const skip = sweepSkipReason(pr, inScope, host, building);
       if (skip !== undefined) {
         log(`  · PR #${pr.number} isn't swept: ${skip}.`);
         continue;
@@ -367,6 +380,7 @@ export function sweepPullRequests(
   }
   waiting.replace(waitingPrs);
   unlabelled.retain(new Set(openPrs.map((pr) => pr.number)));
+  if (!handBackClosed) return { needsPass, passes };
 
   // Any same-repo open PR on an issue's branch, the host's or not, means the
   // issue isn't waiting on a closed one.
