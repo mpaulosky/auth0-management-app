@@ -57,6 +57,27 @@ public class CachedManagementApiTests
 		return result;
 	}
 
+	/// <summary>A read the stub keeps waiting, so a write can run while Auth0 hasn't answered it yet.</summary>
+	private sealed class HeldRead
+	{
+		private readonly TaskCompletionSource _arrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+		private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+		public Task Arrived => _arrived.Task;
+
+		public Task Released => _released.Task;
+
+		public void Arrive()
+		{
+			_arrived.TrySetResult();
+		}
+
+		public void Release()
+		{
+			_released.TrySetResult();
+		}
+	}
+
 	/// <summary>
 	///   The stubbed Tenant behind <c>AddManagementApi()</c>: answers every endpoint the cache sits in front of with a
 	///   success, or with Auth0's 429 while <see cref="Failing" /> is set.
@@ -68,10 +89,33 @@ public class CachedManagementApiTests
 		public Scenario(HarnessOptions? options = null)
 		{
 			_harness = ManagementApiHarness.Create(options);
-			_harness.Handler.Respond(request => Failing ? RateLimited() : Serve(request));
+			_harness.Handler.Responder = async (request, _) =>
+			{
+				// Only the first read after HoldNextRead() waits, so the write that races it isn't held up too.
+				HeldRead? held = Interlocked.Exchange(ref _held, null);
+
+				if (held is not null && request.Method == HttpMethod.Get)
+				{
+					held.Arrive();
+					await held.Released;
+				}
+
+				return Failing ? RateLimited() : Serve(request);
+			};
 		}
 
+		private HeldRead? _held;
+
 		public bool Failing { get; set; }
+
+		/// <summary>Makes the next read that reaches Auth0 wait until the returned <see cref="HeldRead" /> is released.</summary>
+		public HeldRead HoldNextRead()
+		{
+			HeldRead held = new();
+			_held = held;
+
+			return held;
+		}
 
 		public IManagementApi Api => _harness.Api;
 
@@ -334,6 +378,31 @@ public class CachedManagementApiTests
 
 		// Assert
 		scenario.RequestCount.Should().Be(afterFirstRead, "the key is the trimmed lower-case query");
+	}
+
+	[Theory]
+	[InlineData("GetUser", "UpdateProfileFields")]
+	[InlineData("GetUser", "AssignRole")]
+	[InlineData("GetUser", "RemoveRole")]
+	[InlineData("ListRoleMembers", "AssignRole")]
+	[InlineData("ListRoleMembers", "RemoveRole")]
+	[InlineData("ListRoles", "CreateRole")]
+	public async Task ReadAsync_WriteEvictsItsEntryWhileTheReadIsInFlight_DoesNotCacheTheRead(string read, string write)
+	{
+		// Arrange
+		using Scenario scenario = new();
+		HeldRead held = scenario.HoldNextRead();
+		Task<Result> inFlight = ReadAsync(scenario.Api, read);
+		await held.Arrived;
+		await ApiCalls.InvokeAsync(scenario.Api, write, Ct);
+
+		// Act
+		held.Release();
+		await inFlight;
+		bool reached = await scenario.ReachesAuth0Async(async () => await ReadAsync(scenario.Api, read));
+
+		// Assert
+		reached.Should().BeTrue("Auth0 answered the read before the write landed, so its result mustn't be cached");
 	}
 
 	[Theory]

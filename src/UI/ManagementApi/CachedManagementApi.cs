@@ -40,6 +40,10 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 	private readonly TimeProvider _timeProvider;
 	private readonly EvictionGroup _searchPages = new();
 	private readonly EvictionGroup _roleMembers = new();
+	private readonly Lock _writeLock = new();
+
+	// Counts the writes that have evicted entries. A read compares it before and after calling Auth0.
+	private long _evictions;
 
 	/// <summary>
 	///   Initializes a new instance of the <see cref="CachedManagementApi" /> class.
@@ -62,6 +66,8 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 	{
 		ArgumentNullException.ThrowIfNull(search);
 
+		// Only the key is normalized: the request goes to Auth0 as given, because Lucene's operators (OR, AND, NOT) are
+		// case-sensitive and lowercasing them would change the query. Callers lower-case the terms they search for.
 		SearchKey key = new(search.Query?.Trim().ToLowerInvariant(), search.Page, search.PerPage);
 
 		return ReadThroughAsync(key, SearchLifetime, _searchPages,
@@ -86,9 +92,12 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 		finally
 		{
 			// Search pages and Role members carry the User's name, email and picture in their UserSummary rows.
-			_cache.Remove(new UserKey(userId));
-			_searchPages.EvictAll();
-			_roleMembers.EvictAll();
+			Evict(() =>
+			{
+				_cache.Remove(new UserKey(userId));
+				_searchPages.EvictAll();
+				_roleMembers.EvictAll();
+			});
 		}
 	}
 
@@ -133,7 +142,7 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 		}
 		finally
 		{
-			_cache.Remove(RolesKey);
+			Evict(() => _cache.Remove(RolesKey));
 		}
 	}
 
@@ -175,8 +184,16 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 		}
 
 		// Taken before the read, so a write that evicts the group while the read is in flight leaves this entry already
-		// expired rather than caching what the write made stale.
+		// expired rather than caching what the write made stale. Removing a single key can't do that, so the read also
+		// remembers how many evictions had happened and doesn't cache its result if another one has run since.
 		CancellationChangeToken? evictionToken = group?.CurrentToken();
+		long evictionsBefore;
+
+		lock (_writeLock)
+		{
+			evictionsBefore = _evictions;
+		}
+
 		Result<T> result = await read().ConfigureAwait(false);
 
 		// A failure, a 429 included, is never cached, so the next call asks Auth0 again.
@@ -198,15 +215,34 @@ internal sealed class CachedManagementApi : IManagementApi, IDisposable
 			options.AddExpirationToken(evictionToken);
 		}
 
-		_cache.Set(key, new Entry<T>(result, now + lifetime), options);
+		// Checked and stored under the lock the evictions run under, so no write can evict between the two.
+		lock (_writeLock)
+		{
+			if (_evictions == evictionsBefore)
+			{
+				_cache.Set(key, new Entry<T>(result, now + lifetime), options);
+			}
+		}
 
 		return result;
 	}
 
 	private void EvictRoleChange(string userId, string roleId)
 	{
-		_cache.Remove(new UserKey(userId));
-		_cache.Remove(new MembersKey(roleId));
+		Evict(() =>
+		{
+			_cache.Remove(new UserKey(userId));
+			_cache.Remove(new MembersKey(roleId));
+		});
+	}
+
+	private void Evict(Action evict)
+	{
+		lock (_writeLock)
+		{
+			_evictions++;
+			evict();
+		}
 	}
 
 	private sealed record Entry<T>(Result<T> Result, DateTimeOffset ExpiresAt);
