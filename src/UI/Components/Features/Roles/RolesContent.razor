@@ -1,0 +1,218 @@
+@using Domain.Abstractions
+@using UI.ManagementApi
+@implements IDisposable
+@inject GetRolesOverviewHandler Handler
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+@* The data loads here, a child of ManagementApiErrorBoundary: the boundary can't catch what a page throws after an await. *@
+@if (_failure is not null && _overview is null)
+{
+	@if (_failure.ErrorCode == ResultErrorCode.RateLimited)
+	{
+		<Alert Tone="AlertTone.Warning">@_failure.Error</Alert>
+	}
+	else
+	{
+		<Alert Tone="AlertTone.Error">@_failure.Error</Alert>
+	}
+	@if (_selectedRoleId is not null)
+	{
+		<a href="/admin/roles" class="@LinkClass">Show all Roles</a>
+	}
+}
+else if (_overview is null)
+{
+	<p class="text-sm text-slate-600 dark:text-slate-300">Loading Roles…</p>
+}
+else
+{
+	<ul class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+		@foreach (RoleTile tile in _overview.Tiles)
+		{
+			bool picked = tile.Role.Id == _overview.SelectedRoleId;
+			<li @key="tile.Role.Id">
+				<button type="button" aria-pressed="@(picked ? "true" : "false")" @onclick="() => PickAsync(tile.Role.Id)"
+					class="@TileClass(picked)">
+					<span class="flex items-center justify-between gap-3">
+						<span class="font-semibold">@tile.Role.Name</span>
+						<Badge Tone="BadgeTone.Accent">@CountText(tile)</Badge>
+					</span>
+					@if (!string.IsNullOrWhiteSpace(tile.Role.Description))
+					{
+						<span class="mt-1 block text-sm text-slate-600 dark:text-slate-300">@tile.Role.Description</span>
+					}
+				</button>
+			</li>
+		}
+	</ul>
+
+	@if (_failure is not null)
+	{
+		<Alert Tone="@(_failure.ErrorCode == ResultErrorCode.RateLimited ? AlertTone.Warning : AlertTone.Error)" Class="mt-6">@_failure.Error</Alert>
+	}
+	else
+	{
+		<Card Class="mt-6">
+			@if (_overview.SelectedRoleTruncated)
+			{
+				<p class="mb-3 text-sm text-slate-600 dark:text-slate-300">Showing the first 1,000 Users who hold @SelectedRoleName.</p>
+			}
+			<div class="overflow-x-auto">
+				<table class="w-full text-left text-sm">
+					<thead>
+						<tr class="border-b border-accent-200 dark:border-accent-800">
+							<th scope="col" class="px-3 py-2 font-semibold">User</th>
+							@foreach (RoleTile tile in _overview.Tiles)
+							{
+								<th scope="col" data-role="@tile.Role.Id" class="px-3 py-2 text-center font-semibold">@tile.Role.Name</th>
+							}
+						</tr>
+					</thead>
+					<tbody>
+						@foreach (RoleUserRow row in _overview.Rows)
+						{
+							<tr @key="row.User.Id" class="border-b border-accent-100 last:border-0 dark:border-accent-800/60">
+								<td class="px-3 py-2">
+									<a href="@UserHref(row.User)" class="@LinkClass">@DisplayName(row.User)</a>
+									@if (!string.IsNullOrWhiteSpace(row.User.Email) && row.User.Email != DisplayName(row.User))
+									{
+										<span class="block text-xs text-slate-600 dark:text-slate-300">@row.User.Email</span>
+									}
+								</td>
+								@for (int index = 0; index < _overview.Tiles.Count; index++)
+								{
+									<td data-role="@_overview.Tiles[index].Role.Id" class="px-3 py-2 text-center">
+										@switch (row.Holdings[index])
+										{
+											case RoleHolding.Yes:
+												<span class="font-semibold text-accent-700 dark:text-accent-300">✓</span>
+												break;
+											case RoleHolding.Unknown:
+												<span title="Unknown: more than 1,000 Users hold this Role" class="cursor-help text-slate-600 dark:text-slate-300">?</span>
+												break;
+										}
+									</td>
+								}
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+			@if (_overview.Rows.Count == 0)
+			{
+				<p class="px-3 py-4 text-sm text-slate-600 dark:text-slate-300">No Users to show.</p>
+			}
+		</Card>
+	}
+}
+
+@code {
+	private const string LinkClass =
+		"rounded-md font-medium text-accent-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 dark:text-accent-300 dark:focus-visible:outline-accent-300";
+
+	private readonly CancellationTokenSource _disposed = new();
+
+	private RolesOverview? _overview;
+
+	private Result? _failure;
+
+	private string? _selectedRoleId;
+
+	private string? _parameterRoleId;
+
+	private bool _loadedOnce;
+
+	private bool _writeUrl;
+
+	private int _loadNumber;
+
+	/// <summary>
+	///   The Role the URL's <c>role</c> picks, or <see langword="null" /> for none.
+	/// </summary>
+	[Parameter]
+	public string? RoleId { get; set; }
+
+	private string SelectedRoleName =>
+		_overview?.Tiles.FirstOrDefault(tile => tile.Role.Id == _overview.SelectedRoleId)?.Role.Name ?? string.Empty;
+
+	protected override async Task OnParametersSetAsync()
+	{
+		// A new ?role= from the URL (a navigation) reloads; a tile pick has already set the selection itself.
+		if (_loadedOnce && RoleId == _parameterRoleId)
+		{
+			return;
+		}
+
+		_loadedOnce = true;
+		_parameterRoleId = RoleId;
+		_selectedRoleId = RoleId;
+		await LoadAsync();
+	}
+
+	protected override async Task OnAfterRenderAsync(bool firstRender)
+	{
+		if (!_writeUrl)
+		{
+			return;
+		}
+
+		_writeUrl = false;
+
+		// history.replaceState changes the address bar without the enhanced navigation a NavigateTo would start, which
+		// renders the page again on the server (ADR 0010).
+		string url = Navigation.GetUriWithQueryParameter("role", _selectedRoleId);
+		await JS.InvokeVoidAsync("history.replaceState", null, string.Empty, url);
+	}
+
+	private async Task PickAsync(string roleId)
+	{
+		_selectedRoleId = _selectedRoleId == roleId ? null : roleId;
+		_writeUrl = true;
+		await LoadAsync();
+	}
+
+	private async Task LoadAsync()
+	{
+		int number = ++_loadNumber;
+		Result<RolesOverview> result =
+			await Handler.HandleAsync(new GetRolesOverviewQuery(_selectedRoleId), _disposed.Token);
+
+		// A later pick has started since: let it have the last word.
+		if (number != _loadNumber)
+		{
+			return;
+		}
+
+		if (result.Success)
+		{
+			_overview = result.Value;
+			_failure = null;
+		}
+		else
+		{
+			_failure = result;
+			_overview = null;
+		}
+	}
+
+	private static string TileClass(bool picked) =>
+		"block w-full rounded-2xl border p-4 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 dark:focus-visible:outline-accent-300 motion-safe:transition "
+		+ (picked
+			? "border-accent-500 bg-accent-100 dark:border-accent-500 dark:bg-accent-800"
+			: "border-accent-200 bg-white/80 hover:bg-accent-100 dark:border-accent-800 dark:bg-accent-900/70 dark:hover:bg-accent-800");
+
+	private static string CountText(RoleTile tile) =>
+		tile.Truncated ? "1,000+" : tile.Members.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+
+	private static string DisplayName(UserSummary user) =>
+		!string.IsNullOrWhiteSpace(user.Name) ? user.Name : !string.IsNullOrWhiteSpace(user.Email) ? user.Email : user.Id;
+
+	private static string UserHref(UserSummary user) => $"/admin/users?user={Uri.EscapeDataString(user.Id)}";
+
+	public void Dispose()
+	{
+		_disposed.Cancel();
+		_disposed.Dispose();
+	}
+}
