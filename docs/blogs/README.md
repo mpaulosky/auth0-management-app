@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-10-20 | [feat: Warn when the git hooks aren't enabled, so the pre-push gate isn't silently skipped](2026-10-20-pr-75-feat-warn-when-the-git-hooks-aren-t-enabled-so-the-pre-push-gate-isn-t-silently-skipped.md) | release,automation |
 | 2026-10-20 | [chore: Re-apply the repo-ci-baseline Template](2026-10-20-pr-74-chore-re-apply-the-repo-ci-baseline-template.md) | release,automation |
 | 2026-10-20 | [chore(scripts): Skip Sandcastle's own comments in watch-pr.sh](2026-10-20-pr-72-chore-scripts-skip-sandcastle-s-own-comments-in-watch-pr-sh.md) | release,automation |
 | 2026-10-20 | [feat(Roles): List the Roles and the Users who hold them](2026-10-20-pr-69-feat-roles-list-the-roles-and-the-users-who-hold-them.md) | release,automation |

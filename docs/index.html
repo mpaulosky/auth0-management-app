@@ -229,6 +229,12 @@
             </thead>
             <tbody>
               <tr>
+                <td><a href="https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.25">v0.0.25</a></td>
+                <td>2026-10-20</td>
+                <td>feat: Warn when the git hooks aren&#x27;t enabled, so the pre-push gate isn&#x27;t silently skipped</td>
+                <td><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-75-feat-warn-when-the-git-hooks-aren-t-enabled-so-the-pre-push-gate-isn-t-silently-skipped.md">Post</a></td>
+              </tr>
+              <tr>
                 <td><a href="https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.24">v0.0.24</a></td>
                 <td>2026-10-20</td>
                 <td>chore: Re-apply the repo-ci-baseline Template</td>
@@ -282,12 +288,6 @@
                 <td>feat(sandcastle): Label every Sandcastle PR that never had review:claude</td>
                 <td><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-55-feat-sandcastle-label-every-sandcastle-pr-that-never-had-review-claude.md">Post</a></td>
               </tr>
-              <tr>
-                <td><a href="https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.15">v0.0.15</a></td>
-                <td>2026-10-19</td>
-                <td>chore(scripts): Watch every hand-opened PR until it merges</td>
-                <td><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-54-chore-scripts-watch-every-hand-opened-pr-until-it-merges.md">Post</a></td>
-              </tr>
             </tbody>
           </table>
         </div>
@@ -298,6 +298,14 @@
         <h2>Blog posts</h2>
         <!-- BLOGS_HTML_START -->
         <ul class="post-grid">
+          <li class="post-card">
+            <article>
+              <p class="post-meta"><time datetime="2026-10-20">20 Oct 2026</time><span class="post-tag">v0.0.25</span></p>
+              <h3 class="post-title"><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-75-feat-warn-when-the-git-hooks-aren-t-enabled-so-the-pre-push-gate-isn-t-silently-skipped.md">feat: Warn when the git hooks aren&#x27;t enabled, so the pre-push gate isn&#x27;t silently skipped</a></h3>
+              <p class="post-excerpt">The pre-push gate only runs in a clone where git config core.hooksPath is set to .github/hooks. Without that setting, git never runs .github/hooks/pre-push, and a push skips the gate without saying…</p>
+              <p class="post-source"><a href="https://github.com/mpaulosky/auth0-management-app/pull/75">PR #75</a></p>
+            </article>
+          </li>
           <li class="post-card">
             <article>
               <p class="post-meta"><time datetime="2026-10-20">20 Oct 2026</time><span class="post-tag">v0.0.24</span></p>
@@ -368,14 +376,6 @@
               <h3 class="post-title"><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-55-feat-sandcastle-label-every-sandcastle-pr-that-never-had-review-claude.md">feat(sandcastle): Label every Sandcastle PR that never had review:claude</a></h3>
               <p class="post-excerpt">Claude reviews a pull request only when it carries the review:claude label. Sandcastle adds that label to each PR it opens, but two kinds of Sandcastle PR could still go without it. The first is a…</p>
               <p class="post-source"><a href="https://github.com/mpaulosky/auth0-management-app/pull/55">PR #55</a></p>
-            </article>
-          </li>
-          <li class="post-card">
-            <article>
-              <p class="post-meta"><time datetime="2026-10-19">19 Oct 2026</time><span class="post-tag">v0.0.15</span></p>
-              <h3 class="post-title"><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-54-chore-scripts-watch-every-hand-opened-pr-until-it-merges.md">chore(scripts): Watch every hand-opened PR until it merges</a></h3>
-              <p class="post-excerpt">Hand-opened PRs sat with unresolved review threads, and PR Auto-Merge holds a PR on every unresolved thread. Sandcastle&#x27;s follow-up sweep acts only on the PRs Sandcastle opened itself…</p>
-              <p class="post-source"><a href="https://github.com/mpaulosky/auth0-management-app/pull/54">PR #54</a></p>
             </article>
           </li>
         </ul>
