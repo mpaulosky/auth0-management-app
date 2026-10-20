@@ -1,0 +1,84 @@
+@page "/admin/roles"
+@attribute [Authorize(Policy = ApplicationConstants.AdminPolicy)]
+@rendermode InteractiveServer
+
+@using Domain.Constants
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Routing
+@using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.Extensions.Primitives
+@implements IDisposable
+@inject NavigationManager Navigation
+
+<PageTitle>Roles</PageTitle>
+
+<PageHeader Title="Roles" Lead="Pick a Role to see the Users who hold it.">
+	<Eyebrow>Admin</Eyebrow>
+</PageHeader>
+
+@* The tab switch is two plain links: moving to the Users page is an ordinary navigation. *@
+<nav aria-label="Manage" class="mt-6 flex gap-2">
+	<a href="/admin/users" class="@TabClass">Users</a>
+	<a href="/admin/roles" aria-current="page" class="@CurrentTabClass">Roles</a>
+</nav>
+
+<div class="mt-6">
+	<ManagementApiErrorBoundary>
+		<RolesContent RoleId="@_roleId" Visit="@_visit" />
+	</ManagementApiErrorBoundary>
+</div>
+
+@code {
+	private const string TabBase =
+		"rounded-xl px-4 py-2 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 dark:focus-visible:outline-accent-300 motion-safe:transition";
+
+	private const string TabClass = TabBase + " border border-accent-300 hover:bg-accent-200 dark:border-accent-700 dark:hover:bg-accent-800";
+
+	private const string CurrentTabClass = TabBase + " bg-accent-600 text-white shadow-sm";
+
+	private string? _roleId;
+
+	private int _visit;
+
+	protected override void OnInitialized()
+	{
+		Navigation.LocationChanged += OnLocationChanged;
+	}
+
+	protected override void OnParametersSet()
+	{
+		ReadRoleId();
+	}
+
+	// A tile pick writes the address with history.replaceState, which raises no event; a link to this page, such as the
+	// current tab, does, and must reset the selection even though the address's role is the same as the page last read.
+	private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+	{
+		// A move to another page, such as the Users tab or a row's link, removes this one: reloading it would only spend
+		// the Management API's rate limit that the next page needs.
+		string path = Navigation.ToBaseRelativePath(e.Location).Split('?', '#')[0];
+		if (!string.Equals(path, "admin/roles", StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
+
+		_ = InvokeAsync(() =>
+		{
+			ReadRoleId();
+			_visit++;
+			StateHasChanged();
+		});
+	}
+
+	public void Dispose()
+	{
+		Navigation.LocationChanged -= OnLocationChanged;
+	}
+
+	private void ReadRoleId()
+	{
+		Dictionary<string, StringValues> query = QueryHelpers.ParseQuery(new Uri(Navigation.Uri).Query);
+		string? roleId = query.TryGetValue("role", out StringValues values) ? values.ToString() : null;
+		_roleId = string.IsNullOrWhiteSpace(roleId) ? null : roleId;
+	}
+}
