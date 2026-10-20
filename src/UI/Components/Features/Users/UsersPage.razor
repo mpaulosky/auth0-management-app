@@ -1,0 +1,72 @@
+@page "/admin/users"
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = ApplicationConstants.AdminPolicy)]
+@implements IAsyncDisposable
+
+@using Domain.Constants
+@using Microsoft.AspNetCore.Authorization
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<PageTitle>Users</PageTitle>
+
+<PageHeader Title="Users" Lead="Search the Tenant's Users and pick one.">
+	<Eyebrow>Admin</Eyebrow>
+</PageHeader>
+
+<nav aria-label="Manage" class="mt-6 flex gap-2">
+	<a href="/admin/users" data-enhance-nav="false" aria-current="page" class="@(TabClass(true))">Users</a>
+	<a href="/admin/roles" data-enhance-nav="false" class="@(TabClass(false))">Roles</a>
+</nav>
+
+<div class="mt-6">
+	<ManagementApiErrorBoundary>
+		<div class="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+			<UserListPane State="_state" OnStateChanged="WriteUrlAsync" />
+			<Card>
+				<p class="text-slate-600 dark:text-slate-300">Pick a User from the list to see them here.</p>
+			</Card>
+		</div>
+	</ManagementApiErrorBoundary>
+</div>
+
+@code {
+	private const string ModulePath = "./Components/Features/Users/UsersPage.razor.js";
+
+	private const string TabBaseClass =
+		"rounded-xl px-4 py-2 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 dark:focus-visible:outline-accent-300 motion-safe:transition";
+
+	private UsersUrlState _state = new(null, 1, null);
+
+	private IJSObjectReference? _module;
+
+	// The URL is read once, when the page initializes. Searching and paging then write it back with history.replaceState, so
+	// the page never reads it again and a Try again after an error starts from what the Admin last saw.
+	protected override void OnInitialized() => _state = UsersUrlState.FromUri(new Uri(Navigation.Uri));
+
+	private static string TabClass(bool active) => active
+		? $"{TabBaseClass} bg-accent-600 text-white shadow-sm"
+		: $"{TabBaseClass} border border-accent-300 hover:bg-accent-200 dark:border-accent-700 dark:hover:bg-accent-800";
+
+	private async Task WriteUrlAsync(UsersUrlState state)
+	{
+		_state = state;
+		_module ??= await JS.InvokeAsync<IJSObjectReference>("import", ModulePath);
+		await _module.InvokeVoidAsync("replaceUrl", state.ToUrl());
+	}
+
+	public async ValueTask DisposeAsync()
+	{
+		if (_module is not null)
+		{
+			try
+			{
+				await _module.DisposeAsync();
+			}
+			catch (JSDisconnectedException)
+			{
+				// The circuit is already gone, so there is no module left to release.
+			}
+		}
+	}
+}

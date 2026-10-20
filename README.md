@@ -47,10 +47,12 @@ Early stage. Built so far:
 - The Blazor Web App (`src/UI`) with a Home page, a nav menu, NotFound and Error pages, and the Tailwind CSS v4 build.
 - Sign-in and sign-out through Auth0, with the `Admin` Role mapped from the ID token.
 - A Profile page that lists the signed-in User's own claims, and an Admin page only an Admin can open.
+- A Users page at `/admin/users` where an Admin searches and pages through the Tenant's Users, with an **Admin** badge on
+  those who hold the Role. The Management API calls sit behind one interface.
 - A light/dark **Theme** and a **Palette** that tints the accent and the surfaces, both kept in cookies.
 - The Aspire AppHost, the ServiceDefaults and the tests for all of the above.
 
-Planned next: the User list, the Profile Fields editor, Role assignment and Role creation, all through the Management API.
+Planned next: the User detail pane, the Profile Fields editor, Role assignment and Role creation, all through the Management API.
 
 ### Look and feel
 
@@ -195,7 +197,8 @@ A Role you add to or remove from yourself takes effect at your next sign-in, whe
 
 ### Management API application
 
-User and Role management isn't built yet; these are the settings it will need.
+The app needs these settings to start, since the Users page calls the Management API. Under the AppHost, they're
+read from the same user secrets and passed on to WebApp.
 
 1. Create an application of type **Machine to Machine** and authorize it for the **Auth0 Management API**.
 2. Grant it only these permissions:
@@ -234,7 +237,7 @@ src/AppHost/                     -- Aspire AppHost: runs the UI as the WebApp re
 src/Domain/                      -- Shared Kernel: Result, Result<T>, ApplicationConstants
 src/ServiceDefaults/             -- Aspire service defaults: OpenTelemetry and health checks
 src/UI/                          -- Blazor Web App (server-rendered)
-src/UI/Components/Features/      -- One folder per feature slice (Authentication, Profile, Admin, Themes, Palettes)
+src/UI/Components/Features/      -- One folder per feature slice (Authentication, Profile, Admin, Themes, Palettes, Users)
 src/UI/Security/                 -- Cross-cutting code that isn't a component, such as LocalReturnUrl
 src/UI/Styles/                   -- Tailwind CSS v4 source
 tests/AppHost.Tests.Integration/ -- AppHost integration tests (Aspire.Hosting.Testing)
