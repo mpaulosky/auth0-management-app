@@ -472,6 +472,35 @@ public class UsersPageTests : BunitContext
 	}
 
 	[Fact]
+	public void PressEnter_ThenDeletesBackToTheAppliedTextWhileTheSearchIsInFlight_CancelsThatSearch()
+	{
+		// Arrange
+		Open("?q=jane");
+		ReturnPage(People(25), 60);
+		IRenderedComponent<UsersPage> cut = RenderPage();
+		List<CancellationToken> tokens = [];
+		TaskCompletionSource<Result<UserPage>> enterSearch = new();
+		_api.SearchUsersAsync(Arg.Any<UserSearch>(), Arg.Any<CancellationToken>()).Returns(call =>
+		{
+			tokens.Add(call.Arg<CancellationToken>());
+
+			return enterSearch.Task;
+		});
+		cut.Find(SearchBox).Input("janex");
+		cut.Find(SearchBox).KeyDown(new KeyboardEventArgs { Key = "Enter" });
+		cut.WaitForAssertion(() => tokens.Should().HaveCount(1));
+
+		// Act
+		cut.Find(SearchBox).Input("jane");
+		enterSearch.SetResult(Result.Ok(new UserPage(People(25), 60)));
+
+		// Assert
+		tokens[0].IsCancellationRequested.Should().BeTrue();
+		cut.Find(SearchBox).GetAttribute("value").Should().Be("jane");
+		SearchesSent().Should().NotContain(search => search.Query == UserSearchQueryBuilder.Build("janex") && search.Page == 2);
+	}
+
+	[Fact]
 	public void Type_ThenWaitsLessThanFourHundredMilliseconds_DoesNotSearchYet()
 	{
 		// Arrange

@@ -86,9 +86,9 @@
 
 	private CancellationTokenSource? _search;
 
-	// The search the debounce started, while it is still the current one. Deleting back to the applied text cancels only
-	// this one, not a page the Admin asked for with Next, Prev or Enter.
-	private CancellationTokenSource? _delayedSearch;
+	// The text of the current search. Deleting back to the applied text cancels a search for any other text, such as one the
+	// debounce or Enter started, but not a page the Admin asked for with Next or Prev, which reuses the applied text.
+	private string _searchText = string.Empty;
 
 	// The handler clamped the page, so the URL still names a page the pane doesn't show. It is written once the pane is
 	// interactive, however late the search finished.
@@ -170,11 +170,11 @@
 
 		// Typing a letter and deleting it again leaves the applied search as it was, so it keeps the Admin on their page.
 		// Enter still searches again. After a failed search nothing is applied, so the same text is worth another try.
-		// A search the debounce already started is cancelled too, or it would apply the text the Admin just deleted. A page
-		// the Admin asked for with Next, Prev or Enter is not the debounce's, so it carries on.
+		// A search already running for other text is cancelled too, or it would apply the text the Admin just deleted. A page
+		// the Admin asked for with Next or Prev searches the applied text, so it carries on.
 		if (_list is not null && _error is null && string.Equals(_text.Trim(), _appliedQuery?.Trim() ?? string.Empty, StringComparison.Ordinal))
 		{
-			if (_delayedSearch is not null && ReferenceEquals(_delayedSearch, _search))
+			if (_search is not null && !string.Equals(_searchText, _text.Trim(), StringComparison.Ordinal))
 			{
 				_search.Cancel();
 			}
@@ -224,7 +224,7 @@
 					return;
 				}
 
-				await SearchAsync(text, 1, notify: true, fromDebounce: true);
+				await SearchAsync(text, 1, notify: true);
 				StateHasChanged();
 			});
 		}
@@ -241,13 +241,13 @@
 #pragma warning restore CA1031
 	}
 
-	private async Task SearchAsync(string? text, int page, bool notify, bool fromDebounce = false)
+	private async Task SearchAsync(string? text, int page, bool notify)
 	{
 		_search?.Cancel();
 		_search?.Dispose();
 		CancellationTokenSource source = new();
 		_search = source;
-		_delayedSearch = fromDebounce ? source : null;
+		_searchText = text?.Trim() ?? string.Empty;
 		CancellationToken token = source.Token;
 
 		Result<UserListPage> result;
