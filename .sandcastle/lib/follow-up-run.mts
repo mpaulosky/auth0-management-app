@@ -12,7 +12,7 @@
 
 import { fetchMain } from "./branches.mts";
 import { followUpPassPhase, type PassOutcome } from "./follow-up-pass.mts";
-import { followUpPhase, liveFollowUpGitHub, sweepPullRequests, type PassTarget, type SweepResult } from "./follow-up.mts";
+import { liveFollowUpGitHub, sweepPullRequests, type FollowUpGitHub, type PassTarget, type SweepResult } from "./follow-up.mts";
 import type { SandcastleIssue } from "./github.mts";
 import { loadQueue, startQueueRound } from "./queue.mts";
 import { outcomeReport, unlabelledPrReport, waitingPrReport } from "./report.mts";
@@ -27,16 +27,19 @@ export type FollowUpRunSteps = {
   log(line: string): void;
 };
 
-// The live steps, the same calls main.mts makes in a full run's round. The
-// sweep leaves closed PRs' hand-backs to full runs (handBackClosed false), so
-// two runs can't both hand back one issue. Its set of PRs that have carried
-// review:claude starts empty, since this run sweeps only once.
-export const liveFollowUpRunSteps: FollowUpRunSteps = {
-  startRound: () => startQueueRound(),
-  sweep: () =>
-    followUpPhase(() =>
+// The steps with `github` behind the sweep, the same calls main.mts makes in a
+// full run's round. The sweep leaves closed PRs' hand-backs to full runs
+// (handBackClosed false), so two runs can't both hand back one issue. Its set of
+// PRs that have carried review:claude starts empty, since this run sweeps once.
+// It doesn't go through followUpPhase: that swallows a failed sweep because the
+// next round retries it, and this run has no next round, so a failure must
+// reach main.mts and end the run red rather than log "no PR needs a pass".
+export function followUpRunSteps(github: FollowUpGitHub): FollowUpRunSteps {
+  return {
+    startRound: () => startQueueRound(),
+    sweep: () =>
       sweepPullRequests(
-        liveFollowUpGitHub,
+        github,
         console.log,
         Date.now(),
         outcomeReport,
@@ -45,12 +48,15 @@ export const liveFollowUpRunSteps: FollowUpRunSteps = {
         new Set<number>(),
         false,
       ),
-    ),
-  fetchMain: () => fetchMain(),
-  queue: () => loadQueue(),
-  passes: (targets, issues, base) => followUpPassPhase(targets, issues, base),
-  log: (line) => console.log(line),
-};
+    fetchMain: () => fetchMain(),
+    queue: () => loadQueue(),
+    passes: (targets, issues, base) => followUpPassPhase(targets, issues, base),
+    log: (line) => console.log(line),
+  };
+}
+
+// The live steps.
+export const liveFollowUpRunSteps: FollowUpRunSteps = followUpRunSteps(liveFollowUpGitHub);
 
 // The sweep, then the follow-up passes it found, once. An UncountedStopError
 // from the passes propagates, so main.mts's catch ends the run "stopped", as

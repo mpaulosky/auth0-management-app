@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { UncountedStopError } from "./errors.mts";
 import type { PassOutcome } from "./follow-up-pass.mts";
-import { followUpOnlyRun, type FollowUpRunSteps } from "./follow-up-run.mts";
-import type { PassTarget, SweepResult } from "./follow-up.mts";
+import { followUpOnlyRun, followUpRunSteps, type FollowUpRunSteps } from "./follow-up-run.mts";
+import type { FollowUpGitHub, PassTarget, SweepResult } from "./follow-up.mts";
 import type { SandcastleIssue } from "./github.mts";
 
 const target = (number: number): PassTarget => ({
@@ -91,5 +91,56 @@ describe("followUpOnlyRun", () => {
     const { stub } = steps({ needsPass: [101], passes: [target(101)] }, async () => [{ kind: "push-failed", error: "rejected" }]);
 
     await assert.doesNotReject(followUpOnlyRun(stub));
+  });
+});
+
+// A FollowUpGitHub with nothing open, one in-scope issue and the calls that
+// matter to a follow-up run recorded; `overrides` replaces any member.
+function githubStub(overrides: Partial<FollowUpGitHub> = {}) {
+  const closedCalls: string[] = [];
+  const handBacks: number[] = [];
+  const github: FollowUpGitHub = {
+    hostLogin: () => "sandcastle-bot",
+    openPullRequests: () => [],
+    closedPullRequests: (author) => {
+      closedCalls.push(author);
+      return [];
+    },
+    inScopeIssues: () => [{ number: 42, labels: [] }],
+    labelTimeline: () => [],
+    requestCopilotReview: () => {},
+    updateBranch: () => {},
+    handBack: (issueNumber) => void handBacks.push(issueNumber),
+    isOwner: () => true,
+    pullRequestEvents: () => [],
+    addPullRequestLabel: () => {},
+    ...overrides,
+  };
+  return { github, closedCalls, handBacks };
+}
+
+// The live wiring of the sweep step, run against a stub GitHub.
+describe("followUpRunSteps", () => {
+  it("sweeps without handing back closed PRs, which a full run does", async () => {
+    const { github, closedCalls, handBacks } = githubStub();
+
+    followUpRunSteps(github).sweep();
+
+    assert.deepEqual(closedCalls, []);
+    assert.deepEqual(handBacks, []);
+  });
+
+  it("lets a failed sweep reach the caller instead of logging that no PR needs a pass", async () => {
+    const { github } = githubStub({
+      hostLogin: () => {
+        throw new Error("gh api failed: HTTP 502");
+      },
+    });
+    const { stub, logs } = steps({ needsPass: [], passes: [] });
+    const run = followUpRunSteps(github);
+
+    await assert.rejects(followUpOnlyRun({ ...stub, sweep: run.sweep }), /HTTP 502/);
+
+    assert.ok(!logs.some((line) => line.includes("No open PR needs")), logs.join("\n"));
   });
 });
