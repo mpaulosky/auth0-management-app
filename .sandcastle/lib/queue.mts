@@ -84,7 +84,11 @@ export function approval(
   if (queued === undefined) return { approved: false, reason: `nothing shows who added ${queueLabel}` };
   const queuer = isOwner(queued.actor);
   if (queuer === undefined) {
-    return { approved: false, reason: `couldn't check whether ${who(queued.actor)}, who added ${queueLabel}, is the repository owner` };
+    return {
+      approved: false,
+      reason: `couldn't check whether ${who(queued.actor)}, who added ${queueLabel}, is the repository owner`,
+      unknown: true,
+    };
   }
   if (!queuer) return { approved: false, reason: `${who(queued.actor)} added ${queueLabel}, not the repository owner` };
 
@@ -112,6 +116,7 @@ export function approval(
     return {
       approved: false,
       reason: `couldn't check whether ${who(unknown.editor)}, who edited ${unknown.what} after ${queueLabel} was added, is the repository owner`,
+      unknown: true,
     };
   }
   return { approved: true };

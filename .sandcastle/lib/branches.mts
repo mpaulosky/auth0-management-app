@@ -45,8 +45,11 @@ export function isIssueBranch(branch: string, issueNumber: number): boolean {
 // an issue branch for any issue, or chore/{slug}. The sweep follows up on a
 // hand-off PR (#58) only from such a branch, since a branch name reaches a
 // shell in the sandbox, and it keeps the host off dev, preview and dependabot/*.
-export function isHandOffBranch(_branch: string): boolean {
-  throw new Error("Not implemented");
+export function isHandOffBranch(branch: string): boolean {
+  return (
+    new RegExp(`^(?:${issuePrefixes.join("|")})/[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*$`).test(branch) ||
+    /^chore\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(branch)
+  );
 }
 
 // The issue's branch: its existing feature/, fix/ or hotfix/{n}-{slug} branch on the

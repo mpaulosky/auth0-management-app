@@ -6,7 +6,7 @@
 
 import { execFileSync } from "node:child_process";
 import { endOf } from "./checkpoint.mts";
-import { COPILOT_REVIEWER, QUEUE_LABEL, REVIEW_LABEL, REVIEW_LABEL_DEFINITION, SANDCASTLE_LABELS, SANDCASTLE_WORKFLOW, type QueueScope, type SandcastleLabel } from "./config.mts";
+import { COPILOT_REVIEWER, FOLLOW_UP_LABEL_DEFINITION, QUEUE_LABEL, REVIEW_LABEL, REVIEW_LABEL_DEFINITION, SANDCASTLE_LABELS, SANDCASTLE_WORKFLOW, type QueueScope, type SandcastleLabel } from "./config.mts";
 import type { CheckState, SweepPullRequest } from "./follow-up.mts";
 import { handBackReport, targetUrl, unlabelledPrReport, type HandBackReport, type UnlabelledPrReport } from "./report.mts";
 import { sh } from "./shell.mts";
@@ -1093,11 +1093,13 @@ export function ensureLabels(
   }
 }
 
-// Creates every label the host needs at startup: SANDCASTLE_LABELS and
-// REVIEW_LABEL_DEFINITION, through ensureLabels. Without REVIEW_LABEL, every
-// label add in a run fails, and no PR it opens is reviewed (#51).
+// Creates every label the host needs at startup: SANDCASTLE_LABELS,
+// REVIEW_LABEL_DEFINITION and FOLLOW_UP_LABEL_DEFINITION, through
+// ensureLabels. Without REVIEW_LABEL, every label add in a run fails, and no
+// PR it opens is reviewed (#51); without FOLLOW_UP_LABEL, the owner has no
+// label to hand a PR off with (#58).
 export function ensureHostLabels(run: typeof execFileSync = execFileSync, repo: string = repoName()): void {
-  ensureLabels([...SANDCASTLE_LABELS, REVIEW_LABEL_DEFINITION], run, repo);
+  ensureLabels([...SANDCASTLE_LABELS, REVIEW_LABEL_DEFINITION, FOLLOW_UP_LABEL_DEFINITION], run, repo);
 }
 
 // Adds `label` to the issue `number`, or every label in it, in one edit so
@@ -1164,33 +1166,50 @@ export function issuesWithLabel(
 
 // The names of the labels on the issue or PR `number` now, from the REST
 // labels endpoint, which covers both (gh issue view refuses a PR here, #58).
-export function labelsOn(_number: number, _run: typeof execFileSync = execFileSync, _repo: string = repoName()): string[] {
-  throw new Error("Not implemented");
+// Every page, read fresh rather than from a round's snapshot.
+export function labelsOn(number: number, run: typeof execFileSync = execFileSync, repo: string = repoName()): string[] {
+  return jsonLines(
+    ghWithStderr(run, ["api", "--paginate", `repos/${repo}/issues/${number}/labels`, "--jq", ".[] | .name | @json"]),
+  ) as string[];
 }
 
-// Adds `label` to the issue or PR `number` with the REST labels endpoint.
+// Adds `label` to the issue or PR `number` with the REST labels endpoint,
+// which gh issue edit can't do for a PR. The repository must already have
+// the label (see ensureLabels).
 export function addLabelOn(
-  _number: number,
-  _label: string,
-  _run: typeof execFileSync = execFileSync,
-  _repo: string = repoName(),
+  number: number,
+  label: string,
+  run: typeof execFileSync = execFileSync,
+  repo: string = repoName(),
 ): void {
-  throw new Error("Not implemented");
+  ghWithStderr(run, ["api", "-X", "POST", `repos/${repo}/issues/${number}/labels`, "-f", `labels[]=${label}`]);
 }
 
-// Removes `label` from the issue or PR `number`; a 404 counts as removed.
+// Removes `label` from the issue or PR `number`. GitHub answers 404 when the
+// label isn't on it, which counts as removed: the label is gone either way.
 export function removeLabelFrom(
-  _number: number,
-  _label: string,
-  _run: typeof execFileSync = execFileSync,
-  _repo: string = repoName(),
+  number: number,
+  label: string,
+  run: typeof execFileSync = execFileSync,
+  repo: string = repoName(),
 ): void {
-  throw new Error("Not implemented");
+  try {
+    ghWithStderr(run, ["api", "-X", "DELETE", `repos/${repo}/issues/${number}/labels/${encodeURIComponent(label)}`]);
+  } catch (error) {
+    if (!/\(HTTP 404\)/.test(String(error))) throw error;
+  }
 }
 
-// The numbers of the open issues and PRs carrying `label`.
-export function openNumbersWithLabel(_label: string, _run: typeof execFileSync = execFileSync, _repo: string = repoName()): number[] {
-  throw new Error("Not implemented");
+// The numbers of the open issues and PRs carrying `label`, every page of the
+// REST issues endpoint, which lists PRs too where gh issue list leaves them
+// out. lib/building.mts reads it to clear a crashed run's claim on either.
+export function openNumbersWithLabel(label: string, run: typeof execFileSync = execFileSync, repo: string = repoName()): number[] {
+  return jsonLines(
+    ghWithStderr(run, [
+      "api", "--paginate", `repos/${repo}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100`,
+      "--jq", ".[] | .number | @json",
+    ]),
+  ) as number[];
 }
 
 // A hand-off PR's own text, the brief of a pass that has no issue (#58): its
@@ -1198,16 +1217,39 @@ export function openNumbersWithLabel(_label: string, _run: typeof execFileSync =
 export type PullRequestText = { number: number; title: string; body: string; comments: string[] };
 
 // Reads PR `number`'s title, description and comments with gh pr view,
-// dropping the comments of authors without write access (see ownerApproved).
+// dropping the comments of authors without write access (see ownerApproved,
+// which shares `canPush` and `failed` with the round's other reads). Throws
+// when gh can't read the PR, so a pass never runs on an empty brief.
 export function pullRequestText(
-  _number: number,
-  _run: typeof execFileSync = execFileSync,
-  _repo: string = repoName(),
-  _canPush: Map<string, boolean> = new Map(),
-  _warn: (message: string) => void = console.error,
-  _failed: Set<string> = new Set(),
+  number: number,
+  run: typeof execFileSync = execFileSync,
+  repo: string = repoName(),
+  canPush: Map<string, boolean> = writeAccessByLogin,
+  warn: (message: string) => void = console.error,
+  failed: Set<string> = new Set(),
 ): PullRequestText {
-  throw new Error("Not implemented");
+  const viewed = JSON.parse(
+    ghWithStderr(run, [
+      "pr", "view", String(number), "--repo", repo,
+      "--json", "number,title,body,comments",
+      "--jq", "{number, title, body, comments: [.comments[] | {author: .author.login, body}]}",
+    ]),
+  ) as Omit<GhIssue, "labels" | "comments"> & { comments: { author: string | { login: string }; body: string }[] };
+  // gh's raw --json shape nests the login, the --jq one above flattens it;
+  // read either, so a change to the jq never lets an author through unchecked.
+  const comments = viewed.comments.map((comment) => ({
+    author: typeof comment.author === "string" ? comment.author : comment.author.login,
+    body: comment.body,
+  }));
+  const approved = ownerApproved(
+    { number: viewed.number, title: viewed.title, body: viewed.body, labels: [], comments },
+    repo,
+    run,
+    canPush,
+    warn,
+    failed,
+  );
+  return { number: approved.number, title: approved.title, body: approved.body, comments: approved.comments };
 }
 
 // One "labeled" or "unlabeled" event from an issue's or PR's REST timeline.
@@ -1285,36 +1327,40 @@ function isIssueEvent(value: unknown): value is IssueEvent {
 // issue.
 export type ContentEdit = { editor: string | null; editedAt: string };
 
-// Every edit to the issue `number`'s body, every page (GraphQL
-// issue.userContentEdits, --paginate with $endCursor), in GitHub's order:
+// Every edit to the issue `number`'s body, or with `kind` "pullRequest" the
+// PR's (#58: repository.issue answers null for a PR), every page (GraphQL
+// userContentEdits, --paginate with $endCursor), in GitHub's order:
 // lib/queue.mts#approval compares each edit's time, not its position. Throws
-// when the answer names no such issue, or any edit doesn't fit ContentEdit.
+// when the answer names no such issue or PR, or any edit doesn't fit
+// ContentEdit.
 export function bodyEdits(
   number: number,
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
-  _kind: "issue" | "pullRequest" = "issue",
+  kind: "issue" | "pullRequest" = "issue",
 ): ContentEdit[] {
   const [owner, name] = repo.split("/") as [string, string];
+  const what = kind === "issue" ? "issue" : "PR";
   return jsonLines(
     ghWithStderr(run, [
-      "api", "graphql", "--paginate", "-f", `query=${BODY_EDITS_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`,
+      "api", "graphql", "--paginate", "-f", `query=${bodyEditsQuery(kind)}`, "-f", `owner=${owner}`, "-f", `name=${name}`,
       "-F", `number=${number}`,
       // A missing issue prints null, which the check below throws on, rather
       // than nothing, which would read as an issue nobody has edited.
       "--jq",
-      ".data.repository.issue | if . == null then null | @json" +
+      `.data.repository.${kind} | if . == null then null | @json` +
         " else .userContentEdits.nodes[] | {editor: .editor.login, editedAt} | @json end",
     ]),
   ).map((edit) => {
-    if (!isContentEdit(edit)) throw new Error(`GitHub's answer names no issue ${number}'s body edits: ${JSON.stringify(edit)}`);
+    if (!isContentEdit(edit)) throw new Error(`GitHub's answer names no ${what} ${number}'s body edits: ${JSON.stringify(edit)}`);
     return edit;
   });
 }
 
-const BODY_EDITS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+function bodyEditsQuery(kind: "issue" | "pullRequest"): string {
+  return `query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
-    issue(number: $number) {
+    ${kind}(number: $number) {
       userContentEdits(first: 100, after: $endCursor) {
         nodes { editedAt editor { login } }
         pageInfo { hasNextPage endCursor }
@@ -1322,6 +1368,7 @@ const BODY_EDITS_QUERY = `query($owner: String!, $name: String!, $number: Int!, 
     }
   }
 }`;
+}
 
 function isContentEdit(value: unknown): value is ContentEdit {
   const edit = value as Partial<Record<keyof ContentEdit, unknown>> | null;

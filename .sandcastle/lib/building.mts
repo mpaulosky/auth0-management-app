@@ -6,11 +6,11 @@
 
 import { BUILDING_LABEL, BUILDING_LABEL_MAX_AGE_MS } from "./config.mts";
 import {
-  addIssueLabel,
-  issueLabels,
-  issuesWithLabel,
+  addLabelOn,
+  labelsOn,
   labelTimeline,
-  removeIssueLabel,
+  openNumbersWithLabel,
+  removeLabelFrom,
   timestamp,
   type TimelineLabelEvent,
 } from "./github.mts";
@@ -32,19 +32,22 @@ export function labelIsStale(
   return now - Math.max(...labelled) > maxAgeMs;
 }
 
-// What clearStaleBuildingLabels needs from GitHub; tests pass a stub.
+// What clearStaleBuildingLabels needs from GitHub; tests pass a stub. An
+// issue number here can be a PR's too: a follow-up pass on a hand-off PR
+// claims the PR itself (#58), and issues and PRs share one numbering.
 export type BuildingGitHub = {
-  // Numbers of the open issues currently carrying `label`.
+  // Numbers of the open issues and PRs currently carrying `label`.
   issuesWithLabel(label: string): number[];
   // The issue's own "labeled"/"unlabeled" timeline events.
   labelTimeline(issueNumber: number): TimelineLabelEvent[];
   removeLabel(issueNumber: number, label: string): void;
 };
 
+// The REST helpers, since gh issue list leaves PRs out (#58).
 export const liveBuildingGitHub: BuildingGitHub = {
-  issuesWithLabel: (label) => issuesWithLabel(label),
+  issuesWithLabel: (label) => openNumbersWithLabel(label),
   labelTimeline: (issueNumber) => labelTimeline(issueNumber),
-  removeLabel: (issueNumber, label) => removeIssueLabel(issueNumber, label),
+  removeLabel: (issueNumber, label) => removeLabelFrom(issueNumber, label),
 };
 
 // Clears `label` (sandcastle:building) from any issue whose most recent
@@ -68,22 +71,23 @@ export function clearStaleBuildingLabels(
   return cleared;
 }
 
-// What claiming and releasing sandcastle:building needs from GitHub; tests
-// pass a stub.
+// What claiming and releasing sandcastle:building needs from GitHub, on an
+// issue or a hand-off PR (#58); tests pass a stub.
 export type BuildingLabels = {
   issueLabels(issueNumber: number): string[];
   addLabel(issueNumber: number, label: string): void;
   removeLabel(issueNumber: number, label: string): void;
 };
 
+// The REST labels endpoints, since gh issue edit refuses a PR number (#58).
 export const liveBuildingLabels: BuildingLabels = {
-  issueLabels: (issueNumber) => issueLabels(issueNumber),
-  addLabel: (issueNumber, label) => addIssueLabel(issueNumber, label),
-  removeLabel: (issueNumber, label) => removeIssueLabel(issueNumber, label),
+  issueLabels: (issueNumber) => labelsOn(issueNumber),
+  addLabel: (issueNumber, label) => addLabelOn(issueNumber, label),
+  removeLabel: (issueNumber, label) => removeLabelFrom(issueNumber, label),
 };
 
-// The issues this process has marked sandcastle:building and not yet
-// unmarked, each with when this run claimed it (Date.now()). main.mts
+// The issues (or hand-off PRs) this process has marked sandcastle:building
+// and not yet unmarked, each with when this run claimed it (Date.now()). main.mts
 // releases them at the start of every round, so a removal that failed doesn't
 // hold the issue back for the rest of the run, and from its exit listener,
 // because Ctrl-C, SIGTERM and a crash skip buildIssue's finally.
