@@ -9,9 +9,15 @@
 # are on. The warning is JSON: systemMessage shows it to the person, and
 # additionalContext tells the agent. Always exits 0, so it never stops a
 # session: outside a git repository, or without git, it prints nothing. It also
-# stays silent where .git/config can't be written (Sandcastle's sandbox).
+# stays silent where .git/config can't be written (Sandcastle's sandbox), and in
+# Claude Code cloud sessions and GitHub Actions runs, where hooks are meant to be off.
 # Uses only bash builtins and git, so a missing tool can't make it fail.
 set -uo pipefail
+
+# Claude Code cloud sessions (CLAUDE_CODE_REMOTE=true) push claude/... branches,
+# which the branch check rejects once the hooks are on, and CI runs of Claude
+# Code gate in their own job. Turning the hooks on is wrong in both.
+[[ "${CLAUDE_CODE_REMOTE:-}" == true || -n "${GITHUB_ACTIONS:-}" ]] && exit 0
 
 command -v git > /dev/null 2>&1 || exit 0
 [[ "$(git rev-parse --is-inside-work-tree 2> /dev/null)" == true ]] || exit 0

@@ -9,7 +9,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$ROOT/scripts/check-git-hooks.sh"
 BASH_BIN="$(command -v bash)"
 
-command -v jq > /dev/null 2>&1 || { echo "check-git-hooks.test.sh needs jq" >&2; exit 1; }
+# python3 is what the gate already requires (discover_tests.py), so the JSON
+# checks use it rather than adding jq to the gate's prerequisites.
+command -v python3 > /dev/null 2>&1 || { echo "check-git-hooks.test.sh needs python3" >&2; exit 1; }
 
 PASSED=0
 FAILED=0
@@ -31,13 +33,16 @@ fail() {
 }
 
 # run_hook <dir> [PATH]: runs the script from <dir> with git's global and
-# system config out of the way and no inherited repository variables. Sets
-# OUTPUT and STATUS.
+# system config out of the way, no inherited repository variables and no
+# CLAUDE_CODE_REMOTE or GITHUB_ACTIONS (CI sets the latter), plus the
+# assignments in HOOK_ENV. Sets OUTPUT and STATUS.
+HOOK_ENV=(HOOK_TEST=1)
 run_hook() {
   local dir="$1" path="${2:-$PATH}"
   OUTPUT="$(cd "$dir" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX \
+    -u CLAUDE_CODE_REMOTE -u GITHUB_ACTIONS \
     HOME="$WORK" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
-    GIT_CEILING_DIRECTORIES="$WORK" PATH="$path" "$BASH_BIN" "$SCRIPT" 2>&1)"
+    GIT_CEILING_DIRECTORIES="$WORK" PATH="$path" "${HOOK_ENV[@]}" "$BASH_BIN" "$SCRIPT" 2>&1)"
   STATUS=$?
 }
 
@@ -53,6 +58,24 @@ new_repo() {
   echo "$dir"
 }
 
+# has_warning_json <output>: true when the output is JSON with systemMessage
+# and hookSpecificOutput.additionalContext.
+has_warning_json() {
+  python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d.get("systemMessage") and d["hookSpecificOutput"].get("additionalContext") else 1)' "$1" > /dev/null 2>&1
+}
+
+# session_start_commands <settings.json>: the SessionStart hook commands, one per line.
+session_start_commands() {
+  python3 -I -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+for group in d.get("hooks", {}).get("SessionStart", []):
+    for h in group.get("hooks", []):
+        if h.get("type") == "command":
+            print(h.get("command", ""))
+' "$1" 2> /dev/null
+}
+
 # expect_warning <label> <dir>: exit 0 and a warning that says the pre-push
 # gate won't run and names the fix. Claude Code shows systemMessage to the
 # person only when the output parses as JSON.
@@ -60,7 +83,7 @@ expect_warning() {
   run_hook "$2"
   local problems=()
   [[ $STATUS -eq 0 ]] || problems+=("exit $STATUS, want 0")
-  jq -e '.systemMessage and .hookSpecificOutput.additionalContext' <<< "$OUTPUT" > /dev/null 2>&1 \
+  has_warning_json "$OUTPUT" \
     || problems+=("output isn't JSON with systemMessage and hookSpecificOutput.additionalContext")
   [[ "$OUTPUT" == *"pre-push"* ]] || problems+=("output doesn't mention the pre-push gate")
   [[ "$OUTPUT" == *"won't run"* ]] || problems+=("output doesn't say the gate won't run")
@@ -114,6 +137,37 @@ else
 fi
 chmod u+w "$repo/.git/config"
 
+# Linked worktrees are where pushes come from (docs/PROCESS.md). The setting is
+# shared, and git resolves a relative core.hooksPath against the worktree's own
+# top level, while the config to write is the main repository's.
+repo="$(new_repo worktree-main)"
+git -C "$repo" -c user.name=t -c user.email=t@example.com commit --quiet --allow-empty -m init
+mkdir -p "$repo/.github/hooks"
+git -C "$repo" worktree add --quiet -b linked "$WORK/worktree-linked"
+mkdir -p "$WORK/worktree-linked/.github/hooks" "$WORK/worktree-linked/src"
+expect_warning "hooksPath unset warns from a linked worktree" "$WORK/worktree-linked"
+expect_warning "hooksPath unset warns from a linked worktree's subdirectory" "$WORK/worktree-linked/src"
+git -C "$repo" config core.hooksPath .github/hooks
+expect_silent "hooksPath .github/hooks prints nothing from a linked worktree" "$WORK/worktree-linked"
+git -C "$repo" config --unset core.hooksPath
+chmod a-w "$repo/.git/config"
+if [[ -w "$repo/.git/config" ]]; then
+  echo "skip - running as a user who can write a read-only file, so the read-only common config case can't be set up"
+else
+  expect_silent "a read-only common .git/config prints nothing from a linked worktree" "$WORK/worktree-linked"
+fi
+chmod u+w "$repo/.git/config"
+
+# Cloud sessions and CI runs of Claude Code keep the hooks off on purpose.
+repo="$(new_repo remote-session)"
+HOOK_ENV=(CLAUDE_CODE_REMOTE=true)
+expect_silent "a Claude Code cloud session (CLAUDE_CODE_REMOTE=true) prints nothing" "$repo"
+HOOK_ENV=(GITHUB_ACTIONS=true)
+expect_silent "a GitHub Actions run (GITHUB_ACTIONS set) prints nothing" "$repo"
+HOOK_ENV=(CLAUDE_CODE_REMOTE=false)
+expect_warning "CLAUDE_CODE_REMOTE=false still warns" "$repo"
+HOOK_ENV=(HOOK_TEST=1)
+
 # Never fails the session.
 mkdir -p "$WORK/not-a-repo"
 expect_silent "outside a git repository exits 0 without output" "$WORK/not-a-repo"
@@ -123,8 +177,8 @@ expect_silent "git missing exits 0 without output" "$(new_repo no-git)" "$WORK/n
 # --- the places that wire the hook in ---
 
 settings="$ROOT/.claude/settings.json"
-if [[ -f "$settings" ]] && jq -e . "$settings" > /dev/null 2>&1; then
-  commands="$(jq -r '.hooks.SessionStart[]?.hooks[]? | select(.type == "command") | .command' "$settings")"
+if [[ -f "$settings" ]] && python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$settings" > /dev/null 2>&1; then
+  commands="$(session_start_commands "$settings")"
   if [[ "$commands" == *"scripts/check-git-hooks.sh"* ]]; then
     pass ".claude/settings.json registers a SessionStart hook that runs scripts/check-git-hooks.sh"
   else
