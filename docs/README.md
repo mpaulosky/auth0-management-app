@@ -70,6 +70,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.17](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.17) | 2026-10-20 | ci(sandcastle): Add switched-off triggers for follow-up runs | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-60-ci-sandcastle-add-switched-off-triggers-for-follow-up-runs.md) |
 | [v0.0.16](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.16) | 2026-10-20 | feat(sandcastle): Label every Sandcastle PR that never had review:claude | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-55-feat-sandcastle-label-every-sandcastle-pr-that-never-had-review-claude.md) |
 | [v0.0.15](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.15) | 2026-10-19 | chore(scripts): Watch every hand-opened PR until it merges | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-54-chore-scripts-watch-every-hand-opened-pr-until-it-merges.md) |
 | [v0.0.14](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.14) | 2026-10-19 | ci(sandcastle): Start a follow-up pass when Claude Review completes | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-46-ci-sandcastle-start-a-follow-up-pass-when-claude-review-completes.md) |
@@ -79,7 +80,6 @@ Blue, the default, renders no attribute.
 | [v0.0.10](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.10) | 2026-10-19 | docs: Specify User and Role management | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-30-docs-specify-user-and-role-management.md) |
 | [v0.0.9](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.9) | 2026-10-19 | chore(ui): Point the UI at the Auth0 user secrets store | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-25-chore-ui-point-the-ui-at-the-auth0-user-secrets-store.md) |
 | [v0.0.8](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.8) | 2026-10-19 | docs(research): Record Auth0 user search and rate limit findings | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-24-docs-research-record-auth0-user-search-and-rate-limit-findings.md) |
-| [v0.0.7](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.7) | 2026-10-19 | docs(research): Record the Auth0 Management SDK findings | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-19-pr-23-docs-research-record-the-auth0-management-sdk-findings.md) |
 
 <!-- RELEASES_END -->
 
