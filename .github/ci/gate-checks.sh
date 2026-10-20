@@ -40,8 +40,9 @@ else
 fi
 
 # check-git-hooks.sh is Claude Code's SessionStart hook; ci.yml's "Hook tests"
-# job is Owned by the Baseline, so the gate is what runs its test.
-if changed scripts/check-git-hooks.sh scripts/tests/check-git-hooks.test.sh; then
+# job is Owned by the Baseline, so the gate is what runs its test. The test also
+# checks the files that wire the hook in, so a change to one reruns it.
+if changed scripts/check-git-hooks.sh scripts/tests/check-git-hooks.test.sh .claude/settings.json CLAUDE.md .github/ci/gate-checks.sh; then
   echo -e "${CYAN}🪝 Git hooks SessionStart check tests...${RESET}"
   run_clean bash scripts/tests/check-git-hooks.test.sh
 else
