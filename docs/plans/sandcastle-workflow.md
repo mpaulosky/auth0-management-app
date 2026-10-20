@@ -449,10 +449,15 @@ With the variable set, a full run and a follow-up run can be going at once, and 
 that was dropped or a pass that failed. `sandcastle:building` keeps the two off the same PR. A pass claims it on the PR's issue before it touches the branch and reads the PR
 again after the claim, a build claims it on its issue, and the sweep skips a PR whose issue carries it. So neither run updates the branch of, re-asks Copilot on, passes on
 or pushes to a PR the other is working on, and they can't both count a pass. A follow-up run also leaves closed-PR hand-backs (see **Closed PRs**) to full runs.
-Two gaps remain:
+The sweep reads `sandcastle:building` once, before its per-PR reads, and reads the issue's labels again right before an update-branch or a Copilot re-request, so a
+claim made meanwhile stops the write. A follow-up run ends red when the sweep couldn't follow up a PR, including one whose owner check couldn't finish, since it has no next
+round. Three gaps remain:
+
 
 - **The claim's race.** The claim reads the issue's labels, then adds the label. Two runs that do that within one round trip both think they hold it. A pass pushes plain,
   never `--force`, so the second push is rejected and posts nothing; only when neither pushes can both post a reply and a pass marker.
+- **The re-read's window.** A claim made between the sweep's fresh read and its write isn't seen. If the pass pushes first, `update-branch` gets a 422 on
+  `expected_head_sha`, which ends a follow-up run red with nothing actually wrong; a full run sweeps the PR again next round.
 - **A follow-up event can be dropped.** A follow-up run that finds a PR held by the full run skips it and exits. A review that landed after the full run's pass read its
   threads then waits for the full run's next round, the next CI completion or the scheduled run, as it did before follow-up runs.
 

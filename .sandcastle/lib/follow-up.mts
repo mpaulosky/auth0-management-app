@@ -26,6 +26,7 @@ import {
   hasLabel,
   isCopilot,
   issueEvents,
+  issueLabels,
   labelTimeline,
   openPullRequestsForSweep,
   pushAccess,
@@ -266,6 +267,10 @@ export type FollowUpGitHub = {
   // live: lib/queue.mts#loadQueue(), so the sweep sees only this run's
   // scope, approved by the owner (#146).
   inScopeIssues(): { number: number; labels: string[] }[];
+  // The labels the issue carries now, read fresh just before a write to its PR:
+  // the sweep's `inScopeIssues` snapshot is older than the per-PR reads (#53).
+  // live: issueLabels(issueNumber).
+  issueLabels(issueNumber: number): string[];
   labelTimeline(issueNumber: number): TimelineLabelEvent[];
   requestCopilotReview(pullRequestId: string): void;
   updateBranch(number: number, expectedHeadSha: string): void;
@@ -285,6 +290,7 @@ export const liveFollowUpGitHub: FollowUpGitHub = {
   openPullRequests: () => openPullRequestsForSweep(),
   closedPullRequests: (author) => closedPullRequests(author),
   inScopeIssues: () => loadQueue().map((issue) => ({ number: issue.number, labels: issue.labels })),
+  issueLabels: (issueNumber) => issueLabels(issueNumber),
   labelTimeline: (issueNumber) => labelTimeline(issueNumber),
   requestCopilotReview: (pullRequestId) => requestCopilotReview(pullRequestId),
   updateBranch: (number, expectedHeadSha) => updatePullRequestBranch(number, expectedHeadSha),
@@ -355,7 +361,10 @@ export function sweepPullRequests(
       // (#146): put the label back and leave the PR alone this round.
       const origin = labelOriginFixes(pr.labels, github.pullRequestEvents(pr.number), github.isOwner, PR_LABEL_RULES);
       if (origin.unknown.length > 0) {
-        log(`  · PR #${pr.number} isn't swept: couldn't check whether the repository owner removed ${NEEDS_HUMAN}.`);
+        const reason = `couldn't check whether the repository owner removed ${NEEDS_HUMAN}`;
+        log(`  · PR #${pr.number} isn't swept: ${reason}.`);
+        // A follow-up run has no next round to sweep it again, so it ends red.
+        onPrError(pr.number, new Error(reason));
         continue;
       }
       const restore = origin.fixes.find((fix) => fix.action === "restore");
@@ -372,6 +381,18 @@ export function sweepPullRequests(
       const humanThreads = pr.threads.filter((thread) => !thread.resolved && !thread.byBot && github.isOwner(thread.author) !== true).length;
       if (humanThreads > 0) waitingPrs.push({ pr: pr.number, threads: humanThreads });
       const decision = decide(pr, now, github.isOwner);
+      // `building` is a snapshot from before the per-PR reads above, so another
+      // run may have claimed the issue since. Read it again just before a write
+      // that run's pass would race (update-branch moves the head; a Copilot
+      // request is noise on a PR it's passing on). A held PR is left for that
+      // run, as sweepSkipReason leaves it.
+      if (
+        (decision.action === "update-branch" || decision.action === "request-review") &&
+        hasLabel({ labels: github.issueLabels(issueNumberOf(pr.headRefName) ?? -1) }, BUILDING_LABEL)
+      ) {
+        log(`  · PR #${pr.number} isn't swept: its issue became labelled ${BUILDING_LABEL} since the sweep began, so another run is working on it.`);
+        continue;
+      }
       followUp(pr, decision, github, log, outcomes);
       if (decision.action === "needs-pass") {
         needsPass.push(pr.number);

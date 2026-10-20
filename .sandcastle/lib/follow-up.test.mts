@@ -471,6 +471,7 @@ function stubGithub({
   pullRequestEvents = () => [],
   failTimelineFor = [],
   failAddLabelFor = [],
+  labelsNow = {},
 }: {
   prs?: SweepPullRequest[];
   closed?: ClosedPullRequest[];
@@ -482,6 +483,8 @@ function stubGithub({
   // PR numbers whose label timeline read, or label add, throws.
   failTimelineFor?: number[];
   failAddLabelFor?: number[];
+  // Labels an issue carries when the sweep re-reads them, where they differ from `issues`.
+  labelsNow?: Record<number, string[]>;
 } = {}) {
   const requestedReviews: string[] = [];
   const updatedBranches: { number: number; expectedHeadSha: string }[] = [];
@@ -496,6 +499,7 @@ function stubGithub({
       return closed;
     },
     inScopeIssues: () => issues,
+    issueLabels: (issueNumber) => labelsNow[issueNumber] ?? issues.find((issue) => issue.number === issueNumber)?.labels ?? [],
     labelTimeline: (issueNumber) => {
       if (failTimelineFor.includes(issueNumber)) throw new Error("gh api failed: HTTP 502");
       return timelines[issueNumber] ?? [];
@@ -665,6 +669,7 @@ describe("sweepPullRequests", () => {
       ],
       closedPullRequests: () => [],
       inScopeIssues: () => [{ number: 42, labels: [] }],
+      issueLabels: () => [],
       labelTimeline: () => [],
       requestCopilotReview: (id) => {
         requestedReviews.push(id);
@@ -740,6 +745,7 @@ describe("sweepPullRequests", () => {
         { number: 42, labels: [] },
         { number: 43, labels: [] },
       ],
+      issueLabels: () => [],
       labelTimeline: () => [],
       requestCopilotReview: () => {},
       updateBranch: (number, expectedHeadSha) => {
@@ -905,6 +911,7 @@ describe("sweepPullRequests", () => {
       openPullRequests: () => [pr({ mergeStateStatus: "BEHIND" })],
       closedPullRequests: () => [],
       inScopeIssues: () => [{ number: 42, labels: [] }],
+      issueLabels: () => [],
       labelTimeline: () => [],
       requestCopilotReview: () => {},
       updateBranch: () => {
@@ -1585,5 +1592,60 @@ describe("sweepPullRequests' closed-PR hand-back switch", () => {
     run(github, true);
 
     assert.equal(handBacks.length, 1);
+  });
+});
+
+// #53: the sweep reads sandcastle:building once, so a claim made after that
+// snapshot is caught by a fresh read right before a write, and an owner check
+// that couldn't finish is reported to onPrError like any other PR failure.
+describe("sweepPullRequests' re-read before a write", () => {
+  const run = (github: FollowUpGitHub, onPrError: (pr: number, error: unknown) => void = () => {}, lines: string[] = []) =>
+    sweepPullRequests(
+      github,
+      (line) => void lines.push(line),
+      NOW,
+      new OutcomeReport(),
+      new WaitingPrReport(),
+      new UnlabelledPrReport(),
+      new Set<number>(),
+      false,
+      onPrError,
+    );
+
+  it("doesn't update a branch whose issue was claimed after the sweep began", () => {
+    const lines: string[] = [];
+    const { github, updatedBranches } = stubGithub({
+      prs: [pr({ mergeStateStatus: "BEHIND" })],
+      labelsNow: { 42: ["Sandcastle:Building"] },
+    });
+
+    run(github, undefined, lines);
+
+    assert.deepEqual(updatedBranches, []);
+    assert.ok(lines.some((line) => /PR #101 isn't swept: .*sandcastle:building/.test(line)));
+  });
+
+  it("still updates a branch whose issue stays free", () => {
+    const { github, updatedBranches } = stubGithub({ prs: [pr({ mergeStateStatus: "BEHIND" })] });
+
+    run(github);
+
+    assert.equal(updatedBranches.length, 1);
+  });
+
+  it("reports a PR whose owner check couldn't finish to onPrError", () => {
+    const failed: number[] = [];
+    const { github, updatedBranches } = stubGithub({
+      prs: [pr({ mergeStateStatus: "BEHIND" })],
+      isOwner: () => undefined,
+      pullRequestEvents: () => [
+        { event: "unlabeled", actor: "ghost", label: "sandcastle:needs-human", createdAt: "2026-10-10T09:00:00Z" },
+      ],
+    });
+
+    run(github, (number) => void failed.push(number));
+
+    assert.deepEqual(failed, [101]);
+    assert.deepEqual(updatedBranches, []);
   });
 });

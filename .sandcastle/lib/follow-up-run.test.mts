@@ -124,6 +124,7 @@ function githubStub(overrides: Partial<FollowUpGitHub> = {}) {
       return [];
     },
     inScopeIssues: () => [{ number: 42, labels: [] }],
+    issueLabels: () => [],
     labelTimeline: () => [],
     requestCopilotReview: () => {},
     updateBranch: () => {},
