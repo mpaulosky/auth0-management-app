@@ -217,6 +217,23 @@ public class RolesPageTests : BunitContext
 	}
 
 	[Fact]
+	public void Click_PickedTile_ClearsTheFilterAndListsTheFirstPageAgain()
+	{
+		// Arrange
+		IRenderedComponent<RolesPage> cut = RenderPage($"?role={AdminRole.Id}");
+
+		// Act
+		TileOf(cut, "Admin").Click();
+
+		// Assert
+		cut.WaitForAssertion(() =>
+		{
+			cut.FindAll("tbody tr").Should().HaveCount(3);
+			cut.FindAll("button[aria-pressed='true']").Should().BeEmpty();
+		});
+	}
+
+	[Fact]
 	public void Click_Tile_SetsRoleInTheUrlWithoutNavigating()
 	{
 		// Arrange
