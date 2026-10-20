@@ -1,3 +1,4 @@
+@using System.Globalization
 @using Domain.Abstractions
 @using UI.ManagementApi
 @implements IDisposable
@@ -6,16 +7,9 @@
 @inject IJSRuntime JS
 
 @* The data loads here, a child of ManagementApiErrorBoundary: the boundary can't catch what a page throws after an await. *@
-@if (_failure is not null && _overview is null)
+@if (_failure is not null)
 {
-	@if (_failure.ErrorCode == ResultErrorCode.RateLimited)
-	{
-		<Alert Tone="AlertTone.Warning">@_failure.Error</Alert>
-	}
-	else
-	{
-		<Alert Tone="AlertTone.Error">@_failure.Error</Alert>
-	}
+	<Alert Tone="@ToneOf(_failure)">@_failure.Error</Alert>
 	@if (_selectedRoleId is not null)
 	{
 		<a href="/admin/roles" class="@LinkClass">Show all Roles</a>
@@ -47,64 +41,57 @@ else
 		}
 	</ul>
 
-	@if (_failure is not null)
-	{
-		<Alert Tone="@(_failure.ErrorCode == ResultErrorCode.RateLimited ? AlertTone.Warning : AlertTone.Error)" Class="mt-6">@_failure.Error</Alert>
-	}
-	else
-	{
-		<Card Class="mt-6">
-			@if (_overview.SelectedRoleTruncated)
-			{
-				<p class="mb-3 text-sm text-slate-600 dark:text-slate-300">Showing the first 1,000 Users who hold @SelectedRoleName.</p>
-			}
-			<div class="overflow-x-auto">
-				<table class="w-full text-left text-sm">
-					<thead>
-						<tr class="border-b border-accent-200 dark:border-accent-800">
-							<th scope="col" class="px-3 py-2 font-semibold">User</th>
-							@foreach (RoleTile tile in _overview.Tiles)
-							{
-								<th scope="col" data-role="@tile.Role.Id" class="px-3 py-2 text-center font-semibold">@tile.Role.Name</th>
-							}
-						</tr>
-					</thead>
-					<tbody>
-						@foreach (RoleUserRow row in _overview.Rows)
+	<Card Class="mt-6">
+		@if (_overview.SelectedRoleTruncated)
+		{
+			<p class="mb-3 text-sm text-slate-600 dark:text-slate-300">Showing the first 1,000 Users who hold @SelectedRoleName.</p>
+		}
+		<div class="overflow-x-auto">
+			<table class="w-full text-left text-sm">
+				<thead>
+					<tr class="border-b border-accent-200 dark:border-accent-800">
+						<th scope="col" class="px-3 py-2 font-semibold">User</th>
+						@foreach (RoleTile tile in _overview.Tiles)
 						{
-							<tr @key="row.User.Id" class="border-b border-accent-100 last:border-0 dark:border-accent-800/60">
-								<td class="px-3 py-2">
-									<a href="@UserHref(row.User)" class="@LinkClass">@DisplayName(row.User)</a>
-									@if (!string.IsNullOrWhiteSpace(row.User.Email) && row.User.Email != DisplayName(row.User))
+							<th scope="col" data-role="@tile.Role.Id" class="px-3 py-2 text-center font-semibold">@tile.Role.Name</th>
+						}
+					</tr>
+				</thead>
+				<tbody>
+					@foreach (RoleUserRow row in _overview.Rows)
+					{
+						<tr @key="row.User.Id" class="border-b border-accent-100 last:border-0 dark:border-accent-800/60">
+							<td class="px-3 py-2">
+								<a href="@UserHref(row.User)" class="@LinkClass">@DisplayName(row.User)</a>
+								@if (!string.IsNullOrWhiteSpace(row.User.Email) && row.User.Email != DisplayName(row.User))
+								{
+									<span class="block text-xs text-slate-600 dark:text-slate-300">@row.User.Email</span>
+								}
+							</td>
+							@for (int index = 0; index < _overview.Tiles.Count; index++)
+							{
+								<td data-role="@_overview.Tiles[index].Role.Id" class="px-3 py-2 text-center">
+									@switch (row.Holdings[index])
 									{
-										<span class="block text-xs text-slate-600 dark:text-slate-300">@row.User.Email</span>
+										case RoleHolding.Yes:
+											<span class="font-semibold text-accent-700 dark:text-accent-300">✓</span>
+											break;
+										case RoleHolding.Unknown:
+											<span title="Unknown: more than 1,000 Users hold this Role" class="cursor-help text-slate-600 dark:text-slate-300">?</span>
+											break;
 									}
 								</td>
-								@for (int index = 0; index < _overview.Tiles.Count; index++)
-								{
-									<td data-role="@_overview.Tiles[index].Role.Id" class="px-3 py-2 text-center">
-										@switch (row.Holdings[index])
-										{
-											case RoleHolding.Yes:
-												<span class="font-semibold text-accent-700 dark:text-accent-300">✓</span>
-												break;
-											case RoleHolding.Unknown:
-												<span title="Unknown: more than 1,000 Users hold this Role" class="cursor-help text-slate-600 dark:text-slate-300">?</span>
-												break;
-										}
-									</td>
-								}
-							</tr>
-						}
-					</tbody>
-				</table>
-			</div>
-			@if (_overview.Rows.Count == 0)
-			{
-				<p class="px-3 py-4 text-sm text-slate-600 dark:text-slate-300">No Users to show.</p>
-			}
-		</Card>
-	}
+							}
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+		@if (_overview.Rows.Count == 0)
+		{
+			<p class="px-3 py-4 text-sm text-slate-600 dark:text-slate-300">No Users to show.</p>
+		}
+	</Card>
 }
 
 @code {
@@ -202,11 +189,26 @@ else
 			? "border-accent-500 bg-accent-100 dark:border-accent-500 dark:bg-accent-800"
 			: "border-accent-200 bg-white/80 hover:bg-accent-100 dark:border-accent-800 dark:bg-accent-900/70 dark:hover:bg-accent-800");
 
-	private static string CountText(RoleTile tile) =>
-		tile.Truncated ? "1,000+" : tile.Members.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+	private static AlertTone ToneOf(Result failure) =>
+		failure.ErrorCode == ResultErrorCode.RateLimited ? AlertTone.Warning : AlertTone.Error;
 
-	private static string DisplayName(UserSummary user) =>
-		!string.IsNullOrWhiteSpace(user.Name) ? user.Name : !string.IsNullOrWhiteSpace(user.Email) ? user.Email : user.Id;
+	private static string CountText(RoleTile tile) =>
+		tile.Truncated ? "1,000+" : tile.Members.ToString("N0", CultureInfo.InvariantCulture);
+
+	private static string DisplayName(UserSummary user)
+	{
+		if (!string.IsNullOrWhiteSpace(user.Name))
+		{
+			return user.Name;
+		}
+
+		if (!string.IsNullOrWhiteSpace(user.Email))
+		{
+			return user.Email;
+		}
+
+		return user.Id;
+	}
 
 	private static string UserHref(UserSummary user) => $"/admin/users?user={Uri.EscapeDataString(user.Id)}";
 

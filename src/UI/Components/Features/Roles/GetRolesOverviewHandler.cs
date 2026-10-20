@@ -47,6 +47,7 @@ public sealed class GetRolesOverviewHandler
 	{
 		ArgumentNullException.ThrowIfNull(query);
 
+		// The seam's successful Results always carry a value, so each Value! below follows a Failure check.
 		Result<IReadOnlyList<RoleSummary>> roles =
 			await _managementApi.ListRolesAsync(cancellationToken).ConfigureAwait(false);
 		if (roles.Failure)
@@ -56,6 +57,7 @@ public sealed class GetRolesOverviewHandler
 
 		// Every Role's members, because each tile counts them and each row marks every Role. The calls run one at a
 		// time: the token bucket would queue them anyway, and the cache answers them on a later load.
+		List<RoleTile> tiles = [];
 		List<RoleMembers> members = [];
 		foreach (RoleSummary role in roles.Value!)
 		{
@@ -66,11 +68,10 @@ public sealed class GetRolesOverviewHandler
 				return FailedAs(roleMembers);
 			}
 
-			members.Add(roleMembers.Value!);
+			RoleMembers fetched = roleMembers.Value!;
+			members.Add(fetched);
+			tiles.Add(new RoleTile(role, fetched.Users.Count, fetched.Truncated));
 		}
-
-		List<RoleTile> tiles = [.. roles.Value!.Select((role, index) =>
-			new RoleTile(role, members[index].Users.Count, members[index].Truncated))];
 
 		IReadOnlyList<UserSummary> users;
 		bool selectedRoleTruncated = false;
@@ -101,20 +102,20 @@ public sealed class GetRolesOverviewHandler
 			roleMembers.Users.Select(user => user.Id).ToHashSet(StringComparer.Ordinal))];
 
 		List<RoleUserRow> rows = [.. users.Select(user => new RoleUserRow(user,
-			[.. members.Select((roleMembers, index) => Holding(user, roleMembers, memberIds[index]))]))];
+			[.. members.Select((roleMembers, index) => Holding(user, memberIds[index], roleMembers.Truncated))]))];
 
 		return Result.Ok(new RolesOverview(tiles, query.RoleId, rows, selectedRoleTruncated));
 	}
 
 	// A User missing from a Truncated Role's members may still hold it, past the 1000 fetched.
-	private static RoleHolding Holding(UserSummary user, RoleMembers roleMembers, HashSet<string> memberIds)
+	private static RoleHolding Holding(UserSummary user, HashSet<string> memberIds, bool truncated)
 	{
 		if (memberIds.Contains(user.Id))
 		{
 			return RoleHolding.Yes;
 		}
 
-		return roleMembers.Truncated ? RoleHolding.Unknown : RoleHolding.No;
+		return truncated ? RoleHolding.Unknown : RoleHolding.No;
 	}
 
 	private static Result<RolesOverview> FailedAs(Result failed)
