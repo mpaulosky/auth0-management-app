@@ -6,6 +6,8 @@ import {
   BUILDING_LABEL_MAX_AGE_MS,
   BudgetError,
   DEFAULT_BUDGET_MINUTES,
+  FOLLOW_UP_LABEL,
+  FOLLOW_UP_LABEL_DEFINITION,
   GATE_FIXER_ATTEMPTS,
   QUEUE_SCOPE_USAGE,
   ROLE_AGENTS,
@@ -14,6 +16,7 @@ import {
   RunModeError,
   SANDCASTLE_LABELS,
   SANDCASTLE_WORKFLOW,
+  SESSION_REPLY_MARKER,
   budgetMinutesFrom,
   queueScopeFrom,
   runModeFrom,
@@ -202,5 +205,31 @@ describe("SANDCASTLE_WORKFLOW", () => {
     const workflow = readFileSync(new URL("../../.github/workflows/sandcastle.yml", import.meta.url), "utf8");
 
     assert.match(workflow, new RegExp(`^name: ${SANDCASTLE_WORKFLOW}$`, "m"));
+  });
+});
+
+// #58: the label an owner adds to hand a hand-opened PR to the follow-up sweep.
+describe("FOLLOW_UP_LABEL", () => {
+  it("is exactly sandcastle:follow-up, the name the workflow contract fixes", () => {
+    assert.equal(FOLLOW_UP_LABEL, "sandcastle:follow-up");
+  });
+
+  it("has a definition named for it, with a hex colour and a description GitHub accepts", () => {
+    assert.equal(FOLLOW_UP_LABEL_DEFINITION.name, FOLLOW_UP_LABEL);
+    assert.match(FOLLOW_UP_LABEL_DEFINITION.color, /^[0-9a-fA-F]{6}$/);
+    assert.ok(FOLLOW_UP_LABEL_DEFINITION.description.length > 0);
+    assert.ok(FOLLOW_UP_LABEL_DEFINITION.description.length <= 100, "GitHub caps a label description at 100 characters");
+  });
+
+  // A human applies it and the sweep never restores it, so it isn't one the
+  // host manages: queueScopeFrom would otherwise refuse it as SANDCASTLE_LABEL.
+  it("stays out of SANDCASTLE_LABELS", () => {
+    assert.ok(!SANDCASTLE_LABELS.some((label) => label.name.toLowerCase() === FOLLOW_UP_LABEL));
+  });
+});
+
+describe("SESSION_REPLY_MARKER", () => {
+  it("is the marker CLAUDE.md has a session end each comment with", () => {
+    assert.equal(SESSION_REPLY_MARKER, "<!-- claude-session -->");
   });
 });

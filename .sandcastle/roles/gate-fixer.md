@@ -10,29 +10,29 @@ The host ran the gate itself, and its exit code is what counts. Here is its outp
 
 </gate-output>
 
-# THE ISSUE
+# THE BRIEF
 
-The branch implements issue {{TASK_ID}}: {{ISSUE_TITLE}}
+{{BRIEF_SOURCE}}: {{ISSUE_TITLE}}
 
-<issue>
+<brief>
 
 {{ISSUE_BODY}}
 
-</issue>
+</brief>
 
-Comments on the issue from the repository owner:
+Comments from the repository owner:
 
-<issue-comments>
+<brief-comments>
 
 {{ISSUE_COMMENTS}}
 
-</issue-comments>
+</brief-comments>
 
-You can't reach GitHub from here, and don't need to: everything the issue says is above.
+You can't reach GitHub from here, and don't need to: everything the PR and its brief say is above.
 
 # WHAT YOU MAY CHANGE
 
-Checkpoint 1 runs after the last developer run. There you may finish the implementation: add or change production code the issue asks for until its tests pass.
+Checkpoint 1 runs after the last developer run. There you may finish the implementation: add or change production code the brief asks for until its tests pass.
 
 Checkpoint 2 runs after the review, just before the branch is published. There you may only repair: fix the build, lint errors and broken tests, and add no behaviour the branch
 doesn't already have.

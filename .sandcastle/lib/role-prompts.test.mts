@@ -199,3 +199,47 @@ describe("every prompt", () => {
     });
   }
 });
+
+// #58: the follow-up role and the gate-fixer also work on a hand-off PR that
+// has no issue, so their prompts name the brief and its source, not "the issue".
+describe("pass role prompts' brief", () => {
+  const args = { BRIEF_SOURCE: "The branch implements issue 3", ISSUE_TITLE: "Add a thing" };
+
+  for (const role of ["follow-up", "gate-fixer"]) {
+    it(`opens the ${role}'s brief with the brief's source and the title`, () => {
+      const prompt = read(`roles/${role}.md`);
+
+      assert.match(prompt, /^# THE BRIEF$/m);
+      assert.doesNotMatch(prompt, /^# THE ISSUE$/m);
+      assert.ok(prompt.includes("{{BRIEF_SOURCE}}: {{ISSUE_TITLE}}"));
+      assert.equal(
+        prompt.split("\n").find((line) => line.includes("{{BRIEF_SOURCE}}"))!.replace("{{BRIEF_SOURCE}}", args.BRIEF_SOURCE).replace("{{ISSUE_TITLE}}", args.ISSUE_TITLE),
+        "The branch implements issue 3: Add a thing",
+      );
+    });
+
+    it(`wraps the ${role}'s brief and its comments in <brief> tags`, () => {
+      const prompt = read(`roles/${role}.md`);
+
+      for (const tag of ["<brief>", "</brief>", "<brief-comments>", "</brief-comments>"]) {
+        assert.ok(prompt.includes(tag), `${role} lacks ${tag}`);
+      }
+      assert.doesNotMatch(prompt, /<issue(-comments)?>/);
+    });
+
+    it(`says the ${role}'s PR and brief, not only an issue, are everything it can see`, () => {
+      const prompt = read(`roles/${role}.md`);
+
+      assert.match(prompt, /everything the PR and its brief say is above|everything the PR and the brief say is above/);
+      assert.match(prompt, /Comments from the repository owner:/);
+    });
+  }
+
+  it("has the follow-up role weigh a bot thread against the brief's acceptance criteria and scope", () => {
+    const prompt = read("roles/follow-up.md");
+
+    assert.match(prompt, /the brief's acceptance criteria/);
+    assert.match(prompt, /out of the brief's scope/);
+    assert.doesNotMatch(prompt, /the issue's (acceptance criteria|scope)/);
+  });
+});

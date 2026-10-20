@@ -13,13 +13,26 @@
 // while it builds or passes on it (#53). A PR that needs more than that
 // (DIRTY, a red check, an unresolved bot or owner thread) is logged here and
 // returned as a PassTarget: the agent pass that fixes it lives in
-// lib/follow-up-pass.mts (#78).
+// lib/follow-up-pass.mts (#78). A hand-opened PR the owner labelled
+// sandcastle:follow-up is swept the same way (#58), with the PR itself, not
+// an issue, as what its claim and brief are about (see sweepSubject).
 // ---------------------------------------------------------------------------
 
-import { discardClosedWork, isIssueBranch, type BranchRefs } from "./branches.mts";
-import { BUILDING_LABEL, COPILOT_REREQUEST_AFTER_MS, PR_MARKER, REVIEW_LABEL } from "./config.mts";
+import { discardClosedWork, isHandOffBranch, isIssueBranch, type BranchRefs } from "./branches.mts";
+import {
+  BUILDING_LABEL,
+  COPILOT_REREQUEST_AFTER_MS,
+  FOLLOW_UP_LABEL,
+  FOLLOW_UP_REPLY_MARKER,
+  PR_MARKER,
+  QUEUE_LABEL,
+  REVIEW_LABEL,
+  SESSION_REPLY_MARKER,
+  type QueueScope,
+} from "./config.mts";
 import {
   addPullRequestLabel,
+  bodyEdits,
   closedPullRequests,
   handBack,
   hasCarriedReviewLabel,
@@ -28,6 +41,7 @@ import {
   isCopilot,
   issueEvents,
   issueLabels,
+  labelsOn,
   labelTimeline,
   openPullRequestsForSweep,
   pushAccess,
@@ -36,11 +50,12 @@ import {
   timestamp,
   updatePullRequestBranch,
   type ClosedPullRequest,
+  type ContentEdit,
   type IssueEvent,
   type PullRequestIdentity,
   type TimelineLabelEvent,
 } from "./github.mts";
-import { labelOriginFixes, loadQueue, ownerCheck, type IsOwner } from "./queue.mts";
+import { activeQueueScope, approval, labelOriginFixes, loadQueue, ownerCheck, type IsOwner } from "./queue.mts";
 import {
   outcomeReport,
   unlabelledPrReport,
@@ -68,7 +83,16 @@ export type SweepPullRequest = PullRequestIdentity & {
   reviews: { author: string | null; commitOid: string | null }[];
   // byBot: whether the thread's first comment's author is a Bot. author: that
   // comment's login, for isOwner (null for a deleted account or no comment).
-  threads: { resolved: boolean; byBot: boolean; author: string | null }[];
+  // recentComments: the thread's newest comments, oldest first, so `decide` can
+  // tell a thread the host already answered from one still waiting on a pass.
+  threads: {
+    resolved: boolean;
+    byBot: boolean;
+    author: string | null;
+    recentComments?: { author: string | null; byBot: boolean; body: string }[];
+    // Set when the thread has comments older than recentComments holds.
+    recentTruncated?: true;
+  }[];
   checks: CheckState[];
   // review_requested timeline events naming Copilot, oldest first.
   copilotRequestedAt: string[];
@@ -116,6 +140,77 @@ export function isSandcastlePullRequest(pr: PullRequestIdentity, host: string): 
   );
 }
 
+// Whether `comment` is the host's own reply on a review thread: by `hostLogin`
+// and either opening with FOLLOW_UP_REPLY_MARKER or carrying
+// SESSION_REPLY_MARKER (the owner's session posts with the host's token). One
+// by anyone else never is, so a stranger can't hide a thread by quoting a marker.
+export function isHostReply(comment: { author: string | null; body: string } | null | undefined, hostLogin: string): boolean {
+  return (
+    comment !== null &&
+    comment !== undefined &&
+    comment.author === hostLogin &&
+    (comment.body.startsWith(FOLLOW_UP_REPLY_MARKER) || comment.body.includes(SESSION_REPLY_MARKER))
+  );
+}
+
+// Whether the host already answered `thread`, the way threadsForRole
+// (lib/follow-up-pass.mts) judges it: the newest comment by the host, the
+// repository owner or, on a bot thread, a bot is the host's own reply. A
+// stranger's comment after it doesn't count, so it can't put an answered thread
+// back on the PR's to-do list.
+function answeredByHost(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string | undefined): boolean {
+  if (hostLogin === undefined) {
+    return false;
+  }
+  return isHostReply(lastJudgingComment(thread, isOwner, hostLogin), hostLogin);
+}
+
+function lastJudgingComment(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string | undefined) {
+  return thread.recentComments?.findLast(
+    (comment) => (thread.byBot && comment.byBot) || comment.author === hostLogin || isOwner(comment.author) === true,
+  );
+}
+
+// Whether `thread` can't be judged from recentComments: it has older comments
+// and the newest ones hold none by a bot, the host or the owner, so strangers'
+// replies may have pushed the host's answer out of the window. threadsForRole
+// reads the whole thread, so counting it here would send the PR to a pass that
+// drops the thread, every round.
+function unjudgeable(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string | undefined): boolean {
+  return thread.recentTruncated === true && lastJudgingComment(thread, isOwner, hostLogin) === undefined;
+}
+
+// How the sweep treats a PR it doesn't skip: a Sandcastle PR of an in-scope
+// issue, whose claim and brief are the issue, or a hand-off PR (#58), whose
+// claim and brief are the PR itself.
+export type SweepSubject = { kind: "issue"; issueNumber: number } | { kind: "pull-request" };
+
+// "issue" when isSandcastlePullRequest(pr, host) and its issue is in
+// `inScope`; otherwise "pull-request" when `handOffs`, the PR carries
+// FOLLOW_UP_LABEL and its branch is one isHandOffBranch accepts; otherwise
+// undefined. A Sandcastle PR keeps its issue even when it carries the label;
+// one whose issue is out of scope becomes a hand-off, since the owner never
+// approved that issue's text for a prompt.
+export function sweepSubject(
+  pr: PullRequestIdentity & { labels: string[] },
+  inScope: ReadonlySet<number>,
+  host: string,
+  handOffs: boolean,
+): SweepSubject | undefined {
+  const issueNumber = issueNumberOf(pr.headRefName);
+  if (isSandcastlePullRequest(pr, host) && issueNumber !== undefined && inScope.has(issueNumber)) {
+    return { kind: "issue", issueNumber };
+  }
+  if (handOffs && hasLabel(pr, FOLLOW_UP_LABEL) && isHandOffBranch(pr.headRefName)) return { kind: "pull-request" };
+  return undefined;
+}
+
+// Whether a run in `scope` follows hand-off PRs: only the default Sandcastle
+// label scope, so a local run on one issue or another label never touches them.
+export function followsHandOffs(scope: QueueScope): boolean {
+  return scope.kind === "label" && scope.label.toLowerCase() === QUEUE_LABEL.toLowerCase();
+}
+
 // The first reason the sweep skips `pr`, checked in this order: a fork, not
 // into main, not an issue branch, the issue isn't open and in scope, the
 // issue is in `building` (labelled sandcastle:building), a draft, labelled
@@ -123,15 +218,32 @@ export function isSandcastlePullRequest(pr: PullRequestIdentity, host: string): 
 // Undefined when none applies, so the sweep decides from it. The building
 // skip keeps a full run and a follow-up run, which can go at the same time
 // (#53), off a PR the other is passing on or a build is opening: neither
-// updates its branch, re-asks Copilot or relabels it.
+// updates its branch, re-asks Copilot or relabels it. With `handOffs`, a
+// hand-off PR (sweepSubject, #58) skips the issue, author and marker checks,
+// and is held back by its own sandcastle:building instead of an issue's,
+// since a pass on it claims the PR itself.
 export function sweepSkipReason(
   pr: SweepPullRequest,
   inScope: ReadonlySet<number>,
   host: string,
   building: ReadonlySet<number> = new Set(),
+  handOffs: boolean = false,
 ): string | undefined {
   if (pr.isCrossRepository !== false) return "it's from a fork";
   if (pr.baseRefName !== "main") return `it's into ${pr.baseRefName}, not main`;
+  if (sweepSubject(pr, inScope, host, handOffs)?.kind === "pull-request") {
+    if (hasLabel(pr, BUILDING_LABEL)) return `it's labelled ${BUILDING_LABEL}, so another run is passing on it`;
+    // A build of the branch's issue shares this branch and its worktree, and
+    // its claim is on the issue, not on this PR.
+    const branchIssue = issueNumberOf(pr.headRefName);
+    if (branchIssue !== undefined && building.has(branchIssue)) {
+      return `#${branchIssue} is labelled ${BUILDING_LABEL}, so another run is building on this branch`;
+    }
+    if (pr.isDraft) return "it's a draft";
+    if (hasLabel(pr, NEEDS_HUMAN)) return `it's labelled ${NEEDS_HUMAN}`;
+    if (pr.truncated) return "it has more reviews, threads or checks than one read holds";
+    return undefined;
+  }
   const issueNumber = issueNumberOf(pr.headRefName);
   if (issueNumber === undefined) return `${pr.headRefName} isn't an issue branch`;
   if (!inScope.has(issueNumber)) return `#${issueNumber} isn't an open Sandcastle issue`;
@@ -164,8 +276,16 @@ export type SweepDecision =
 // settled PR that's only behind main, or leave a clean or merge-blocked one
 // alone. `isOwner` defaults to never-owner so a caller that doesn't pass it
 // (most tests) sees every non-bot thread as a human's, as before this
-// parameter existed.
-export function decide(pr: SweepPullRequest, now: number, isOwner: IsOwner = () => false): SweepDecision {
+// parameter existed. With `hostLogin`, a bot or owner thread the host already
+// answered (answeredByHost) isn't counted: the pass declined it or replied and
+// left it open for a person, and counting it would hold the PR at needs-pass,
+// which no pass handles, so it would never be updated or re-reviewed.
+export function decide(
+  pr: SweepPullRequest,
+  now: number,
+  isOwner: IsOwner = () => false,
+  hostLogin?: string,
+): SweepDecision {
   // GitHub runs no pull_request workflows on a PR it can't merge, so a head
   // pushed while it conflicts gets no checks: waiting on them would hide the
   // conflict for good.
@@ -181,15 +301,20 @@ export function decide(pr: SweepPullRequest, now: number, isOwner: IsOwner = () 
   // re-request (Copilot's review budget, ADR 0004), and every update-branch
   // makes a head Copilot hasn't seen, so waiting would hide them for good.
   const reasons = pr.checks.filter((check) => !check.green).map((check) => `check ${check.name} is red`);
-  const botThreads = pr.threads.filter((thread) => !thread.resolved && thread.byBot).length;
+  const open = pr.threads.filter((thread) => !thread.resolved && (thread.byBot || isOwner(thread.author) === true));
+  const unreadable = open.filter((thread) => unjudgeable(thread, isOwner, hostLogin)).length;
+  const botThreads = open.filter((thread) => thread.byBot && !unjudgeable(thread, isOwner, hostLogin) && !answeredByHost(thread, isOwner, hostLogin)).length;
   if (botThreads > 0) reasons.push(`${botThreads} unresolved bot thread(s)`);
   // A thread the repository owner opened is the follow-up role's to answer
   // (threadsForRole), not left waiting on a person forever: without this, a
   // settled PR whose only open thread is the owner's never needs a pass, so
   // nothing ever answers it (#81's follow-up review).
-  const ownerThreads = pr.threads.filter((thread) => !thread.resolved && !thread.byBot && isOwner(thread.author) === true).length;
+  const ownerThreads = open.filter(
+    (thread) => !thread.byBot && !unjudgeable(thread, isOwner, hostLogin) && !answeredByHost(thread, isOwner, hostLogin),
+  ).length;
   if (ownerThreads > 0) reasons.push(`${ownerThreads} unresolved owner thread(s)`);
   if (reasons.length > 0) return { action: "needs-pass", reasons };
+  if (unreadable > 0) return { action: "wait", reason: `${unreadable} thread(s) have more comments than one read holds` };
 
   // A completed check with no time can't say when CI finished, so it leaves
   // ciDoneAt NaN and the PR is never re-requested on a guess.
@@ -284,6 +409,12 @@ export type FollowUpGitHub = {
   pullRequestEvents(number: number): IssueEvent[];
   // Puts back a PR's hand-back label someone else removed. live: gh pr edit.
   addPullRequestLabel(number: number, label: string): void;
+  // Whether this run follows hand-off PRs (#58). live: followsHandOffs(activeQueueScope()).
+  followsHandOffs(): boolean;
+  // The labels a PR carries now, read fresh just before a write to it. live: labelsOn(number).
+  pullRequestLabels(number: number): string[];
+  // The edits to a PR's body, for the hand-off approval. live: bodyEdits(number, ..., "pullRequest").
+  pullRequestBodyEdits(number: number): ContentEdit[];
 };
 
 export const liveFollowUpGitHub: FollowUpGitHub = {
@@ -299,6 +430,9 @@ export const liveFollowUpGitHub: FollowUpGitHub = {
   isOwner: ownerCheck(() => signedInHostLogin(), (login) => pushAccess(login)),
   pullRequestEvents: (number) => issueEvents(number),
   addPullRequestLabel: (number, label) => addPullRequestLabel(number, label),
+  followsHandOffs: () => followsHandOffs(activeQueueScope()),
+  pullRequestLabels: (number) => labelsOn(number),
+  pullRequestBodyEdits: (number) => bodyEdits(number, undefined, undefined, "pullRequest"),
 };
 
 // What the sweep found that needs an agent: the numbers of the PRs it logged
@@ -328,9 +462,13 @@ const carriedReviewLabel = new Set<number>();
 // too. A follow-up-only run passes false (#53): it touches only open PRs, so it
 // and a full run can't both hand back one issue. Every swept PR
 // (sweepSkipReason applies isSandcastlePullRequest's tests) that has never
-// carried REVIEW_LABEL gets it first (labelForReview). `onPrError` hears about
-// each PR whose follow-up threw, after the warning is logged, so a follow-up-only
-// run, which has no next round to sweep it again, can end red (#53).
+// carried REVIEW_LABEL gets it first (labelForReview). A hand-off PR
+// (sweepSubject) is swept only when approval says the owner's
+// sandcastle:follow-up is undisturbed, read from the same events as the
+// needs-human origin check (#58). `onPrError` hears about each PR whose
+// follow-up threw, or whose label origin couldn't be checked, after the
+// warning is logged, so a follow-up-only run, which has no next round to
+// sweep it again, can end red (#53).
 export function sweepPullRequests(
   github: FollowUpGitHub = liveFollowUpGitHub,
   log: (line: string) => void = console.log,
@@ -346,6 +484,7 @@ export function sweepPullRequests(
   const issues = github.inScopeIssues();
   const inScope = new Set(issues.map((issue) => issue.number));
   const building = new Set(issues.filter((issue) => hasLabel(issue, BUILDING_LABEL)).map((issue) => issue.number));
+  const handOffs = github.followsHandOffs();
   const openPrs = github.openPullRequests();
   const needsPass: number[] = [];
   const passes: PassTarget[] = [];
@@ -353,14 +492,29 @@ export function sweepPullRequests(
 
   for (const pr of openPrs) {
     try {
-      const skip = sweepSkipReason(pr, inScope, host, building);
+      const skip = sweepSkipReason(pr, inScope, host, building, handOffs);
       if (skip !== undefined) {
         log(`  · PR #${pr.number} isn't swept: ${skip}.`);
         continue;
       }
+      const subject = sweepSubject(pr, inScope, host, handOffs);
+      if (subject === undefined) throw new Error(`PR #${pr.number} passed the sweep's checks with nothing to follow it up as`);
+      const events = github.pullRequestEvents(pr.number);
+      // Only the owner's own label, on a PR nobody else has renamed or edited
+      // since, hands a PR to the sweep (#58), as the Sandcastle label does an
+      // issue. A stranger's is logged and written to nowhere.
+      if (subject.kind === "pull-request") {
+        const approved = approval(FOLLOW_UP_LABEL, events, github.pullRequestBodyEdits(pr.number), github.isOwner);
+        if (!approved.approved) {
+          log(`  · PR #${pr.number} isn't swept: ${approved.reason}.`);
+          // A follow-up run has no next round to sweep it again, so it ends red.
+          if (approved.unknown === true) onPrError(pr.number, new Error(approved.reason));
+          continue;
+        }
+      }
       // A stranger's removal of the PR's hand-back label isn't a re-queue
       // (#146): put the label back and leave the PR alone this round.
-      const origin = labelOriginFixes(pr.labels, github.pullRequestEvents(pr.number), github.isOwner, PR_LABEL_RULES);
+      const origin = labelOriginFixes(pr.labels, events, github.isOwner, PR_LABEL_RULES);
       if (origin.unknown.length > 0) {
         const reason = `couldn't check whether the repository owner removed ${NEEDS_HUMAN}`;
         log(`  · PR #${pr.number} isn't swept: ${reason}.`);
@@ -381,23 +535,32 @@ export function sweepPullRequests(
       // the run report's "waiting on a person" section describe it.
       const humanThreads = pr.threads.filter((thread) => !thread.resolved && !thread.byBot && github.isOwner(thread.author) !== true).length;
       if (humanThreads > 0) waitingPrs.push({ pr: pr.number, threads: humanThreads });
-      const decision = decide(pr, now, github.isOwner);
+      const decision = decide(pr, now, github.isOwner, host);
       // `building` is a snapshot from before the per-PR reads above, so another
       // run may have claimed the issue since. Read it again just before a write
       // that run's pass would race (update-branch moves the head; a Copilot
       // request is noise on a PR it's passing on). A held PR is left for that
-      // run, as sweepSkipReason leaves it.
-      if (
-        (decision.action === "update-branch" || decision.action === "request-review") &&
-        hasLabel({ labels: github.issueLabels(issueNumberOf(pr.headRefName) ?? -1) }, BUILDING_LABEL)
-      ) {
-        log(`  · PR #${pr.number} isn't swept: its issue became labelled ${BUILDING_LABEL} since the sweep began, so another run is working on it.`);
-        continue;
+      // run, as sweepSkipReason leaves it. A hand-off PR's claim is on the PR.
+      if (decision.action === "update-branch" || decision.action === "request-review") {
+        // A hand-off PR on an issue's branch is claimed by a build of that
+        // issue too, so both are read.
+        // The branch's number may be a PR's (fix/65-...), which gh issue view
+        // refuses, so both are read through the REST labels endpoint.
+        const branchIssue = issueNumberOf(pr.headRefName);
+        const claimLabels =
+          subject.kind === "issue"
+            ? github.issueLabels(subject.issueNumber)
+            : [...github.pullRequestLabels(pr.number), ...(branchIssue === undefined ? [] : github.pullRequestLabels(branchIssue))];
+        if (hasLabel({ labels: claimLabels }, BUILDING_LABEL)) {
+          const claimed = subject.kind === "issue" ? "its issue" : "it or its branch's issue";
+          log(`  · PR #${pr.number} isn't swept: ${claimed} became labelled ${BUILDING_LABEL} since the sweep began, so another run is working on it.`);
+          continue;
+        }
       }
       followUp(pr, decision, github, log, outcomes);
       if (decision.action === "needs-pass") {
         needsPass.push(pr.number);
-        passes.push(passTarget(pr, decision.reasons));
+        passes.push(passTarget(pr, decision.reasons, subject));
       }
     } catch (error) {
       log(`  ⚠ Couldn't follow up PR #${pr.number}, so it's swept again next round: ${error}`);
@@ -485,7 +648,8 @@ export type PassTarget = {
   id: string;
   headRefName: string;
   headRefOid: string;
-  issueNumber: number;
+  // Undefined for a hand-off PR, whose claim and brief are the PR itself (#58).
+  issueNumber: number | undefined;
   reasons: string[];
   // GitHub said the PR conflicts with main (DIRTY), so a pass merges main
   // in. A PR that's only behind isn't merged by a pass: the sweep updates it
@@ -493,17 +657,15 @@ export type PassTarget = {
   conflicted: boolean;
 };
 
-// What lib/follow-up-pass.mts#runPass reads of a needs-pass PR. Only an
-// issue branch gets this far (sweepSkipReason), so the issue number is there.
-function passTarget(pr: SweepPullRequest, reasons: string[]): PassTarget {
-  const issueNumber = issueNumberOf(pr.headRefName);
-  if (issueNumber === undefined) throw new Error(`PR #${pr.number}'s branch ${pr.headRefName} names no issue`);
+// What lib/follow-up-pass.mts#runPass reads of a needs-pass PR: the issue
+// number of a Sandcastle PR's subject, and none for a hand-off PR's (#58).
+function passTarget(pr: SweepPullRequest, reasons: string[], subject: SweepSubject): PassTarget {
   return {
     number: pr.number,
     id: pr.id,
     headRefName: pr.headRefName,
     headRefOid: pr.headRefOid,
-    issueNumber,
+    issueNumber: subject.kind === "issue" ? subject.issueNumber : undefined,
     reasons,
     conflicted: pr.mergeStateStatus === "DIRTY",
   };

@@ -157,6 +157,9 @@ Please provide as much detail as possible, including steps to reproduce, expecte
 1. Create Unit, Integration tests for any code that require them. We use xUnit v3, FluentAssertions, NSubstitute, bUnit, and Playwright to test our code and components.
 1. When you are done, create a Pull Request from your branch to `main`.
 1. Submit the Pull Request.
+1. To hand a PR you opened to Sandcastle when you stop watching it, the repository owner adds the `sandcastle:follow-up` label.
+   Sandcastle then answers its review threads, fixes red checks and catches the branch up with `main`; push nothing more to the branch while the label is on.
+   Remove the label to take the PR back.
 
 **Note:** Pull requests without unit tests will be delayed until tests are added. All new features and bug fixes must
 include appropriate tests.
