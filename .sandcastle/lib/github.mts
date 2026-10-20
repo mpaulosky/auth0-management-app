@@ -6,7 +6,7 @@
 
 import { execFileSync } from "node:child_process";
 import { endOf } from "./checkpoint.mts";
-import { COPILOT_REVIEWER, QUEUE_LABEL, REVIEW_LABEL, SANDCASTLE_LABELS, type QueueScope, type SandcastleLabel } from "./config.mts";
+import { COPILOT_REVIEWER, QUEUE_LABEL, REVIEW_LABEL, REVIEW_LABEL_DEFINITION, SANDCASTLE_LABELS, type QueueScope, type SandcastleLabel } from "./config.mts";
 import type { CheckState, SweepPullRequest } from "./follow-up.mts";
 import { handBackReport, targetUrl, unlabelledPrReport, type HandBackReport, type UnlabelledPrReport } from "./report.mts";
 import { sh } from "./shell.mts";
@@ -248,11 +248,12 @@ function ghWithStderr(run: typeof execFileSync, args: string[], input?: string, 
 // get round that cap. A reused PR can still be one this never labelled: a
 // create GitHub carried out but answered with an error, retried by
 // lib/build.mts#publish. A run that stops between the create and the label
-// isn't covered: no later run calls this for that branch, since the gate holds
-// back an issue with an open PR, so its PR stays unlabelled and unreported.
-// Labelling comes after the create, and a failure only warns and goes in the
-// run report, so a missing label never costs a finished build its PR and the
-// owner still sees it.
+// isn't covered here: no later run calls this for that branch, since the gate
+// holds back an issue with an open PR, so the follow-up sweep labels that PR
+// instead (lib/follow-up.mts#sweepPullRequests, #51). Labelling comes after
+// the create, and a failure only warns and goes in the run report, so a
+// missing label never costs a finished build its PR and the owner still sees
+// it.
 export function openPullRequest(
   branch: string,
   title: string,
@@ -272,9 +273,7 @@ export function openPullRequest(
     const { number, url } = existing;
     const carriesLabel = (existing.labels ?? []).some(({ name }) => isReviewLabel(name));
     if (!carriesLabel) {
-      addReviewLabel(number, url, run, repo, warn, report, () =>
-        labelTimeline(number, run, repo).some((event) => event.event === "labeled" && isReviewLabel(event.label)),
-      );
+      addReviewLabel(number, url, run, repo, warn, report, () => hasCarriedReviewLabel(labelTimeline(number, run, repo)));
     }
     return url;
   }
@@ -285,6 +284,14 @@ export function openPullRequest(
   ).trim();
   addReviewLabel(Number(url.slice(url.lastIndexOf("/") + 1)), url, run, repo, warn, report, () => false);
   return url;
+}
+
+// Whether `timeline` has a "labeled" event for REVIEW_LABEL: the PR carried it
+// at some point, even if PR Auto-Merge or a person has since removed it. Both
+// openPullRequest and the follow-up sweep (lib/follow-up.mts) use it, so a PR
+// that has had the label is never labelled again and the review cap holds.
+export function hasCarriedReviewLabel(timeline: readonly TimelineLabelEvent[]): boolean {
+  return timeline.some((event) => event.event === "labeled" && isReviewLabel(event.label));
 }
 
 // GitHub matches label names case-insensitively.
@@ -362,7 +369,7 @@ query($owner: String!, $name: String!, $cursor: String) {
     pullRequests(states: OPEN, baseRefName: "main", first: 50, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        id number isDraft isCrossRepository baseRefName headRefName headRefOid body mergeStateStatus
+        id number url isDraft isCrossRepository baseRefName headRefName headRefOid body mergeStateStatus
         author { login }
         labels(first: 50) { pageInfo { hasNextPage } nodes { name } }
         reviewRequests(first: 20) {
@@ -417,6 +424,7 @@ type CheckContext = {
 type SweepNode = {
   id: string;
   number: number;
+  url: string;
   isDraft: boolean;
   isCrossRepository: boolean;
   baseRefName: string;
@@ -474,6 +482,7 @@ function sweepPullRequest(node: SweepNode): SweepPullRequest {
   return {
     id: node.id,
     number: node.number,
+    url: node.url,
     author: authorLogin(node.author),
     body: node.body ?? "",
     baseRefName: node.baseRefName,
@@ -1053,6 +1062,13 @@ export function ensureLabels(
       if (!String(error).includes("already exists")) throw error;
     }
   }
+}
+
+// Creates every label the host needs at startup: SANDCASTLE_LABELS and
+// REVIEW_LABEL_DEFINITION, through ensureLabels. Without REVIEW_LABEL, every
+// label add in a run fails, and no PR it opens is reviewed (#51).
+export function ensureHostLabels(run: typeof execFileSync = execFileSync, repo: string = repoName()): void {
+  ensureLabels([...SANDCASTLE_LABELS, REVIEW_LABEL_DEFINITION], run, repo);
 }
 
 // Adds `label` to the issue `number`, or every label in it, in one edit so

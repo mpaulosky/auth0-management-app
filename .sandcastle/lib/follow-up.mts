@@ -15,11 +15,12 @@
 // ---------------------------------------------------------------------------
 
 import { discardClosedWork, isIssueBranch, type BranchRefs } from "./branches.mts";
-import { COPILOT_REREQUEST_AFTER_MS, PR_MARKER } from "./config.mts";
+import { COPILOT_REREQUEST_AFTER_MS, PR_MARKER, REVIEW_LABEL } from "./config.mts";
 import {
   addPullRequestLabel,
   closedPullRequests,
   handBack,
+  hasCarriedReviewLabel,
   hasLabel,
   isCopilot,
   issueEvents,
@@ -36,7 +37,15 @@ import {
   type TimelineLabelEvent,
 } from "./github.mts";
 import { labelOriginFixes, loadQueue, ownerCheck, type IsOwner } from "./queue.mts";
-import { outcomeReport, waitingPrReport, type OutcomeReport, type WaitingPrEntry, type WaitingPrReport } from "./report.mts";
+import {
+  outcomeReport,
+  unlabelledPrReport,
+  waitingPrReport,
+  type OutcomeReport,
+  type UnlabelledPrReport,
+  type WaitingPrEntry,
+  type WaitingPrReport,
+} from "./report.mts";
 
 // One check run or status on a PR's head commit, normalised from either
 // GraphQL shape (CheckRun or StatusContext) by lib/github.mts#openPullRequestsForSweep.
@@ -62,6 +71,8 @@ export type SweepPullRequest = PullRequestIdentity & {
   // Set when any nested list (reviews, threads, checks, ...) was truncated by
   // GraphQL's page size, so the sweep can't decide safely from partial data.
   truncated: boolean;
+  // The PR's page, for the run report.
+  url: string;
 };
 
 // Whether a login is Copilot's code-review account (see
@@ -276,6 +287,9 @@ export const liveFollowUpGitHub: FollowUpGitHub = {
 // (see followUpPhase) returns both empty, never treated as work found.
 export type SweepResult = { needsPass: number[]; passes: PassTarget[] };
 
+// The PRs this run's sweeps found have carried REVIEW_LABEL (labelForReview).
+const carriedReviewLabel = new Set<number>();
+
 // Reads the host's login, the in-scope issues and the open PRs once, then
 // for each PR either skips it (sweepSkipReason) or applies `decide`, logging
 // what happened. A PR whose sandcastle:needs-human someone other than the
@@ -285,16 +299,20 @@ export type SweepResult = { needsPass: number[]; passes: PassTarget[] };
 // `decide` with unresolved threads opened by someone other than the
 // repository owner or a bot (the same test lib/follow-up-pass.mts#threadsForRole
 // uses) replaces `waiting`'s list, so the run report shows the latest sweep's
-// view. Once that's done, hands
+// view, and `unlabelled` drops every PR no longer open. Once that's done, hands
 // back any in-scope issue, not labelled sandcastle:needs-human and with no
 // open PR, whose latest Sandcastle PR closed without merging
-// (closedWithoutMerging), each in its own try/catch too.
+// (closedWithoutMerging), each in its own try/catch too. Every swept PR
+// (sweepSkipReason applies isSandcastlePullRequest's tests) that has never
+// carried REVIEW_LABEL gets it first (labelForReview).
 export function sweepPullRequests(
   github: FollowUpGitHub = liveFollowUpGitHub,
   log: (line: string) => void = console.log,
   now: number = Date.now(),
   outcomes: OutcomeReport = outcomeReport,
   waiting: WaitingPrReport = waitingPrReport,
+  unlabelled: Pick<UnlabelledPrReport, "record" | "resolve" | "retain"> = unlabelledPrReport,
+  carried: Set<number> = carriedReviewLabel,
 ): SweepResult {
   const host = github.hostLogin();
   const issues = github.inScopeIssues();
@@ -324,6 +342,7 @@ export function sweepPullRequests(
         log(`  ✋ PR #${pr.number}: ${restore.reason}, so it isn't swept.`);
         continue;
       }
+      labelForReview(pr, github, log, unlabelled, carried);
       // Not a bot's and not confirmed as the repository owner's: an owner
       // thread is the follow-up role's to answer (threadsForRole, and now
       // `decide` below), not left waiting on a person the way this count and
@@ -341,6 +360,7 @@ export function sweepPullRequests(
     }
   }
   waiting.replace(waitingPrs);
+  unlabelled.retain(new Set(openPrs.map((pr) => pr.number)));
 
   // Any same-repo open PR on an issue's branch, the host's or not, means the
   // issue isn't waiting on a closed one.
@@ -363,6 +383,52 @@ export function sweepPullRequests(
     }
   }
   return { needsPass, passes };
+}
+
+// Adds REVIEW_LABEL to a Sandcastle PR that has never carried it, so Claude
+// reviews one whose run stopped between `gh pr create` and the label, or one
+// opened before #45 labelled the PRs it opens (#51). A PR that carried it
+// before is left alone, as lib/github.mts#openPullRequest leaves one, so PR
+// Auto-Merge's review cap holds. A failed timeline read only warns: every PR
+// the cap unlabelled is read each round, so recording it would tell the owner
+// to add the label by hand and bypass the cap. A failed add warns and goes in
+// the run report. Neither throws, so the PR is still followed up, and the next
+// round's sweep tries again; any outcome but a failure resolves the PR's entry.
+// A PR found to have carried the label goes in `carried`, since a labeled
+// event never leaves the timeline, so the cap's PRs are read once a run rather
+// than every round.
+function labelForReview(
+  pr: SweepPullRequest,
+  github: FollowUpGitHub,
+  log: (line: string) => void,
+  unlabelled: Pick<UnlabelledPrReport, "record" | "resolve">,
+  carried: Set<number>,
+): void {
+  if (hasLabel(pr, REVIEW_LABEL) || carried.has(pr.number)) {
+    unlabelled.resolve(pr.number);
+    return;
+  }
+  let everLabelled: boolean;
+  try {
+    everLabelled = hasCarriedReviewLabel(github.labelTimeline(pr.number));
+  } catch (error) {
+    log(`  ⚠ Couldn't check whether PR #${pr.number} ever carried ${REVIEW_LABEL}; the next round's sweep checks again: ${error}`);
+    return;
+  }
+  if (everLabelled) {
+    carried.add(pr.number);
+    unlabelled.resolve(pr.number);
+    return;
+  }
+  try {
+    github.addPullRequestLabel(pr.number, REVIEW_LABEL);
+  } catch (error) {
+    log(`  ⚠ Couldn't add ${REVIEW_LABEL} to PR #${pr.number}, so add it by hand for Claude to review it: ${error}`);
+    unlabelled.record({ pr: pr.number, url: pr.url });
+    return;
+  }
+  unlabelled.resolve(pr.number);
+  log(`  🏷 PR #${pr.number} had never carried ${REVIEW_LABEL}: added it, so Claude reviews it`);
 }
 
 // One PR the sweep marked as needing a follow-up pass, with what
