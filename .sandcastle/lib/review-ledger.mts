@@ -28,8 +28,8 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { plainText, visibleLetters } from "./plain-text.mts";
@@ -243,7 +243,9 @@ const hookGitVariables = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PRE
 // dropped. Replace refs are off, so the review reads and keys commits as they
 // are, not as a replace ref shows them.
 function gitBytes(cwd: string, args: readonly string[]): Buffer {
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
+  // GIT_ATTR_NOSYSTEM: not the machine's system-wide gitattributes file
+  // either, which could mark text files binary for one person's review only.
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_ATTR_NOSYSTEM: "1" };
   for (const name of hookGitVariables) {
     delete env[name];
   }
@@ -314,12 +316,15 @@ export function reviewPatch(cwd: string, base: string, head: string = headCommit
     if (!/^Binary files .* differ$/m.test(section)) continue;
     const [before, after] = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(section)?.slice(1) ?? [];
     const file = /^diff --git (.*)$/m.exec(section)?.[1] ?? "a file";
-    const head = absent(after) ? Buffer.alloc(0) : gitBytes(cwd, ["cat-file", "blob", after as string]).subarray(0, 4);
-    if ([[0xff, 0xfe], [0xfe, 0xff], [0, 0, 0xfe, 0xff]].some((bom) => Buffer.from(bom).equals(head.subarray(0, bom.length)))) {
-      throw new Error(`${file}: this text is UTF-16 or UTF-32, which git shows only as "Binary files differ", so the reviewers couldn't read it. Re-encode it as UTF-8.`);
+    const start = absent(after) ? Buffer.alloc(0) : gitBytes(cwd, ["cat-file", "blob", after as string]).subarray(0, 4);
+    if ([[0xff, 0xfe], [0xfe, 0xff], [0, 0, 0xfe, 0xff]].some((bom) => Buffer.from(bom).equals(start.subarray(0, bom.length)))) {
+      // Rewriting a file main already holds this way would look like binary
+      // turned into text (below), so that file needs a new path.
+      const where = absent(before) ? "" : " at a new path, and delete this one";
+      throw new Error(`${file}: this text is UTF-16 or UTF-32, which git shows only as "Binary files differ", so the reviewers couldn't read it. Re-encode it as UTF-8${where}.`);
     }
     if (binary(before) && !absent(after) && !binary(after)) {
-      throw new Error(`${file}: the branch turns a binary file into text, which git shows only as "Binary files differ", so the reviewers couldn't read the text. Add the text at a new path instead.`);
+      throw new Error(`${file}: the branch turns a binary file (or UTF-16 or UTF-32 text) into text, which git shows only as "Binary files differ", so the reviewers couldn't read the text. Add the text at a new path instead.`);
     }
     if (!binary(before) && !binary(after)) {
       throw new Error(`${file}: a diff attribute marks this text file binary, so the reviewers couldn't read its change. Remove the attribute.`);
@@ -742,7 +747,19 @@ export function spliceReviewNotes(body: string, notes: string): string {
   if (starts.length > 1 || ends.length > 1) throw ask("has more than one Review notes section");
   if (starts.length !== ends.length || (starts[0] ?? 0) > (ends[0] ?? 0)) throw ask("has Review notes markers that don't make one pair");
   const [first, last] = [starts[0] ?? lines.length, ends[0] ?? -1];
-  if (outside((line, index) => (index < first || index > last) && readsReviewNotes(line)).length > 0) throw ask("has a Review notes section without markers");
+  const unmarked = (index: number) => !fenced[index] && (index < first || index > last);
+  if (outside((line, index) => unmarked(index) && readsReviewNotes(line)).length > 0) throw ask("has a Review notes section without markers");
+  // A heading can span lines (setext text, an <h2> broken across two), so each
+  // paragraph is read as one line as well.
+  let paragraph: string[] = [];
+  for (const [index, line] of [...lines, ""].entries()) {
+    if (index < lines.length && line.trim() !== "" && unmarked(index)) {
+      paragraph.push(line);
+      continue;
+    }
+    if (paragraph.length > 1 && readsReviewNotes(paragraph.join(" "))) throw ask("has a Review notes section without markers");
+    paragraph = [];
+  }
   if (lines.slice(first, last + 1).some((line) => isClosingLine(line) || isFooter(line))) throw ask("has its closing line or footer inside the Review notes markers");
   const added = notes === "" ? [] : notes.replace(/\n+$/, "").split("\n");
   let start: number;
@@ -814,6 +831,26 @@ export function renderAdvisories(ledger: Ledger): string {
   });
   const branch = ledger.branch === "" ? "HEAD" : plainText(ledger.branch);
   return [`Advisory findings from the local review of ${branch}, left for a follow-up:`, "", ...lines, "", "<!-- claude-session -->", ""].join("\n");
+}
+
+const lstatOrUndefined = (path: string) => {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined;
+  }
+};
+
+// Whether `a` and `b` are one file, by path, symlink or hard link: `body`
+// removes its output first, which would delete an input it names.
+function sameFile(cwd: string, a: string, b: string): boolean {
+  if (resolve(cwd, a) === resolve(cwd, b)) return true;
+  try {
+    const [first, second] = [statSync(resolve(cwd, a)), statSync(resolve(cwd, b))];
+    return first.dev === second.dev && first.ino === second.ino;
+  } catch {
+    return false;
+  }
 }
 
 const USAGE = `Usage: scripts/review.sh <command>
@@ -898,7 +935,10 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
       }
       case "body": {
         const [input, output] = rest;
-        if (input === undefined || output === undefined || output === "-" || output === input) return fail(USAGE);
+        if (input === undefined || output === undefined || output === "-") return fail(USAGE);
+        if (input !== "-" && sameFile(cwd, input, output)) return fail(`${output} is the input file: give the new description its own file.`);
+        const existing = lstatOrUndefined(resolve(cwd, output));
+        if (existing !== undefined && !existing.isFile() && !existing.isSymbolicLink()) return fail(`${output} exists and isn't a regular file.`);
         // Removed first, so a refusal leaves no file for `gh pr edit
         // --body-file` to publish, neither empty nor an earlier run's.
         rmSync(output, { force: true });

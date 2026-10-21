@@ -337,19 +337,60 @@ describe("diffKey", () => {
     assert.throws(() => diffKey(repo, mergeBase(repo)), /logo\.png.*into text/);
   });
 
-  for (const [encoding, bom] of [
-    ["UTF-16LE", Buffer.from([0xff, 0xfe])],
-    ["UTF-16BE", Buffer.from([0xfe, 0xff])],
+  // "class A { }\n" as code units of 2 or 4 bytes, in either byte order.
+  const units = (width: 2 | 4, littleEndian: boolean) =>
+    Buffer.concat(
+      [..."class A { }\n"].map((character) => {
+        const unit = Buffer.alloc(width);
+        if (width === 2) unit.writeUInt16LE(character.charCodeAt(0));
+        else unit.writeUInt32LE(character.charCodeAt(0));
+        return littleEndian ? unit : Buffer.from(unit).reverse();
+      }),
+    );
+  for (const [encoding, bom, body] of [
+    ["UTF-16LE", Buffer.from([0xff, 0xfe]), units(2, true)],
+    ["UTF-16BE", Buffer.from([0xfe, 0xff]), units(2, false)],
+    ["UTF-32LE", Buffer.from([0xff, 0xfe, 0, 0]), units(4, true)],
+    ["UTF-32BE", Buffer.from([0, 0, 0xfe, 0xff]), units(4, false)],
   ] as const) {
     it(`refuses a ${encoding} text file, which git shows only as binary`, () => {
-      const text = Buffer.from("class A { }\n", "utf16le");
-      writeFileSync(join(repo, "a.cs"), Buffer.concat([bom, encoding === "UTF-16LE" ? text : text.swap16()]));
+      writeFileSync(join(repo, "a.cs"), Buffer.concat([bom, body]));
       run(repo, "add", "a.cs");
       run(repo, "commit", "--quiet", "-m", "a UTF-16 file");
 
       assert.throws(() => diffKey(repo, mergeBase(repo)), /a\.cs.*UTF-8/);
     });
   }
+
+  it("tells a UTF-16 file main already holds to be re-encoded at a new path, since the old blob makes the rewrite look like binary to text", () => {
+    writeFileSync(join(upstream, "a.cs"), Buffer.concat([Buffer.from([0xff, 0xfe]), units(2, true)]));
+    run(upstream, "add", "a.cs");
+    run(upstream, "commit", "--quiet", "-m", "a UTF-16 file");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "reset", "--quiet", "--hard", "origin/main");
+    writeFileSync(join(repo, "a.cs"), Buffer.concat([Buffer.from([0xff, 0xfe]), units(2, true), Buffer.from("x\0", "utf16le")]));
+    run(repo, "commit", "--quiet", "-am", "edit it, still UTF-16");
+
+    assert.throws(() => diffKey(repo, mergeBase(repo)), /a\.cs.*UTF-8 at a new path/);
+  });
+
+  it("reads git's attributes without the system-wide file, which whoever's machine this is may have set", () => {
+    const bin = mkdtempSync(join(tmpdir(), "attr-git-"));
+    const real = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    // Stands in for a system gitattributes that marks every file binary: git
+    // has no way to point at another one, so the stub asks for the variable
+    // that turns the file off.
+    writeFileSync(join(bin, "git"), `#!/bin/sh\n[ "$GIT_ATTR_NOSYSTEM" = 1 ] || { echo "system attributes read" >&2; exit 3; }\nexec '${real}' "$@"\n`);
+    chmodSync(join(bin, "git"), 0o755);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path ?? ""}`;
+    try {
+      assert.doesNotThrow(() => diffKey(repo, mergeBase(repo)));
+    } finally {
+      process.env.PATH = path;
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
 
   it("sees a submodule pointer bump even when git is told to ignore submodules", () => {
     const sub = join(root, "sub");
@@ -1349,6 +1390,15 @@ describe("renderReviewNotes", () => {
     assert.equal(notes.match(/<!--/g)?.length, 2);
   });
 
+  it("can't be turned into a code block by a path that opens a tilde fence", () => {
+    const ledger = record([finding({ path: "~~~x", status: "accepted", test: null, reason: "Fine." })]);
+
+    const notes = renderReviewNotes(ledger);
+
+    assert.match(notes, /^- \\~~~x:3:/m);
+    assert.equal(spliceReviewNotes("## Why\n\nA.\n\nFixes #81\n", notes).includes("~~~x"), true);
+  });
+
   it("keeps a marker in a summary or reason from closing the section early or opening another", () => {
     const ledger = record([
       finding({
@@ -1499,6 +1549,20 @@ describe("spliceReviewNotes", () => {
     assert.equal(spliceReviewNotes("Fixes #81\n", notes), `${section("New.")}\n\nFixes #81\n`);
   });
 
+  it("ignores a marked example in a ~~~ block, which a ``` line inside it doesn't close", () => {
+    const example = `~~~markdown\n\`\`\`\n${section("Example.")}\n~~~`;
+    const body = `## What changed\n\n${example}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## What changed\n\n${example}\n\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("closes a longer fence only with one at least as long", () => {
+    const example = `\`\`\`\`markdown\n\`\`\`\n${section("Example.")}\n\`\`\`\`\n`;
+    const body = `## What changed\n\n${example}\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## What changed\n\n${example}\n${section("New.")}\n\nFixes #81\n`);
+  });
+
   it("ends the result in one newline, however many the body ended in", () => {
     const once = spliceReviewNotes("## Why\n\nA.\n", notes);
 
@@ -1520,6 +1584,9 @@ describe("spliceReviewNotes", () => {
     ["a character reference in a Review notes heading", "## Why\n\n## Re&#118;iew&#32;notes\n\nOld.\n"],
     ["an invisible character in a Review notes heading", "## Why\n\n## Review\u200e\u034f notes\n\nOld.\n"],
     ["an unmarked Review notes heading beside a marked section", `## Review notes\n\nOld.\n\n${section("Old.")}\n`],
+    ["an unmarked Review notes heading after a marked section", `${section("Old.")}\n\n## Review notes\n\nOld.\n`],
+    ["a setext Review notes heading split over two lines", "## Why\n\nReview\nnotes\n---\n\nOld.\n"],
+    ["an HTML Review notes heading split over two lines", "## Why\n\n<h2>Review\nnotes</h2>\n\nOld.\n"],
     ["a closing line inside the marked section", `${section("Old.\n\nFixes #81")}\n`],
     ["the footer inside the marked section", `${section("Old.\n\n🤖 Generated with x")}\n`],
     ["a code block that never closes", `## Why\n\n\`\`\`\n${section("Old.")}\n`],
@@ -1821,6 +1888,39 @@ describe("main", () => {
     assert.equal(readLedger(repo, diffKey(repo, mergeBase(repo)))?.findings[0]?.reason, "two words");
   });
 
+  it("body refuses an output that is its input under another name, and leaves the input as it was", () => {
+    record([]);
+    const input = join(root, "old-body.md");
+    writeFileSync(input, "## Why\n\nA.\n");
+    symlinkSync(input, join(root, "link.md"));
+
+    for (const output of [join(root, "./old-body.md"), join(root, "link.md"), join(root, "sub", "..", "old-body.md")]) {
+      const result = cli(["body", input, output]);
+
+      assert.equal(result.code, 1, output);
+      assert.equal(readFileSync(input, "utf8"), "## Why\n\nA.\n");
+    }
+  });
+
+  it("body names the input when the output has the same name", () => {
+    const result = cli(["body", "in.md", "in.md"]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /is the input file/);
+  });
+
+  it("body refuses an output that exists and isn't a regular file", () => {
+    record([]);
+    const input = join(root, "old-body.md");
+    writeFileSync(input, "## Why\n\nA.\n");
+    mkdirSync(join(root, "out-dir"));
+
+    const result = cli(["body", input, join(root, "out-dir")]);
+
+    assert.equal(result.code, 1);
+    assert.equal(existsSync(join(root, "out-dir")), true);
+  });
+
   it("body writes the PR description from a file with its Review notes section replaced", () => {
     record([finding({ status: "accepted", test: null, reason: "Spec." })]);
     const input = join(root, "old-body.md");
@@ -1878,7 +1978,7 @@ describe("main", () => {
     assert.match(cli(["latest"]).out, /"Kept\."/);
   });
 
-  for (const args of [["bogus"], [], ["record"], ["accept", "R1"], ["body"], ["body", "in.md"], ["body", "in.md", "in.md"], ["body", "in.md", "-"]]) {
+  for (const args of [["bogus"], [], ["record"], ["accept", "R1"], ["body"], ["body", "in.md"], ["body", "in.md", "-"]]) {
     it(`exits 1 with the usage for ${JSON.stringify(args)}`, () => {
       const result = cli(args);
 

@@ -1,5 +1,7 @@
 // Untrusted text (an agent's or a reviewer's words, an issue title) made safe
-// to post on GitHub. Kept apart from lib/intake.mts so a command-line tool,
+// to post on GitHub, and Markdown read as a reader sees it (visibleLetters,
+// which lib/build.mts and lib/review-ledger.mts use to refuse text that reads
+// "Review notes"). Kept apart from lib/intake.mts so a command-line tool,
 // lib/review-ledger.mts, can use it without loading Sandcastle.
 
 // A zero-width space after @, a # or GH- before digits, and the dot of
@@ -32,10 +34,9 @@ export function plainText(text: string): string {
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;"),
   )
-    .replace(/^[-+*#>]/, "\\$&")
+    .replace(/^[-+*#>~]/, "\\$&")
     .replace(/^(\d+)([.)])(?=\s)/, "$1\\$2");
 }
-
 
 // A code point as text, or nothing for one that isn't a character.
 const character = (codePoint: number) => (codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : "");

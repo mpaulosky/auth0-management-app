@@ -1186,6 +1186,10 @@ describe("buildIssue reading the reviewer's PR body", () => {
     ["holding Review notes with a character reference", `${validPrBody}\n\n## Review&#32;notes`],
     ["holding Review notes with an invisible format character", `${validPrBody}\n\n## Review\u200e\u034f notes`],
     ["holding Review notes in a name", `${validPrBody}\n\nRenamed renderReviewNotes.`],
+    // The character-reference rule alone: visibleLetters drops these without
+    // reading the letters they spell.
+    ["holding a named character reference that spells a letter", `${validPrBody}\n\n## Revi&escr;w notes`],
+    ["holding an ordinary character reference", `${validPrBody}\n\nUses &amp; here.`],
   ] as const) {
     it(`falls back to the generic PR body, and logs why, when the file is ${scenario}`, async () => {
       const { logs, publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
