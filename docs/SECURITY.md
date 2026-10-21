@@ -40,10 +40,10 @@ The repository itself is protected as follows:
 - **Workflow hardening.** Actions are pinned to commit SHAs, and `zizmor` and `actionlint` check every workflow change.
 - **Dependabot** proposes dependency updates after a seven-day cooldown, so a compromised release is usually caught
   upstream first.
-- **Reviewed merges.** A pull request merges only after its checks pass, Copilot has reviewed its head, and its review
-  threads are resolved. Once Copilot and Claude together have reviewed three of a PR's commits, the merge stops waiting
-  for a review of the head, so a PR can't chase reviews forever, but every unresolved thread still holds it, Copilot's
-  and Claude's included.
+- **Reviewed merges.** A pull request merges only after its checks pass, a reviewer (Copilot, or Claude Review as its
+  backup) has reviewed its head, and its review threads are resolved. Once the two together have reviewed three of a
+  PR's commits (merges from `main` don't count), the merge stops waiting for a review of the head, so a PR can't chase
+  reviews forever, but every unresolved thread still holds it, Copilot's and Claude's included.
 
 ## Reporting a Vulnerability
 
