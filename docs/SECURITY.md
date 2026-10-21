@@ -17,19 +17,21 @@ The repository itself is protected as follows:
 
 - **Secrets stay out of source control.** `.env` files are git-ignored at any depth. Local secrets belong in user
   secrets or `.env`.
-- **Keep Claude Code out of `.env` files.** The repo ships no Claude Code settings, since permissions are set per user
-  (the repo-ci-baseline Template doesn't ship them either). Add these rules to your own `~/.claude/settings.json`, so
-  Claude Code's file tools can't read or edit a `.env` under the project a session runs in, `.sandcastle/.env`
-  included:
+- **Keep Claude Code out of `.env` files.** The repo's `.claude/settings.json` denies only reading the local review's
+  ledgers (`.git/review/`) and registers the SessionStart hook. It leaves `.env` files to each person's own settings
+  (the repo-ci-baseline Template doesn't ship such rules either). Add these rules to your own `~/.claude/settings.json`,
+  so Claude Code's file tools can't read or edit a `.env` anywhere on your machine, `.sandcastle/.env` included:
 
   ```json
   {
     "permissions": {
-      "deny": ["Read(**/.env)", "Read(**/.env.*)", "Edit(**/.env)", "Edit(**/.env.*)"]
+      "deny": ["Read(//**/.env)", "Read(//**/.env.*)", "Edit(//**/.env)", "Edit(//**/.env.*)"]
     }
   }
   ```
 
+  The `//` roots each rule at the filesystem. A rule without it (`Read(**/.env)`) is relative to the folder the session
+  started in, so a session started in a worktree could still read the main checkout's `.sandcastle/.env`.
   The `.env.*` rules also hide committed `.env.example` files, such as `.sandcastle/.env.example`; edit those by hand.
   The rules don't stop shell commands such as `cat .env`: deny those too, or turn on Claude Code's sandbox, if you
   need that. They cover sessions on your machine only. A Sandcastle sandbox starts with its own Claude Code settings,
