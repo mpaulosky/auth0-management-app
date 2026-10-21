@@ -116,6 +116,9 @@ const findingFields = z.object({
   status: z.enum(["fixed", "dismissed", "accepted", "open"]),
   test: z.string().trim().min(1).nullable(),
   reason: z.string().trim().min(1).nullable(),
+  // The reviewer's suggested fix, kept for the person deciding a Warning and
+  // for the follow-up issue's Advisory findings (renderAdvisories).
+  fix: z.string().trim().min(1).nullable().optional(),
 });
 
 function checkOutcome(finding: z.infer<typeof findingFields>, context: z.RefinementCtx): void {
@@ -127,8 +130,18 @@ function checkOutcome(finding: z.infer<typeof findingFields>, context: z.Refinem
   }
 }
 
-// A finding a review records: triage must grade every one.
-export const findingSchema = findingFields.extend({ severity: z.enum(SEVERITIES) }).strict().superRefine(checkOutcome);
+// A finding a review records: triage must grade every one. A finding whose
+// lens names security is never Advisory: it would pass the check without a
+// person deciding it, and go to the public follow-up issue.
+export const findingSchema = findingFields
+  .extend({ severity: z.enum(SEVERITIES) })
+  .strict()
+  .superRefine(checkOutcome)
+  .superRefine((finding, context) => {
+    if (finding.severity === "advisory" && /security/i.test(finding.lens)) {
+      context.addIssue({ code: "custom", message: `${finding.id}'s lens names security, so it's a security weakness: grade it warning, not advisory` });
+    }
+  });
 
 // A finding as stored. A ledger recorded before `severity` existed has none
 // and still parses, so check, accept, report and latest read it; one recorded
@@ -649,6 +662,22 @@ function fixesPatch(cwd: string, dir: string, since: string, base: string, head:
   return fixes;
 }
 
+// The follow-up issue's list of the open Advisory findings, each with where it
+// is, what goes wrong and the suggested fix, as plain Markdown (plainText: no
+// mention, reference, closing keyword, tag or code span gets through), ending
+// with the session marker. A finding isSecurity marks is left out, whatever
+// its grade: the issue is public. Empty when there's none.
+export function renderAdvisories(ledger: Ledger): string {
+  const open = ledger.findings.filter((finding) => finding.status === "open" && severityOf(finding) === "advisory" && !isSecurity(finding));
+  if (open.length === 0) return "";
+  const lines = open.map((finding) => {
+    const fix = finding.fix == null ? "" : ` Suggested fix: ${plainText(finding.fix)}`;
+    return `- ${finding.id} ${plainText(`${finding.path}:${finding.line}`)}: ${plainText(finding.summary)}${fix}`;
+  });
+  const branch = ledger.branch === "" ? "HEAD" : plainText(ledger.branch);
+  return [`Advisory findings from the local review of ${branch}, left for a follow-up:`, "", ...lines, "", "<!-- claude-session -->", ""].join("\n");
+}
+
 const USAGE = `Usage: scripts/review.sh <command>
   prepare <absolute dir> [<since>]
                          write HEAD's diff to <dir>/diff.patch for the reviewers, and with <since> (the HEAD
@@ -659,6 +688,7 @@ const USAGE = `Usage: scripts/review.sh <command>
   accept <id> <reason>   accept an open finding on HEAD's review
   report                 print HEAD's review report
   notes                  print the "## Review notes" section for the PR description
+  advisory               print the follow-up issue's list of open Advisory findings
   latest                 print the nearest earlier review of this branch's work as JSON ({} when none)
   next                   print the first finding id this run may use`;
 
@@ -714,10 +744,13 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         return 0;
       }
       case "report":
-      case "notes": {
+      case "notes":
+      case "advisory": {
         const ledger = readLedger(cwd, diffKey(cwd, mergeBase(cwd)));
         if (ledger === undefined) return fail("No review is recorded for this diff.");
-        out(command === "report" ? renderReport(ledger) : renderReviewNotes(ledger) || "No accepted findings.");
+        if (command === "report") out(renderReport(ledger));
+        else if (command === "notes") out(renderReviewNotes(ledger) || "No accepted findings.");
+        else out(renderAdvisories(ledger) || "No open Advisory findings.");
         return 0;
       }
       case "latest": {

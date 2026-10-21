@@ -55,3 +55,16 @@ describe("the pre-push-review skill's severities", () => {
     assert.match(skill, /File the open Advisory findings in one follow-up issue per branch/);
   });
 });
+
+// The follow-up issue is public, and anyone can open one with its title.
+describe("the pre-push-review skill's follow-up issue", () => {
+  it("is written by scripts/review.sh advisory, never by hand", () => {
+    assert.match(skill, /The body is the output of\s+`scripts\/review\.sh advisory`/);
+    assert.match(skill, /Never write the body by hand/);
+  });
+
+  it("is looked for only among the person's own issues, by its exact title", () => {
+    assert.match(skill, /--author @me/);
+    assert.match(skill, /select\(\.title == "chore\(review\): Advisory review findings: <branch>"\)/);
+  });
+});

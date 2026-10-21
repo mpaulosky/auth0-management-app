@@ -21,6 +21,7 @@ import {
   readLedger,
   recordReview,
   takenIds,
+  renderAdvisories,
   renderReport,
   renderReviewNotes,
   reviewPatch,
@@ -796,6 +797,18 @@ describe("recordReview", () => {
     assert.throws(() => record([ungraded as Finding]), /severity/);
   });
 
+  for (const lens of ["Security", "Edge/Security", "security"]) {
+    it(`refuses an Advisory finding whose lens names security (${lens}), which would pass the check and be published`, () => {
+      assert.throws(() => record([finding({ lens, severity: "advisory", status: "open", test: null })]), /names security.*warning/);
+    });
+  }
+
+  it("keeps a finding's suggested fix", () => {
+    const ledger = record([finding({ severity: "advisory", status: "open", test: null, fix: "Reword the comment." })]);
+
+    assert.equal(readLedger(repo, ledger.key)?.findings[0]?.fix, "Reword the comment.");
+  });
+
   it("refuses a severity that isn't critical, warning or advisory", () => {
     assert.throws(() => record([finding({ severity: "minor" as Finding["severity"] })]), /severity/);
   });
@@ -1164,6 +1177,48 @@ describe("renderReviewNotes", () => {
   });
 });
 
+describe("renderAdvisories", () => {
+  it("lists each open Advisory finding with where it is, what goes wrong and the suggested fix, ending with the session marker", () => {
+    const ledger = record([
+      finding({ id: "R2", severity: "advisory", status: "open", test: null, summary: "The comment is stale.", fix: "Reword it." }),
+      finding({ id: "R3", severity: "advisory", status: "open", test: null, summary: "A list misses a check.", fix: null }),
+    ]);
+
+    const body = renderAdvisories(ledger);
+
+    assert.match(body, /^- R2 app\.cs:3: The comment is stale\. Suggested fix: Reword it\.$/m);
+    assert.match(body, /^- R3 app\.cs:3: A list misses a check\.$/m);
+    assert.match(body, /<!-- claude-session -->\n$/);
+  });
+
+  it("leaves out every finding that isn't an open Advisory one", () => {
+    const ledger = record([
+      finding({ summary: "A fixed bug." }),
+      finding({ id: "R2", severity: "warning", status: "open", test: null, summary: "A weak permission." }),
+      finding({ id: "R3", severity: "advisory", status: "dismissed", test: null, reason: "Wrong.", summary: "A dismissed one." }),
+      finding({ id: "R4", severity: "advisory", status: "accepted", test: null, reason: "Fine.", summary: "An accepted one." }),
+    ]);
+
+    assert.equal(renderAdvisories(ledger), "");
+  });
+
+  it("leaves out a stored Advisory finding whose lens names security, though record no longer takes one", () => {
+    const ledger: Ledger = { ...record([]), findings: [{ ...finding({ severity: "advisory", status: "open", test: null, summary: "A token leaks." }), lens: "Security" }] };
+
+    assert.equal(renderAdvisories(ledger), "");
+  });
+
+  it("can't mention anyone, link or close an issue, or hide text in a tag", () => {
+    const ledger = record([
+      finding({ severity: "advisory", status: "open", test: null, summary: "Uses <!-- sandcastle:x --> for @someone", fix: "fixes #12 on github.com" }),
+    ]);
+
+    const body = renderAdvisories(ledger);
+
+    assert.doesNotMatch(body.replace(/<!-- claude-session -->\n$/, ""), /<!--|@someone|#12|github\.com/);
+  });
+});
+
 describe("main", () => {
   it("check exits 1 with no review recorded, and 0 once a clean one is", () => {
     assert.equal(cli(["check"]).code, 1);
@@ -1285,6 +1340,15 @@ describe("main", () => {
 
     assert.match(cli(["report"]).out, /\| Id \| Lens \|/);
     assert.match(cli(["notes"]).out, /^## Review notes/);
+  });
+
+  it("advisory prints the follow-up issue's body, or says there's none", () => {
+    record([finding()]);
+    assert.match(cli(["advisory"]).out, /No open Advisory findings/);
+
+    record([finding({ id: "R2", severity: "advisory", status: "open", test: null })]);
+
+    assert.match(cli(["advisory"]).out, /^- R2 app\.cs:3:/m);
   });
 
   it("latest prints the branch's earlier review after a fix commit", () => {
