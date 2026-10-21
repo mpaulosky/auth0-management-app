@@ -29,11 +29,13 @@ describe("the pre-push-review skill's reviewers", () => {
     assert.ok(settings.permissions?.deny?.includes("Read(//**/.git/review/**)"));
   });
 
-  // Sonnet, for what the reviews cost in tokens; the agent's own model and
+  // Opus: this repo's bench (claude-review.yml, mpaulosky/dotfiles#117) found
+  // Sonnet caught none of Copilot's findings, and this review is the heavy
+  // pass GitHub's only backstops (#89's review). The agent's own model and
   // the skill's Agent call say the same.
-  it("run on Sonnet", () => {
-    assert.match(agent, /^model: sonnet$/m);
-    assert.match(skill, /`model: "sonnet"`/);
+  it("run on Opus", () => {
+    assert.match(agent, /^model: opus$/m);
+    assert.match(skill, /`model: "opus"`/);
   });
 
   it("are started as that agent, and never as another type", () => {
