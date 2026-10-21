@@ -100,14 +100,17 @@ if ((${#gh_files[@]} > 0)); then
     }
     # The text of one gh command, up to the next command or gh, with each
     # quoted argument a bare Q, so the words of a flag inside one, as in
-    # --body "use -R x (y)", are not the flag. Quotes are read first, so a
-    # separator inside one is no cut, and never across a backtick, so an
-    # apostrophe in prose pairs with nothing. An empty one is <>, which no
-    # value matches, and a quote left unpaired ends the command there.
+    # --body "use -R x (y)", are not the flag. A backslash escape is read
+    # first, so an escaped quote is no quote; then quotes, so a separator
+    # inside one is no cut. A pair never spans a backtick, so apostrophes in
+    # different code spans, or in a command and later prose, never pair. An
+    # empty one is <>, which no value matches, and a quote left unpaired ends
+    # the command there with <>, so no value ends at the cut.
     function own(text) {
+      gsub(/\\./, "E", text)
       gsub("\"\"|" q q, "<>", text)
       gsub("\"[^\"`]*\"|" q "[^" q "`]*" q, "Q", text)
-      if (match(text, "[\"" q "]")) text = substr(text, 1, RSTART - 1)
+      if (match(text, "[\"" q "]")) text = substr(text, 1, RSTART - 1) "<>"
       if (match(text, /[`;&|()]/)) text = substr(text, 1, RSTART - 1)
       if (match(text, /[^A-Za-z0-9_.-]gh[ \t]/)) text = substr(text, 1, RSTART)
       return text

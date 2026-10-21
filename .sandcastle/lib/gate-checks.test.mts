@@ -252,6 +252,17 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, 'Run `gh pr comment 3 --body "use -R foo`.\n'],
     [skill, "Run `gh pr view 3 --repo '' --json state`.\n"],
     [skill, 'Run `gh pr view 3 -R "" --json state`.\n'],
+    // A quote never pairs across a backtick, so an apostrophe in a command
+    // and one in later prose don't hide the backtick that ends the command.
+    [skill, "Run `gh pr view 3 --body it's` and don't use --repo o/r.\n"],
+    [skill, "Run `gh pr view 3 don't` and `x`, it's --repo o/r.\n"],
+    // An unpaired apostrophe ends the command, and nothing after a cut quote
+    // ends a value, so an escaped quote can't expose a flag.
+    [skill, "Run `gh pr comment 3 --body 'use -R foo`.\n"],
+    [skill, 'Run `gh pr comment 3 --body "a \\" -R x"`.\n'],
+    [skill, "Run `gh issue create --body 'it'\\''s -R x'`.\n"],
+    [skill, 'Run `gh pr comment 3 --body "a \\" -R x \\" b"`.\n'],
+    [skill, 'Run `gh pr view 3 -R o/r"`.\n'],
   ]) {
     it(`fails on a gh command not told its repository: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
@@ -309,6 +320,7 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, "Run `gh run --repo o/r list`.\n"],
     [skill, 'Run `gh pr comment 3 --body "a -R b" --repo o/r`.\n'],
     [skill, "Run `gh pr view 3 --jq '.a[] | .b' --repo o/r`.\n"],
+    [skill, 'Run `gh pr view 3 --jq ".a | select(.b == \\"x (y)\\")" --repo o/r`.\n'],
     [skill, "Run `gh pr view 3 --repo o/r`, but don't run it twice.\n"],
   ]) {
     it(`passes a gh command told its repository, or text that runs none: ${JSON.stringify(content)} in ${file}`, () => {
