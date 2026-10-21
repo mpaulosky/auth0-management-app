@@ -103,6 +103,9 @@ Blue, the default, renders no attribute.
    - The .NET SDK `10.0.401`, as pinned in [global.json](https://github.com/mpaulosky/auth0-management-app/blob/main/global.json) (later 10.0 feature bands are accepted).
    - Node.js and pnpm (`corepack enable`), used by the Tailwind CSS build, the git hooks and the lint tools. The repo refuses `npm install`.
    - [yamllint](https://yamllint.readthedocs.io/), which the pre-push hook runs on changed YAML files.
+   - git 2.38 or later, which the local review's check needs.
+   - [Claude Code](https://claude.com/claude-code), which runs the local review (`/pre-push-review`) the pre-push hook
+     requires before every push.
 
 3. Set up Auth0 as described in [Auth0 setup](#auth0-setup). The app won't start without it.
 
@@ -140,7 +143,8 @@ Blue, the default, renders no attribute.
    In Development, the UI reports its health at `/health` and `/alive`.
    While editing markup, `pnpm --dir src/UI run watch:css` rebuilds the CSS as you save.
 
-6. Optionally enable the git hooks in `.github/hooks` (markdownlint on commit, and `scripts/gate.sh` on push):
+6. Enable the git hooks in `.github/hooks` (markdownlint on commit, and `scripts/gate.sh` on push). They're required
+   before you push anything, since the pre-push gate is where the local review is checked:
 
    ```bash
    git config core.hooksPath .github/hooks
@@ -148,6 +152,9 @@ Blue, the default, renders no attribute.
 
    `scripts/gate.sh` lints the files changed since the branch left `origin/main`, then builds and tests the solution in Release. Run it by hand to
    check a branch before pushing.
+   It also refuses a branch whose diff the local review hasn't passed: run `/pre-push-review` in Claude Code before every
+   push, and `GATE_SKIP_REVIEW=1 scripts/gate.sh` only while iterating. `scripts/review.sh report` shows the review's
+   findings.
 
 ## Auth0 setup
 

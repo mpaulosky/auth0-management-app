@@ -63,6 +63,27 @@ for example a tester exempt from manual criteria who can only finish after commi
 told to add a test for every missing criterion, including the exempt ones. No lint catches these: read the prompts
 together.
 
+## Lenses
+
+Most review findings on this repo's PRs were about behaviour on a path the author didn't test, not style. Each lens below is
+one kind of finding that kept recurring. Look through every lens whose files the change touches. The `pre-push-review` skill
+gives each one to its own reviewer.
+
+| Lens | Applies to | Ask |
+| --- | --- | --- |
+| Edge cases | Any code | What do empty, whitespace-only, Unicode, malformed, oversized and boundary inputs do? What if a value is missing, null or duplicated? |
+| Races and caches | Shared state, caches, async code, Sandcastle runs | What if two requests, circuits or runs interleave? Can a read already in flight put a stale entry back after a write evicts it? Does every write evict what it makes stale (ADR 0009)? |
+| Management API budget | Code that calls `IManagementApi` | How many calls does one page load or action make, on prerender and again once interactive? Per User or per Role in a list? Does it stay inside the token bucket, and what does the Admin see when it doesn't? |
+| Error contract | Handlers, `IManagementApi`, components showing errors | Does each expected failure come back as a failed `Result` with the right stable code (a missing Role isn't `User.NotFound`)? Is anything caught too broadly, swallowed, or logged with a token or secret? |
+| Blazor lifecycle | `.razor`, `.razor.cs` | Does it work prerendered and then interactive? Is UI changed from a timer, callback or background task wrapped in `InvokeAsync(StateHasChanged)`? Is everything it subscribes to disposed? Does every link and navigation reach a page? |
+| Security | Pages, endpoints, auth, workflows | Does every page and endpoint that reads or changes Users or Roles require the Admin policy? Can input reach output, a redirect or a shell unchecked? Can a fork, a bot or a person without write access reach a secret or a write token? |
+| Tests | Any behaviour change | Does every new or changed behaviour have a test that fails without the change? Can each assertion actually fail? Are both paths of a `Result` covered, and every testable acceptance criterion? |
+| Docs match the code | Comments, `README.md`, `CLAUDE.md`, `CONTEXT.md`, `docs/`, prompts | Does every comment and doc the change touches, or that describes what it changed, still say what the code does? Is a list (slices, labels, scopes) still complete? Does an edit leave a doc contradicting itself? Is a claim about Auth0 or GitHub sourced? |
+| Sandcastle host | `.sandcastle/` | Does it fail closed? Does a failure end the run red rather than green or crashing? Is every label it claims released on every path? Does no agent gain a way to reach GitHub? |
+| Shell | `*.sh`, hooks | Does it hold under `set -euo pipefail`, an empty variable, a path with spaces, GNU and BSD tools, a missing tool, and the `GIT_*` variables a hook sets? Does every failure exit non-zero? |
+| GitHub Actions | `.github/workflows/`, `.github/scripts/` | Which events start it, from which actor, with which token and permissions? What does a skipped, cancelled or failed run do to the PR's merge state? Can a fork's PR reach the secrets? Is every action pinned to a commit no older than `main`'s? |
+| Repo conventions | Any file | Does it keep the slice boundaries, the Shared Kernel, Central Package Management, the domain language and the Owned Baseline files (`.claude/rules/baseline.md`) as they are? |
+
 ## Out of scope
 
 Leave compiler and analyzer findings to the build: `TreatWarningsAsErrors` and `AnalysisMode=All` already fail CI on

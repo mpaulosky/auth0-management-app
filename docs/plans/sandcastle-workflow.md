@@ -323,14 +323,20 @@ picked role runs again on the existing branch and builds on earlier work; the ar
 
 ## The gate
 
-`scripts/gate.sh` is the single definition of "ready to push", shared by the pre-push hook, the sandbox and people. It diffs against `git merge-base origin/main HEAD` (which fixes the old
-hook linting only the last commit on a branch with no upstream) and stops at the first failure:
+`scripts/gate.sh` is the single definition of "ready to push", shared by the pre-push hook, the sandbox and people, with one difference: the sandbox skips the local review check
+(below). It diffs against `git merge-base origin/main HEAD` (which fixes the old hook linting only the last commit on a branch with no upstream) and stops at the first failure:
 
 1. `yamllint -c .yamllint.yml` on changed `*.yml` / `*.yaml` files (failing with an "install yamllint" message when it's missing; no Docker fallback);
 2. `pnpm exec markdownlint-cli2` on changed `*.md` files;
 3. the Sandcastle TypeScript check (`pnpm run check:sandcastle`: type-check plus the host's unit tests) when `.sandcastle/**`, `package.json` or the pnpm lockfile changed;
 4. `dotnet build Auth0ManagementApp.slnx -c Release` (warnings as errors);
 5. `dotnet test --project` for each project under `tests/`, in Release.
+
+Between the lints and the build, `scripts/gate.sh` runs the repository's own checks in `.github/ci/gate-checks.sh`. The first is the local review check: `scripts/review.sh check`
+refuses a diff `/pre-push-review` hasn't passed. Every gate in the sandbox skips it, because `SANDBOX_ENV` (`lib/skills.mts`) sets `GATE_SKIP_REVIEW=1` there until Sandcastle's
+reviewer runs that review, so the sandbox can pass a gate a person's pre-push would refuse. The others are the Copilot review sync check, the test of `scripts/check-git-hooks.sh`, and
+the Sandcastle TypeScript check of step 3, which also reruns when any other file `gate-checks.sh` lists for it changes (the review's and the gate's scripts, the
+skills and agent it tests, and `.claude/rules/baseline.md`).
 
 CodeQL, metrics and coverage stay in CI. `yamllint` is added to `.sandcastle/Dockerfile`, and `lint-yaml.yml` reads `config_file: .yamllint.yml` so there is one YAML config. The
 pre-push hook keeps its branch-name and protected-branch checks, then calls the script.

@@ -72,7 +72,9 @@ matching files.
   AppHost; its fixture installs Chromium itself): test projects, named `<Project>.Tests.<Kind>`.
 - `aspire.config.json` (the Aspire CLI's shared settings) lives at the repo root and points at
   `src/AppHost/AppHost.csproj`. It's the only copy: delete any the CLI writes elsewhere, such as next to the AppHost.
-- `.sandcastle/`: the unattended agent pipeline (TypeScript, run with Claude Code).
+- `.sandcastle/`: the unattended agent pipeline (TypeScript, run with Claude Code). `.sandcastle/lib/review-ledger.mts`
+  also holds the local review's ledger, which `scripts/review.sh` and the gate's review check run on every push; it lives
+  there for Sandcastle's type-check and tests.
 - `.github/workflows/`, `.github/scripts/`, `.github/hooks/`: CI, release blog tooling and git hooks.
 - `.claude/skills/code-review/`: the PR review checklist. GitHub's Copilot code review gets the same checklist through
   `.github/copilot-instructions.md`, which is generated: edit the skill, then run `scripts/sync-copilot-review.sh`.
@@ -88,6 +90,9 @@ Run `pnpm install` after changing any `package.json`, and commit `pnpm-lock.yaml
 ```bash
 pnpm install                                          # the pnpm workspace: root tooling and src/UI's Tailwind CLI
 scripts/gate.sh                                       # the full check; needs a fresh `git fetch origin main`
+GATE_SKIP_REVIEW=1 scripts/gate.sh                    # the same without the local review check, while iterating
+scripts/review.sh report                              # the local review of this branch's diff
+scripts/review.sh accept R3 "<reason>"                # the person accepts a finding (never on their behalf)
 dotnet build Auth0ManagementApp.slnx                  # quick build while iterating
 dotnet test --project tests/<Project>/<Project>.csproj  # one test project while iterating
 dotnet run --project src/UI                           # run the Blazor Web App
@@ -101,9 +106,9 @@ SANDCASTLE_LABEL=<label> pnpm run sandcastle          # work the issues labelled
 ```
 
 `scripts/gate.sh` is the definition of "ready to push": lint of the changed YAML, Markdown, workflows and shell
-scripts, then this repo's own checks in `.github/ci/gate-checks.sh` (the Copilot review sync check, the test of
-`scripts/check-git-hooks.sh` and the Sandcastle check, each when its files changed), then a Release build and each
-test project under `tests/`, run one by one.
+scripts, then this repo's own checks in `.github/ci/gate-checks.sh` (the local review check, then the Copilot review sync
+check, the test of `scripts/check-git-hooks.sh` and the Sandcastle check, each when its files changed), then a Release
+build and each test project under `tests/`, run one by one.
 `scripts/gate.sh` is an Owned file of the CI Baseline (see `.claude/rules/baseline.md`), overwritten on every Apply,
 so a new repo-only check goes in `gate-checks.sh`. Don't use `dotnet test --solution` as the check: under Microsoft
 Testing Platform it can report zero tests while the project runs pass. The pre-push hook runs the gate after its own branch
@@ -114,7 +119,19 @@ hooks off.
 The hooks run only in a clone with `git config core.hooksPath .github/hooks` set; without it a push skips the gate
 silently. Claude Code's `SessionStart` hook (`scripts/check-git-hooks.sh`, registered in `.claude/settings.json`) warns
 at the start of a session when it isn't set. Don't report the pre-push gate as passed unless you saw the hook's
-"All gates passed" line, or ran `scripts/gate.sh` by hand and it passed.
+"All gates passed" line, or ran `scripts/gate.sh` by hand, without `GATE_SKIP_REVIEW`, and it passed.
+
+Before every push, the first and every fix, run the `pre-push-review` skill (`/pre-push-review`). It reviews the
+branch's whole diff against `origin/main` with a reviewer per lens in the code-review skill, fixes each finding behind a
+regression test, reviews again, and records the outcome in `.git/review/`. The gate refuses a diff it hasn't passed, and
+any finding still open blocks the push until it's fixed or the person you work for (the owner, or a contributor on
+their own branch) accepts it with `scripts/review.sh accept`. Never accept one on their behalf, and never push with
+`--no-verify` or with `GATE_SKIP_REVIEW` set. Contributors need Claude Code for this (`docs/CONTRIBUTING.md`): there's
+no route around the review. Two things skip it: the Baseline's re-Apply (on `chore/reapply-baseline`, a diff that
+changes only Owned files, which the Template's own PRs review), and Sandcastle's sandbox (`SANDBOX_ENV` in
+`.sandcastle/lib/skills.mts`) until its reviewer runs the same review. A merge of `main` that leaves the branch's own
+hunks as they were keeps the review; a new commit, a conflict resolution, or a `main` change inside one of the branch's
+hunks needs a new one.
 
 Push from a checkout of the branch being pushed, with nothing uncommitted or untracked in it: the hook gates the
 checked-out commit, so it refuses `git push origin <other-branch>` from the `main` checkout. Push from the branch's
@@ -142,11 +159,15 @@ or other feedback is waiting on you, or nothing changed for 30 minutes. Act on i
 
 - Merge `origin/main` into the branch in its worktree when it conflicts or is behind, and fix each red check.
 - On a thread you agree with, fix it and reply saying what changed; then resolve it if Claude Review or Copilot opened
-  it, and leave a person's thread for them to resolve. On a thread you decline, reply with why and leave it unresolved,
-  so the hold keeps it for the owner.
+  it, and leave a person's thread for them to resolve. On every other thread, whoever opened it (one you decline, one
+  raising a finding someone accepted, one waiting on a person's decision), reply only "Left for the owner." with the
+  marker below, and leave it unresolved so the hold keeps it for the owner. The same reply on all of them means none
+  singles out an accepted security finding. The reason stays in the local review's record, and an accepted finding
+  that isn't a security one is also in the PR's `## Review notes`.
 - End every reply and comment you post with `<!-- claude-session -->`. The script tells your comments from the owner's by
   that marker, not by login, because a local session posts with the owner's token.
-- Push from the branch's worktree and update the description if the change moved.
+- Run `/pre-push-review` before pushing each fix, then push from the branch's worktree and update the description if the
+  change moved, and its `## Review notes` once the person's accepts are made (the skill's step 9).
 
 Stop when the PR has merged or closed, when only threads waiting on a person or a check you can't fix remain, or when it
 has sat 30 minutes with nothing to act on, and tell the owner which.
@@ -157,3 +178,5 @@ branch, so two writers never push to one branch. Sandcastle then answers its bot
 catches the branch up with `main`, resolving only the Claude Review and Copilot threads it fixed and leaving declined
 and people's threads open for the owner. Only the owner's label counts, and an edit to the PR's title or body by anyone
 else after it stops the follow-up until the owner removes and re-adds it. To take the PR back, remove the label.
+Don't hand off a PR whose local review has an accepted security finding: Sandcastle's follow-up can't see the
+acceptance, and could fix the finding or answer its thread in public.

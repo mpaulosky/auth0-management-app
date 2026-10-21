@@ -24,4 +24,5 @@ Its `ignores` list skips the release blog posts in `docs/blogs/`, which the rele
 - **Line length:** Keep lines at or under 200 characters. Table rows are exempt because they can't wrap. Prefer one sentence or clause per line in long paragraphs.
 
 Blog posts under `docs/blogs/` have extra front-matter rules in `blog.md`. Other Markdown files have no front matter, apart from the `paths` header on
-the rule files in `.claude/rules/` and the `name`/`description` header on skills.
+the rule files in `.claude/rules/`, the `name`/`description` header on skills, and the `name`, `description`, `tools` and `model` header on the
+agent definitions in `.claude/agents/`.

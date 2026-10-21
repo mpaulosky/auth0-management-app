@@ -40,7 +40,9 @@ Agents write the worktree and the shared `.git` directory, and the host later ru
 guardrails keep agent-written code from running on the host. A change keeps every one of them:
 
 - Host git runs with hooks off and `GIT_COMMON_DIR` pinned (`lib/host-safety.mts`), in the main checkout only.
-- Each sandbox mounts `.git/config` and `.git/hooks` read-only through the provider's `create()` (`lib/skills.mts`).
+- Each sandbox mounts `.git/config` and `.git/hooks` read-only, and an empty read-only folder over `.git/review` (the
+  local review's ledgers, which hold accepted security findings), through the provider's `create()`, at every path a
+  mount puts `.git`: head mode mounts the main checkout at the workspace (`lib/skills.mts`, `lib/host-safety.mts`).
 - The sandbox gets no GitHub token (`main.mts` refuses one in `.sandcastle/.env`); the host does every GitHub write.
 - The host pushes the commit the gate passed on, after the secret scan (`lib/scan.mts`), and posts only
   `publicErrorText` on public issues.
