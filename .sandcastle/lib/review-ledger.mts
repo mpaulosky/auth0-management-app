@@ -243,19 +243,24 @@ const pinnedDiff = [
 ];
 
 // The pinned patch of `head` against `base`: what the reviewers read. Throws
-// when it shows a text file only as "Binary files differ": a diff attribute
-// (in .gitattributes or the clone's info/attributes) would otherwise hide that
-// change from the reviewers. A real binary file has a NUL byte, as git's own
-// test for one does.
+// when it shows text only as "Binary files differ", since the reviewers
+// couldn't read it: a text file a diff attribute (in .gitattributes or the
+// clone's info/attributes) marks binary, or a binary file the branch turns
+// into text, which git prints whole as binary because one side is. A real
+// binary file has a NUL byte, as git's own test for one does.
 export function reviewPatch(cwd: string, base: string, head: string = headCommit(cwd)): Buffer {
   const patch = gitBytes(cwd, [...pinnedDiff, base, head]);
   const text = patch.toString("latin1");
+  const absent = (blob: string | undefined) => blob === undefined || /^0+$/.test(blob);
+  const binary = (blob: string | undefined) => !absent(blob) && gitBytes(cwd, ["cat-file", "blob", blob as string]).includes(0);
   for (const section of text.split(/^(?=diff --git )/m)) {
     if (!/^Binary files .* differ$/m.test(section)) continue;
-    const blobs = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(section)?.slice(1) ?? [];
-    const binary = blobs.some((blob) => !/^0+$/.test(blob) && gitBytes(cwd, ["cat-file", "blob", blob]).includes(0));
-    if (!binary) {
-      const file = /^diff --git (.*)$/m.exec(section)?.[1] ?? "a file";
+    const [before, after] = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(section)?.slice(1) ?? [];
+    const file = /^diff --git (.*)$/m.exec(section)?.[1] ?? "a file";
+    if (binary(before) && !absent(after) && !binary(after)) {
+      throw new Error(`${file}: the branch turns a binary file into text, which git shows only as "Binary files differ", so the reviewers couldn't read the text. Add the text at a new path instead.`);
+    }
+    if (!binary(before) && !binary(after)) {
       throw new Error(`${file}: a diff attribute marks this text file binary, so the reviewers couldn't read its change. Remove the attribute.`);
     }
   }
@@ -572,9 +577,10 @@ export function renderReport(ledger: Ledger): string {
 
 // The markers around the PR description's `## Review notes`, so the section
 // can be replaced without touching what follows it (`Fixes #`, the footer).
-// The release blog drops HTML comments.
-export const REVIEW_NOTES_START = "<!-- REVIEW_NOTES_START -->";
-export const REVIEW_NOTES_END = "<!-- REVIEW_NOTES_END -->";
+// They're the ones PR #82 asked the Template's Claude Review to read the
+// notes between. The release blog drops HTML comments.
+export const REVIEW_NOTES_START = "<!-- review-notes -->";
+export const REVIEW_NOTES_END = "<!-- /review-notes -->";
 
 // The PR description's `## Review notes`, between its markers: the findings a
 // person accepted, for people reading the PR, except security findings, which
@@ -604,6 +610,53 @@ export function renderReviewNotes(ledger: Ledger): string {
   return section("", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately);
 }
 
+// `body` with its Review notes section replaced by `notes` (renderReviewNotes'
+// output; empty removes the section). A marker counts only as a line of its
+// own, so one quoted in the text isn't taken for it. A body with no section
+// gets one above its closing line (`Fixes #n`), else above the footer, else
+// at the end. Throws, rather than guess where the section ends, on a body
+// whose markers don't make one pair, and on a `## Review notes` written
+// before the markers, which would otherwise stay beside the new one. CRLF,
+// as GitHub may store a description, comes back as LF.
+export function spliceReviewNotes(body: string, notes: string): string {
+  const lines = body.replace(/\r\n?/g, "\n").replace(/\n$/, "").split("\n");
+  const starts = lines.flatMap((line, index) => (line.trim() === REVIEW_NOTES_START ? [index] : []));
+  const ends = lines.flatMap((line, index) => (line.trim() === REVIEW_NOTES_END ? [index] : []));
+  const ask = (problem: string) =>
+    new Error(`the PR description ${problem}, so its Review notes can't be replaced safely: show it to the person and ask the person what to keep`);
+  if (starts.length > 1 || ends.length > 1) throw ask("has more than one Review notes section");
+  if (starts.length !== ends.length || (starts[0] ?? 0) > (ends[0] ?? 0)) throw ask("has Review notes markers that don't make one pair");
+  const added = notes === "" ? [] : notes.replace(/\n$/, "").split("\n");
+  let start: number;
+  let removed: number;
+  if (starts.length === 1) {
+    start = starts[0] as number;
+    removed = (ends[0] as number) - start + 1;
+    if (added.length === 0) {
+      // Take one blank line with it, so no gap is left where it was.
+      if (lines[start + removed] === "") {
+        removed += 1;
+      } else if (start > 0 && lines[start - 1] === "") {
+        start -= 1;
+        removed += 1;
+      }
+    }
+  } else {
+    if (lines.some((line) => /^#{1,6}\s+Review notes\s*$/i.test(line))) throw ask("has a Review notes section without markers");
+    if (added.length === 0) return `${lines.join("\n")}\n`;
+    const closing = lines.findIndex((line) => /^(?:fixes|closes|resolves) #\d+/i.test(line));
+    const footer = lines.findIndex((line) => line.startsWith("🤖 Generated with"));
+    start = closing !== -1 ? closing : footer !== -1 ? footer : lines.length;
+    removed = 0;
+    // A blank line between it and what it's added above, or after the text
+    // it's added below.
+    if (start === lines.length) added.unshift("");
+    else added.push("");
+  }
+  lines.splice(start, removed, ...added);
+  return `${lines.join("\n")}\n`;
+}
+
 const USAGE = `Usage: scripts/review.sh <command>
   prepare <absolute dir> write HEAD's diff to <dir>/diff.patch for the reviewers; print its key, then HEAD
   key                    print the ledger key of HEAD's diff against origin/main
@@ -612,6 +665,7 @@ const USAGE = `Usage: scripts/review.sh <command>
   accept <id> <reason>   accept an open finding on HEAD's review
   report                 print HEAD's review report
   notes                  print the "## Review notes" section for the PR description
+  body <file>            print the PR description in <file> (- reads stdin) with its Review notes section replaced
   latest                 print the nearest earlier review of this branch's work as JSON ({} when none)
   next                   print the first finding id this run may use`;
 
@@ -665,6 +719,14 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         const ledger = readLedger(cwd, diffKey(cwd, mergeBase(cwd)));
         if (ledger === undefined) return fail("No review is recorded for this diff.");
         out(command === "report" ? renderReport(ledger) : renderReviewNotes(ledger) || "No accepted findings.");
+        return 0;
+      }
+      case "body": {
+        if (rest[0] === undefined) return fail(USAGE);
+        const ledger = readLedger(cwd, diffKey(cwd, mergeBase(cwd)));
+        if (ledger === undefined) return fail("No review is recorded for this diff.");
+        const body = readFileSync(rest[0] === "-" ? 0 : rest[0], "utf8");
+        out(spliceReviewNotes(body, renderReviewNotes(ledger)));
         return 0;
       }
       case "latest": {

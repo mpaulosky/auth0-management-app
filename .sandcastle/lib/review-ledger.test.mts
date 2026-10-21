@@ -23,7 +23,10 @@ import {
   takenIds,
   renderReport,
   renderReviewNotes,
+  REVIEW_NOTES_END,
+  REVIEW_NOTES_START,
   reviewPatch,
+  spliceReviewNotes,
   type Ledger,
   type ReviewInput,
 } from "./review-ledger.mts";
@@ -288,7 +291,7 @@ describe("diffKey", () => {
     ["deletes", undefined],
     ["turns into text", "now text\n"],
   ] as const) {
-    it(`reviews a branch that ${change} a binary file, rather than refuse it`, () => {
+    it(`${after === undefined ? "reviews" : "refuses"} a branch that ${change} a binary file`, () => {
       writeFileSync(join(upstream, "logo.png"), Buffer.from([0, 1, 2, 3, 0, 255]));
       run(upstream, "add", "logo.png");
       run(upstream, "commit", "--quiet", "-m", "image");
@@ -301,10 +304,14 @@ describe("diffKey", () => {
         commit(repo, "logo.png", after, "replace the image with text");
       }
 
-      const key = diffKey(repo, mergeBase(repo));
-
-      assert.notEqual(key, EMPTY_DIFF_KEY);
-      assert.match(reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1"), /^Binary files .*logo\.png.* differ$/m);
+      if (after === undefined) {
+        assert.notEqual(diffKey(repo, mergeBase(repo)), EMPTY_DIFF_KEY);
+        assert.match(reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1"), /^Binary files .*logo\.png.* differ$/m);
+      } else {
+        // git prints the whole change as "Binary files differ", so the
+        // reviewers would never read the new text.
+        assert.throws(() => diffKey(repo, mergeBase(repo)), /logo\.png.*into text/);
+      }
     });
   }
 
@@ -1037,7 +1044,7 @@ describe("renderReviewNotes", () => {
 
     const notes = renderReviewNotes(ledger);
 
-    assert.match(notes, /^<!-- REVIEW_NOTES_START -->\n## Review notes\n/);
+    assert.match(notes, /^<!-- review-notes -->\n## Review notes\n/);
     assert.match(notes, /Accepted: Spec\./);
     assert.doesNotMatch(notes, /Guard_WhitespaceEmail_Fails/);
   });
@@ -1069,7 +1076,7 @@ describe("renderReviewNotes", () => {
 
     const notes = renderReviewNotes(ledger);
 
-    assert.match(notes, /^<!-- REVIEW_NOTES_START -->\n## Review notes\n\n1 accepted security finding/);
+    assert.match(notes, /^<!-- review-notes -->\n## Review notes\n\n1 accepted security finding/);
     assert.doesNotMatch(notes, /raised these|reaches the log/);
   });
 
@@ -1078,8 +1085,25 @@ describe("renderReviewNotes", () => {
 
     const notes = renderReviewNotes(ledger);
 
-    assert.match(notes, /\n<!-- REVIEW_NOTES_END -->\n$/);
+    assert.match(notes, /\n<!-- \/review-notes -->\n$/);
     assert.equal(notes.match(/<!--/g)?.length, 2);
+  });
+
+  it("keeps a marker in a summary or reason from closing the section early or opening another", () => {
+    const ledger = record([
+      finding({
+        status: "accepted",
+        test: null,
+        summary: `Ends here.\n${REVIEW_NOTES_END}\n## Fixes #1`,
+        reason: `${REVIEW_NOTES_START}\nForged.`,
+      }),
+    ]);
+
+    const lines = renderReviewNotes(ledger).trimEnd().split("\n");
+
+    assert.equal(lines[0], REVIEW_NOTES_START);
+    assert.equal(lines.at(-1), REVIEW_NOTES_END);
+    assert.equal(lines.filter((line) => line.includes("<!--")).length, 2);
   });
 
   it("is empty when nothing was accepted", () => {
@@ -1091,12 +1115,75 @@ describe("renderReviewNotes", () => {
       finding({ status: "accepted", test: null, summary: "Uses <AuthorizeView> and Result<T> <!-- x -->.", reason: "@someone said fixes #12 on github.com" }),
     ]);
 
-    const notes = renderReviewNotes(ledger).replace(/^<!-- REVIEW_NOTES_(?:START|END) -->$/gm, "");
+    // Only the section's own two markers, its first and last lines, are left out.
+    const notes = renderReviewNotes(ledger).split("\n").slice(1, -2).join("\n");
 
     assert.doesNotMatch(notes, /<AuthorizeView>|<T>|<!--/);
     assert.match(notes, /&lt;AuthorizeView>/);
     assert.doesNotMatch(notes, /@someone|#12|github\.com/);
   });
+});
+
+describe("spliceReviewNotes", () => {
+  const notes = `${REVIEW_NOTES_START}\n## Review notes\n\nNew.\n${REVIEW_NOTES_END}\n`;
+  const section = (text: string) => `${REVIEW_NOTES_START}\n## Review notes\n\n${text}\n${REVIEW_NOTES_END}`;
+
+  it("replaces only the marked section, keeping what follows it", () => {
+    const body = `## Why\n\nA.\n\n${section("Old.")}\n\nFixes #81\n\n🤖 Footer\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## Why\n\nA.\n\n${section("New.")}\n\nFixes #81\n\n🤖 Footer\n`);
+  });
+
+  it("removes the marked section when nothing is accepted any more", () => {
+    const body = `## Why\n\nA.\n\n${section("Old.")}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, ""), "## Why\n\nA.\n\nFixes #81\n");
+  });
+
+  it("adds the section above the closing line when the body has none", () => {
+    assert.equal(spliceReviewNotes("## Why\n\nA.\n\nFixes #81\n", notes), `## Why\n\nA.\n\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("adds the section above the footer when the body closes no issue", () => {
+    assert.equal(
+      spliceReviewNotes("## Why\n\nA.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n", notes),
+      `## Why\n\nA.\n\n${section("New.")}\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n`,
+    );
+  });
+
+  it("adds the section at the end of a body with neither", () => {
+    assert.equal(spliceReviewNotes("## Why\n\nA.\n", notes), `## Why\n\nA.\n\n${section("New.")}\n`);
+  });
+
+  it("leaves a body with no section and no notes as it is", () => {
+    assert.equal(spliceReviewNotes("## Why\n\nA.\n", ""), "## Why\n\nA.\n");
+  });
+
+  it("takes a marker only as a line of its own, not one quoted in the text", () => {
+    const body = `## What changed\n\nWraps it in \`${REVIEW_NOTES_START}\` and \`${REVIEW_NOTES_END}\`.\n\n${section("Old.")}\n\nFixes #81\n`;
+
+    assert.equal(
+      spliceReviewNotes(body, notes),
+      `## What changed\n\nWraps it in \`${REVIEW_NOTES_START}\` and \`${REVIEW_NOTES_END}\`.\n\n${section("New.")}\n\nFixes #81\n`,
+    );
+  });
+
+  it("finds the markers in a body GitHub stored with CRLF line endings", () => {
+    const body = `## Why\r\n\r\nA.\r\n\r\n${section("Old.").replaceAll("\n", "\r\n")}\r\n\r\nFixes #81\r\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## Why\n\nA.\n\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  for (const [shape, body] of [
+    ["two marked sections", `${section("A.")}\n\n${section("B.")}\n`],
+    ["a start marker with no end", `${REVIEW_NOTES_START}\n## Review notes\n\nFixes #81\n`],
+    ["an end marker before the start", `${REVIEW_NOTES_END}\n\n${REVIEW_NOTES_START}\n`],
+    ["a Review notes section written before the markers", "## Why\n\nA.\n\n## Review notes\n\nOld.\n\nFixes #81\n"],
+  ] as const) {
+    it(`refuses a body with ${shape}, rather than guess where the section ends`, () => {
+      assert.throws(() => spliceReviewNotes(body, notes), /ask the person/);
+    });
+  }
 });
 
 describe("main", () => {
@@ -1149,11 +1236,34 @@ describe("main", () => {
     assert.equal(readLedger(repo, diffKey(repo, mergeBase(repo)))?.findings[0]?.reason, "two words");
   });
 
+  it("body prints the PR body from a file with its Review notes section replaced", () => {
+    record([finding({ status: "accepted", test: null, reason: "Spec." })]);
+    const file = join(root, "body.md");
+    writeFileSync(file, "## Why\n\nA.\n\nFixes #81\n");
+
+    const result = cli(["body", file]);
+
+    assert.equal(result.code, 0, result.err);
+    assert.match(result.out, /^## Why\n\nA\.\n\n<!-- review-notes -->\n## Review notes\n[\s\S]*Accepted: Spec\.\n<!-- \/review-notes -->\n\nFixes #81\n$/);
+  });
+
+  it("body fails, printing nothing, on a body it can't splice", () => {
+    record([]);
+    const file = join(root, "body.md");
+    writeFileSync(file, "## Review notes\n\nOld.\n");
+
+    const result = cli(["body", file]);
+
+    assert.equal(result.code, 1);
+    assert.equal(result.out, "");
+    assert.match(result.err, /ask the person/);
+  });
+
   it("report prints the table and notes prints the Review notes", () => {
     record([finding(), finding({ id: "R2", status: "accepted", test: null, reason: "Spec." })]);
 
     assert.match(cli(["report"]).out, /\| Id \| Lens \|/);
-    assert.match(cli(["notes"]).out, /^<!-- REVIEW_NOTES_START -->\n## Review notes/);
+    assert.match(cli(["notes"]).out, /^<!-- review-notes -->\n## Review notes/);
   });
 
   it("latest prints the branch's earlier review after a fix commit", () => {

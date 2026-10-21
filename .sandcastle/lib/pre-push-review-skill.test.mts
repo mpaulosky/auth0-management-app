@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { REVIEW_NOTES_END, REVIEW_NOTES_START } from "./review-ledger.mts";
 
 // The pre-push-review skill's reviewers read text people without write access
 // wrote, so they run as an agent with only read tools. Nothing else pins that:
@@ -17,12 +18,24 @@ describe("the pre-push-review skill's reviewers", () => {
     assert.match(frontMatter, /^tools: Read, Grep, Glob$/m);
   });
 
-  // A key Claude Code reads that this test doesn't know, or a second `tools`
-  // line it might read instead, could give them more than these.
+  // A key Claude Code reads that this test doesn't know, a second `tools`
+  // line it might read instead, or a line that continues `tools` (YAML folds
+  // an indented line into the value before it) could give them more than
+  // these. So every line is checked, not only the ones shaped like a key: a
+  // YAML explicit key (`? hooks`) matches none of the allowed shapes.
   it("are defined by exactly a name, a description, their tools and a model, each once", () => {
-    const frontMatter = /^---\n([\s\S]*?)\n---\n/.exec(agent)?.[1] ?? "";
+    const lines = (/^---\n([\s\S]*?)\n---\n/.exec(agent)?.[1] ?? "").split("\n");
+    const keys: string[] = [];
 
-    const keys = frontMatter.split("\n").flatMap((line) => /^([^\s#][^:]*):/.exec(line)?.[1] ?? []);
+    for (const line of lines) {
+      const key = /^(name|description|tools|model): \S/.exec(line)?.[1];
+      if (key !== undefined) {
+        keys.push(key);
+      } else {
+        assert.match(line, /^ {2}\S/, `not a known key or a continuation: ${JSON.stringify(line)}`);
+        assert.equal(keys.at(-1), "description", `only the description continues onto another line: ${JSON.stringify(line)}`);
+      }
+    }
 
     assert.deepEqual(keys, ["name", "description", "tools", "model"]);
   });
@@ -36,6 +49,22 @@ describe("the pre-push-review skill's reviewers", () => {
     assert.ok(settings.permissions?.deny?.includes("Read(//**/.git/review/**)"));
   });
 
+});
+
+// Step 9 keeps the PR description's Review notes in step with the ledger.
+// An agent follows it, so nothing but this ties its text to the code.
+describe("the pre-push-review skill's Review notes", () => {
+  it("are spliced into the description by scripts/review.sh body, never by hand", () => {
+    assert.match(skill, /scripts\/review\.sh body <run>\/old-body\.md > <run>\/body\.md/);
+  });
+
+  it("name the markers renderReviewNotes writes", () => {
+    assert.ok(skill.includes(`\`${REVIEW_NOTES_START}\``));
+    assert.ok(skill.includes(`\`${REVIEW_NOTES_END}\``));
+  });
+});
+
+describe("the pre-push-review skill's reviewers, as started", () => {
   it("are started as that agent, and never as another type", () => {
     assert.match(skill, /`subagent_type: "pre-push-reviewer"`/);
     assert.match(skill, /never start them as another type/);
