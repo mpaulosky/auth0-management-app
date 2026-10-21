@@ -251,8 +251,11 @@ describe("pass role prompts' brief", () => {
 // line; text that merely holds those two characters, such as a rule naming
 // `<!`, would run the command it matches.
 describe("prompt shell expansions", () => {
+  // Every prompt file Sandcastle reads, not only the reviewer's and the roles'.
   const prompts = [
-    "review-prompt.md",
+    ...readdirSync(sandcastleFile("."))
+      .filter((name) => name.endsWith(".md"))
+      .sort(),
     ...readdirSync(sandcastleFile("roles"))
       .filter((name) => name.endsWith(".md"))
       .map((name) => `roles/${name}`),

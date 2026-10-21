@@ -323,7 +323,9 @@ export function reviewPatch(cwd: string, base: string, head: string = headCommit
       const where = absent(before) ? "" : " at a new path, and delete this one";
       throw new Error(`${file}: this text is UTF-16 or UTF-32, which git shows only as "Binary files differ", so the reviewers couldn't read it. Re-encode it as UTF-8${where}.`);
     }
-    if (binary(before) && !absent(after) && !binary(after)) {
+    // An emptied file has no text to read, so there's nothing hidden to refuse.
+    const emptied = !absent(after) && gitBytes(cwd, ["cat-file", "blob", after as string]).length === 0;
+    if (binary(before) && !absent(after) && !binary(after) && !emptied) {
       throw new Error(`${file}: the branch turns a binary file (or UTF-16 or UTF-32 text) into text, which git shows only as "Binary files differ", so the reviewers couldn't read the text. Add the text at a new path instead.`);
     }
     if (!binary(before) && !binary(after)) {

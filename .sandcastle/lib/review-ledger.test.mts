@@ -325,6 +325,18 @@ describe("diffKey", () => {
     });
   }
 
+  it("reviews a branch that empties a binary file, which has no text to read", () => {
+    writeFileSync(join(upstream, "logo.png"), Buffer.from([0, 1, 2, 3, 0, 255]));
+    run(upstream, "add", "logo.png");
+    run(upstream, "commit", "--quiet", "-m", "image");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "reset", "--quiet", "--hard", "origin/main");
+    writeFileSync(join(repo, "logo.png"), "");
+    run(repo, "commit", "--quiet", "-am", "empty the image");
+
+    assert.notEqual(diffKey(repo, mergeBase(repo)), EMPTY_DIFF_KEY);
+  });
+
   it("refuses a binary file turned into text with a NUL past git's first 8000 bytes, which git still prints as text", () => {
     writeFileSync(join(upstream, "logo.png"), Buffer.from([0, 1, 2, 3, 0, 255]));
     run(upstream, "add", "logo.png");

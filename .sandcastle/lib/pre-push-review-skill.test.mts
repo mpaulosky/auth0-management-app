@@ -89,6 +89,24 @@ describe("the pre-push-review skill's Review notes", () => {
   });
 });
 
+// R189: PR Auto-Merge acts on a resolved thread and an edited description, so
+// a fix is pushed before either, or the PR could merge the head without it.
+describe("the push-before-reply rule", () => {
+  const flat = (text: string) => text.replace(/\s+/g, " ");
+
+  it("is in the skill's step 9", () => {
+    assert.ok(flat(skill).includes("and the branch is pushed, run:"));
+    assert.ok(flat(skill).includes("Editing the description starts PR Auto-Merge, which is why it waits for the push"));
+    assert.ok(flat(skill).includes("Push a thread's fix before replying to or resolving its thread"));
+  });
+
+  it("is in CLAUDE.md's watch loop, with where a declined thread's reason goes", () => {
+    assert.ok(flat(claude).includes("fix it, push the fix, and only then reply saying what changed"));
+    assert.ok(flat(claude).includes("so edit it only once the fix it describes is pushed"));
+    assert.ok(flat(claude).includes("tell the owner that when you stop"));
+  });
+});
+
 describe("the pre-push-review skill's reviewers, as started", () => {
   it("are started as that agent, and never as another type", () => {
     assert.match(skill, /`subagent_type: "pre-push-reviewer"`/);

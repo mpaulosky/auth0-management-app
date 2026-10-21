@@ -100,12 +100,14 @@ sentences. Use exactly these three headings, in this order, and no others at tha
 - Never write a `<` directly followed by an exclamation mark or a question mark, a closing bracket directly followed by a colon, a character reference such as an ampersand, a
   word and a semicolon, or any of these tags, opening or closing: `<script>`, `<style>`, `<noscript>`, `<template>`, `<textarea>`, `<iframe>`, `<svg>`, `<math>`, `<xmp>`,
   `<plaintext>`, `<noembed>`, `<noframes>`. Not even in backticks or a code block: describe them in words.
-  Never write the words "Review notes" either, in any form: the host also counts them run together or inside a name, such as `renderReviewNotes`, so name the file or
-  describe the function instead. The host refuses a description with any of these and publishes its generic one: it adds its own HTML-comment marker, Review notes hold a
-  person's accepted findings, which only their local review writes, and nothing published may be hidden from the people reading it.
+  Never write the words "Review notes" either, in any form. The host joins every letter of the description, ignoring spaces, punctuation and line breaks, and refuses it
+  wherever "review" is followed by "notes": run together, inside a name such as `renderReviewNotes`, inside a word such as "preview notes", or across a sentence ("the
+  review. Notes"). Name the file or describe the function instead, or keep the two words apart with another word.
+  The host refuses a description with any of these and publishes its generic one: it adds its own HTML-comment marker, Review notes hold a person's accepted findings,
+  which only their local review writes, and nothing published may be hidden from the people reading it.
 
-Don't add `Closes`, `Fixes`, a marker or a sign-off line: the host adds what it needs. Never put a secret, a token or a credential in it. When the file is missing, lacks a heading
-or looks like it holds a secret, the host publishes a generic body instead.
+Don't add `Closes`, `Fixes`, a marker or a sign-off line: the host adds what it needs. Never put a secret, a token or a credential in it. When the file is missing, lacks a heading,
+is too long, holds anything the bullet above forbids or looks like it holds a secret, the host publishes a generic body instead.
 
 Once the description is written, output <promise>COMPLETE</promise>.
 

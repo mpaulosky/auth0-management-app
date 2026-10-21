@@ -23,8 +23,8 @@ export function breakReferences(text: string): string {
 // reference to decode into an @, # or . that breakReferences doesn't see) and
 // < (no HTML tag, such as an unclosed <details>, or comment to hide them);
 // mentions and cross-references are broken (see breakReferences); and a
-// leading Markdown marker is escaped so it can't start a list, heading or
-// quote.
+// leading Markdown marker is escaped so it can't start a list, heading, quote
+// or ~~~ code fence.
 export function plainText(text: string): string {
   return breakReferences(
     text
