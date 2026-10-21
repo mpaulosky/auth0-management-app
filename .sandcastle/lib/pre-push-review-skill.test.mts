@@ -33,6 +33,8 @@ describe("the pre-push-review skill's reviewers", () => {
         keys.push(key);
       } else {
         assert.match(line, /^ {2}\S/, `not a known key or a continuation: ${JSON.stringify(line)}`);
+        // A parser that trims indentation could read this as a key.
+        assert.doesNotMatch(line, /^\s+[\w-]+\s*:(?:\s|$)/, `a continuation shaped like a key: ${JSON.stringify(line)}`);
         assert.equal(keys.at(-1), "description", `only the description continues onto another line: ${JSON.stringify(line)}`);
       }
     }
@@ -55,7 +57,9 @@ describe("the pre-push-review skill's reviewers", () => {
 // An agent follows it, so nothing but this ties its text to the code.
 describe("the pre-push-review skill's Review notes", () => {
   it("are spliced into the description by scripts/review.sh body, never by hand", () => {
-    assert.match(skill, /scripts\/review\.sh body <run>\/old-body\.md > <run>\/body\.md/);
+    // One && chain, so a failed fetch or a refused splice never reaches gh.
+    assert.match(skill, /gh pr view <n> --json body -q \.body > <run>\/old-body\.md && scripts\/review\.sh body <run>\/old-body\.md <run>\/body\.md && gh pr edit <n> --body-file <run>\/body\.md/);
+    assert.match(skill, /scripts\/review\.sh body <run>\/old-body\.md <run>\/body\.md && gh pr create /);
   });
 
   it("name the markers renderReviewNotes writes", () => {

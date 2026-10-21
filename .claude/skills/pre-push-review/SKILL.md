@@ -76,7 +76,7 @@ review thread. Neither carries into this review: the reviewers raise the problem
 person accepts it again (step 5). Sessions and Sandcastle post with the owner's token, so a thread
 reply under the owner's login counts only when its body doesn't contain `<!-- claude-session -->` and doesn't open with
 `<!-- sandcastle:`. Nothing else decides: not a bot's thread (a finding to check), not the PR description's
-`## Review notes` (a copy for readers, which an agent wrote on a Sandcastle PR), and not an issue comment, since many of
+`## Review notes` (a copy for readers, which anyone who can edit the PR can change), and not an issue comment, since many of
 Sandcastle's issue comments carry no marker.
 
 The person the review runs for is the repository owner, or a contributor on their own branch. A contributor's
@@ -211,11 +211,13 @@ hold. Never splice it in by hand: `scripts/review.sh body` does it. It replaces 
 `Fixes #` (else above the footer, else at the end) when there's none, removes it when nothing is accepted, and refuses a
 body whose section it can't bound safely. When it refuses, show the person the body and ask what to keep.
 
+Run each bullet's commands as one `&&` chain in one Bash call, and stop when any part fails. `body` removes
+`<run>/body.md` first and writes it only on success, so a failed fetch or a refused splice never reaches `gh`.
+
 - When the PR is opened, write its body to `<run>/old-body.md` and run
-  `scripts/review.sh body <run>/old-body.md > <run>/body.md`, then pass `--body-file <run>/body.md`.
+  `scripts/review.sh body <run>/old-body.md <run>/body.md && gh pr create … --body-file <run>/body.md`.
 - After that, once `scripts/review.sh check` passes (the person's last accept made) and the branch is pushed, run
-  `gh pr view <n> --json body -q .body > <run>/old-body.md`, then
-  `scripts/review.sh body <run>/old-body.md > <run>/body.md`, and `gh pr edit <n> --body-file <run>/body.md`.
+  `gh pr view <n> --json body -q .body > <run>/old-body.md && scripts/review.sh body <run>/old-body.md <run>/body.md && gh pr edit <n> --body-file <run>/body.md`.
   `--body-file` replaces the whole description, so never pass it the notes alone.
 
 Editing the description starts PR Auto-Merge, which is why it waits for the push: before it, the PR could merge the head

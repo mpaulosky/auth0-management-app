@@ -247,12 +247,13 @@ const pinnedDiff = [
 // couldn't read it: a text file a diff attribute (in .gitattributes or the
 // clone's info/attributes) marks binary, or a binary file the branch turns
 // into text, which git prints whole as binary because one side is. A real
-// binary file has a NUL byte, as git's own test for one does.
+// binary file has a NUL byte in its first 8000 bytes, as git's own test for
+// one does: a NUL past them doesn't make git print a text file as binary.
 export function reviewPatch(cwd: string, base: string, head: string = headCommit(cwd)): Buffer {
   const patch = gitBytes(cwd, [...pinnedDiff, base, head]);
   const text = patch.toString("latin1");
   const absent = (blob: string | undefined) => blob === undefined || /^0+$/.test(blob);
-  const binary = (blob: string | undefined) => !absent(blob) && gitBytes(cwd, ["cat-file", "blob", blob as string]).includes(0);
+  const binary = (blob: string | undefined) => !absent(blob) && gitBytes(cwd, ["cat-file", "blob", blob as string]).subarray(0, 8000).includes(0);
   for (const section of text.split(/^(?=diff --git )/m)) {
     if (!/^Binary files .* differ$/m.test(section)) continue;
     const [before, after] = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(section)?.slice(1) ?? [];
@@ -610,23 +611,56 @@ export function renderReviewNotes(ledger: Ledger): string {
   return section("", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately);
 }
 
+// Whether each line of a Markdown text is inside a fenced code block (the
+// fence lines included): a line opening with ``` or ~~~, up to 3 spaces in,
+// until a closing fence of the same character at least as long.
+function fencedLines(lines: readonly string[]): boolean[] {
+  let fence: string | undefined;
+  return lines.map((line) => {
+    const mark = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence === undefined) {
+      if (mark !== undefined) fence = mark;
+      return mark !== undefined;
+    }
+    if (mark !== undefined && mark[0] === fence[0] && mark.length >= fence.length && /^ {0,3}[`~]+[ \t]*$/.test(line)) fence = undefined;
+    return true;
+  });
+}
+
+// Whether line `index` starts a heading that reads "Review notes", in any
+// form GitHub renders as one: ATX (up to 3 spaces in, closing hashes,
+// emphasis or a colon around the words), setext, or an HTML <h1> to <h6>.
+function isReviewNotesHeading(lines: readonly string[], index: number): boolean {
+  const line = lines[index] ?? "";
+  const words = String.raw`[*_]*review\s+notes[*_:]*`;
+  if (new RegExp(String.raw`^ {0,3}#{1,6}[ \t]+${words}(?:[ \t]+#+)?[ \t]*$`, "i").test(line)) return true;
+  if (/<h[1-6][^>]*>\s*[*_]*review\s+notes/i.test(line)) return true;
+  return new RegExp(String.raw`^ {0,3}${words}[ \t]*$`, "i").test(line) && /^ {0,3}(?:=+|-+)[ \t]*$/.test(lines[index + 1] ?? "");
+}
+
 // `body` with its Review notes section replaced by `notes` (renderReviewNotes'
 // output; empty removes the section). A marker counts only as a line of its
-// own, so one quoted in the text isn't taken for it. A body with no section
-// gets one above its closing line (`Fixes #n`), else above the footer, else
-// at the end. Throws, rather than guess where the section ends, on a body
-// whose markers don't make one pair, and on a `## Review notes` written
-// before the markers, which would otherwise stay beside the new one. CRLF,
-// as GitHub may store a description, comes back as LF.
+// own outside a code block, so one quoted in the text or shown in an example
+// isn't taken for it. A body with no section gets one above its closing line
+// (the last `Fixes #n` that starts a paragraph), else above the footer, else
+// at the end. Throws, rather than guess, on an empty body (a `gh pr view` that
+// failed, which would publish the notes alone), on markers that don't make
+// one pair, and on a Review notes heading written without markers, which
+// would otherwise stay beside the new one. CRLF, as GitHub may store a
+// description, comes back as LF, and the result ends in one newline.
 export function spliceReviewNotes(body: string, notes: string): string {
-  const lines = body.replace(/\r\n?/g, "\n").replace(/\n$/, "").split("\n");
-  const starts = lines.flatMap((line, index) => (line.trim() === REVIEW_NOTES_START ? [index] : []));
-  const ends = lines.flatMap((line, index) => (line.trim() === REVIEW_NOTES_END ? [index] : []));
   const ask = (problem: string) =>
     new Error(`the PR description ${problem}, so its Review notes can't be replaced safely: show it to the person and ask the person what to keep`);
+  if (body.trim() === "") throw ask("is empty");
+  const lines = body.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
+  const fenced = fencedLines(lines);
+  const outside = (test: (line: string, index: number) => boolean) =>
+    lines.flatMap((line, index) => (!fenced[index] && test(line, index) ? [index] : []));
+  const starts = outside((line) => line.trimEnd() === REVIEW_NOTES_START);
+  const ends = outside((line) => line.trimEnd() === REVIEW_NOTES_END);
   if (starts.length > 1 || ends.length > 1) throw ask("has more than one Review notes section");
   if (starts.length !== ends.length || (starts[0] ?? 0) > (ends[0] ?? 0)) throw ask("has Review notes markers that don't make one pair");
-  const added = notes === "" ? [] : notes.replace(/\n$/, "").split("\n");
+  const added = notes === "" ? [] : notes.replace(/\n+$/, "").split("\n");
   let start: number;
   let removed: number;
   if (starts.length === 1) {
@@ -642,16 +676,19 @@ export function spliceReviewNotes(body: string, notes: string): string {
       }
     }
   } else {
-    if (lines.some((line) => /^#{1,6}\s+Review notes\s*$/i.test(line))) throw ask("has a Review notes section without markers");
+    if (outside((_, index) => isReviewNotesHeading(lines, index)).length > 0) throw ask("has a Review notes section without markers");
     if (added.length === 0) return `${lines.join("\n")}\n`;
-    const closing = lines.findIndex((line) => /^(?:fixes|closes|resolves) #\d+/i.test(line));
-    const footer = lines.findIndex((line) => line.startsWith("🤖 Generated with"));
-    start = closing !== -1 ? closing : footer !== -1 ? footer : lines.length;
+    const closing = outside((line, index) => /^(?:fixes|closes|resolves) #\d+/i.test(line) && (index === 0 || lines[index - 1] === "")).at(-1);
+    const footer = outside((line) => line.startsWith("🤖 Generated with")).at(-1);
+    start = closing ?? footer ?? lines.length;
     removed = 0;
     // A blank line between it and what it's added above, or after the text
     // it's added below.
-    if (start === lines.length) added.unshift("");
-    else added.push("");
+    if (start === lines.length) {
+      added.unshift("");
+    } else {
+      added.push("");
+    }
   }
   lines.splice(start, removed, ...added);
   return `${lines.join("\n")}\n`;
@@ -665,7 +702,8 @@ const USAGE = `Usage: scripts/review.sh <command>
   accept <id> <reason>   accept an open finding on HEAD's review
   report                 print HEAD's review report
   notes                  print the "## Review notes" section for the PR description
-  body <file>            print the PR description in <file> (- reads stdin) with its Review notes section replaced
+  body <in> <out>        write to <out> the PR description in <in> (- reads stdin) with its Review notes replaced;
+                         <out> is removed first and written only on success
   latest                 print the nearest earlier review of this branch's work as JSON ({} when none)
   next                   print the first finding id this run may use`;
 
@@ -722,11 +760,16 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         return 0;
       }
       case "body": {
-        if (rest[0] === undefined) return fail(USAGE);
+        const [input, output] = rest;
+        if (input === undefined || output === undefined || output === "-" || output === input) return fail(USAGE);
+        // Removed first, so a refusal leaves no file for `gh pr edit
+        // --body-file` to publish, neither empty nor an earlier run's.
+        rmSync(output, { force: true });
         const ledger = readLedger(cwd, diffKey(cwd, mergeBase(cwd)));
         if (ledger === undefined) return fail("No review is recorded for this diff.");
-        const body = readFileSync(rest[0] === "-" ? 0 : rest[0], "utf8");
-        out(spliceReviewNotes(body, renderReviewNotes(ledger)));
+        const body = spliceReviewNotes(readFileSync(input === "-" ? 0 : input, "utf8"), renderReviewNotes(ledger));
+        writeFileSync(output, body);
+        out(`Wrote the PR description with its Review notes to ${output}.`);
         return 0;
       }
       case "latest": {

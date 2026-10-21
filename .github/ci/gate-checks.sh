@@ -74,9 +74,11 @@ fi
 # gate.sh pins, review-ledger.test.mts and gate-checks.test.mts check the
 # local review's ledger (and its Owned list against .claude/rules/baseline.md)
 # and this file, pre-push-review-skill.test.mts checks that the review's
-# reviewers are read-only and that .claude/settings.json keeps them out of the
-# ledgers, and readme.test.mts checks README.md's Releases section, so a change
-# to any of them reruns them.
+# reviewers are read-only, that .claude/settings.json keeps them out of the
+# ledgers, and that the skill's step 9 splices the Review notes with
+# scripts/review.sh body between the markers review-ledger.mts writes, and
+# readme.test.mts checks README.md's Releases section, so a change to any of
+# them reruns them.
 if changed .sandcastle README.md package.json ':(glob)pnpm-*.yaml' scripts/check-branch-name.sh .claude/skills/code-review scripts/gate.sh \
   scripts/review.sh .github/ci/gate-checks.sh .claude/rules/baseline.md .claude/agents .claude/skills/pre-push-review \
   .claude/settings.json; then
