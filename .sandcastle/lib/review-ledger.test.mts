@@ -1223,7 +1223,8 @@ describe("renderReviewNotes", () => {
   });
 
   // A ledger recorded before severity existed marks its security findings
-  // with security: true alone; a later one may mark a Critical one so.
+  // with security: true alone. record refuses a Critical one marked so, but a
+  // hand-edited ledger, or one an earlier build wrote, can hold one.
   for (const severity of [undefined, "critical"] as const) {
     it(`counts an accepted stored finding marked security with ${severity ?? "no"} severity, whatever its lens`, () => {
       const { severity: _, ...base } = finding({ status: "accepted", test: null, summary: "A token reaches the log.", reason: "Later." });

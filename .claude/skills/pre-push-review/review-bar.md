@@ -4,7 +4,7 @@ Every reviewer the `pre-push-review` skill starts reads this first. The first tw
 prompt in `.github/workflows/claude-review.yml`, so the local review asks at least what GitHub's will. One sentence is adapted:
 GitHub's reviewer reads pinned actions' source from the runner, and a local one reads what the agent running the review
 fetched into the run folder. The rest is adapted from the same
-prompt for a review that runs before the push.
+prompt for a review that runs before the push, except the **Severity** paragraph, which is this review's own.
 
 Your review may be the only one this PR gets before it merges on its own, so be
 thorough. For each change, ask what happens on the paths the author didn't test:

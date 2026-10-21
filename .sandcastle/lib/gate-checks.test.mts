@@ -232,8 +232,9 @@ describe("gate-checks.sh's gh repository check", () => {
     [script, "#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app; echo hi\ngh pr checks 3\n"],
     [script, "#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app && echo hi\ngh pr checks 3\n"],
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo.`\n"],
-    // --repo and -R name the repository only after the subcommand, never for
-    // gh api, which has neither, and only for their own gh command.
+    // --repo and -R name the repository after the command group or the
+    // subcommand, never for gh api, which has neither, and only for their own
+    // gh command.
     [skill, "Run `gh api repos/{owner}/{repo}/pulls --repo o/r`.\n"],
     [skill, 'Run `gh pr view 3 --repo ""`.\n'],
     [skill, "Run `gh pr view 3 --repo`.\n"],
@@ -379,9 +380,11 @@ describe("gate-checks.sh's gh repository check", () => {
     assert.match(result.stderr, /export it at the top of a script, alone on its line but for a comment/);
   });
 
+  // Named to sort after every other tracked file, so the missing one is the
+  // listing loop's last, where a failing test is the loop's own status.
   it("skips a tracked file deleted from the worktree, rather than stop the gate", () => {
-    gateWith("scripts/gone.sh", "echo\n");
-    rmSync(join(repo, "scripts/gone.sh"));
+    gateWith("scripts/zz-gone.sh", "echo\n");
+    rmSync(join(repo, "scripts/zz-gone.sh"));
 
     const result = gate(head(), { GATE_SKIP_REVIEW: "1" });
 

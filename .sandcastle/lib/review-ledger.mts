@@ -159,8 +159,8 @@ export const findingSchema = findingFields
 
 // A finding as stored. A ledger recorded before `severity` existed has none,
 // nor a `fix`, and still parses, so check, accept, report and latest read it;
-// one recorded before `security` existed, or between its two lives, has no
-// `security` mark. A finding with no severity counts as a Warning (see
+// one recorded before `security` existed, or by a version that graded
+// findings without requiring the mark, has no `security` mark. A finding with no severity counts as a Warning (see
 // severityOf), so it blocks until a person decides it, and one with no mark
 // counts as a security finding (see isSecurity).
 export const storedFindingSchema = findingFields

@@ -233,3 +233,22 @@ describe("CLAUDE.md's list of the gate's own checks", () => {
     assert.ok(flat.includes("the local review check, the `gh` repository check on every gate,"));
   });
 });
+
+// Issue #83's owner decisions: the uniform thread reply doesn't say which
+// thread an accepted security finding is on (it no longer claims never to
+// confirm one), and every outlier GitHub's review finds becomes a lesson.
+describe("the owner's decisions on #83", () => {
+  it("says the uniform reply doesn't say which thread a security finding is on, in the skill and CLAUDE.md", () => {
+    for (const text of [skill, claude]) {
+      const flat = text.replace(/\s+/g, " ");
+
+      assert.match(flat, /which thread an accepted security finding is on, while the/);
+      assert.doesNotMatch(flat, /never confirms/);
+    }
+  });
+
+  it("keeps the Lessons from GitHub's review section, which CLAUDE.md points the watching agent to", () => {
+    assert.match(skill, /^### Lessons from GitHub's review$/m);
+    assert.ok(claude.replace(/\s+/g, " ").includes("**Lessons from GitHub's review**"));
+  });
+});

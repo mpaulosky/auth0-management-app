@@ -56,7 +56,8 @@ fi
 # so the skills and scripts run gh with it set: a shell file (a .sh name or a
 # #! first line) exports it before its first gh command, and a skill writes
 # GH_REPO=mpaulosky/auth0-management-app before each one, or gives it
-# --repo (or -R) after its subcommand, which gh api has no flag for. gh repo's
+# --repo (or -R) after its command group or subcommand (gh pr -R o/r view 3,
+# gh pr view 3 -R o/r), which gh api has no flag for. gh repo's
 # subcommands don't read GH_REPO, so each takes the repository as its first
 # argument (or -R), except list, create and clone, which name their own.
 # GH_REPO counts only as a prefix of the gh command itself, or an export
@@ -146,7 +147,7 @@ if ((${#gh_files[@]} > 0)); then
     }' "${gh_files[@]}")"
 fi
 if [[ -n "$untold" ]]; then
-  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, alone on its line but for a comment, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill, or give the command --repo mpaulosky/auth0-management-app (or -R) after its subcommand, keeping each gh command on one line. gh api has no --repo: give it GH_REPO. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
+  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, alone on its line but for a comment, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill, or give the command --repo mpaulosky/auth0-management-app (or -R) after its command group or subcommand, keeping each gh command on one line. gh api has no --repo: give it GH_REPO. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
   echo "$untold" >&2
   exit 1
 fi
