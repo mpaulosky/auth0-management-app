@@ -268,7 +268,7 @@ File the open Advisory findings in one follow-up issue per branch, as #81 did. T
 path, line, summary and suggested fix through the same plain-text rendering as the notes, leaves out any finding the
 report marks `(security)`, and ends with the `<!-- claude-session -->` marker. Never write the body by hand, and file
 nothing when it prints "No open Advisory findings." The issue is public, and the report doesn't show the suggested
-fixes it publishes: before running `gh issue create` or `gh issue comment`, show the person the exact text that will be
+fixes it publishes: before creating the issue or adding the comment, show the person the exact text that will be
 posted (`<run>/advisory.md`, or the trimmed comment), and post it only once they say to. An open Advisory finding that re-raises a person's earlier decision (its summary opens
 `R3 again: ...`) isn't work to file: ask the person to accept it again with `scripts/review.sh accept`, which leaves it
 out of `scripts/review.sh advisory`, and file only the rest.
