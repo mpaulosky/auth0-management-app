@@ -99,22 +99,42 @@ if ((${#gh_files[@]} > 0)); then
       # redirect), <owner>/<repo>, a variable, or -R and --repo.
       named = "^repo[ \t]+[a-z-]+[ \t]+([\"" q "]?[^- \t<>`\"" q "$&|;(][^ \t`<>&|;\"" q "]*/|<[A-Za-z]|\"?[$]|-R[ =]|--repo[ =])"
     }
-    # The text of one gh command, up to the next command or gh, with each
-    # quoted argument a bare Q, so the words of a flag inside one, as in
-    # --body "use -R x (y)", are not the flag. A backslash escape is read
-    # first, so an escaped quote is no quote; then quotes, so a separator
-    # inside one is no cut. A pair never spans a backtick, so apostrophes in
-    # different code spans, or in a command and later prose, never pair. An
-    # empty one is <>, which no value matches, and a quote left unpaired ends
-    # the command there with <>, so no value ends at the cut.
-    function own(text) {
-      gsub(/\\./, "E", text)
-      gsub("\"\"|" q q, "<>", text)
-      gsub("\"[^\"`]*\"|" q "[^" q "`]*" q, "Q", text)
-      if (match(text, "[\"" q "]")) text = substr(text, 1, RSTART - 1) "<>"
-      if (match(text, /[`;&|()]/)) text = substr(text, 1, RSTART - 1)
-      if (match(text, /[^A-Za-z0-9_.-]gh[ \t]/)) text = substr(text, 1, RSTART)
-      return text
+    # The text of one gh command, read a character at a time up to a
+    # backtick, an unquoted ; & | ( or ), or the next gh. Each quoted
+    # argument becomes a bare Q (an empty one <>, which no value matches), so
+    # the words of a flag inside one, as in --body "use -R x (y)", are not the
+    # flag. A backslash escapes the next character, except inside single
+    # quotes, where the shell reads it as it is, and except a backtick, which
+    # still ends a code span. A backtick ends the text inside quotes too, so
+    # apostrophes in prose and in different code spans never pair, and a quote
+    # still open there leaves <>, so no value ends at the cut.
+    function own(text,   out, i, n, c, open, empty) {
+      out = ""
+      open = ""
+      n = length(text)
+      for (i = 1; i <= n; i++) {
+        c = substr(text, i, 1)
+        if (c == "`") break
+        if (open == q) {
+          if (c == q) { out = out (empty ? "<>" : "Q"); open = "" } else empty = 0
+          continue
+        }
+        if (c == "\\" && substr(text, i + 1, 1) != "`") {
+          i++
+          if (open == "") out = out "E"; else empty = 0
+          continue
+        }
+        if (open != "") {
+          if (c == open) { out = out (empty ? "<>" : "Q"); open = "" } else empty = 0
+          continue
+        }
+        if (c == "\"" || c == q) { open = c; empty = 1; continue }
+        if (c ~ /[;&|()]/) break
+        out = out c
+      }
+      if (open != "") out = out "<>"
+      if (match(out, /[^A-Za-z0-9_.-]gh[ \t]/)) out = substr(out, 1, RSTART)
+      return out
     }
     FNR == 1 { shell = (FILENAME ~ /\.sh$/ || $0 ~ /^#!/); exported = 0 }
     /^[ \t]*#/ { next }
@@ -147,7 +167,7 @@ if ((${#gh_files[@]} > 0)); then
     }' "${gh_files[@]}")"
 fi
 if [[ -n "$untold" ]]; then
-  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, alone on its line but for a comment, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill, or give the command --repo mpaulosky/auth0-management-app (or -R) after its command group or subcommand, keeping each gh command on one line. gh api has no --repo: give it GH_REPO. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
+  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, alone on its line but for a comment, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill, or give the command --repo mpaulosky/auth0-management-app (or -R) after its command group or subcommand, keeping each gh command on one line. gh api has no --repo: give it GH_REPO. In a skill, a quoted argument that holds a backtick can't be read here: give that command GH_REPO. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
   echo "$untold" >&2
   exit 1
 fi

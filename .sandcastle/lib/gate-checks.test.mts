@@ -264,6 +264,10 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, "Run `gh issue create --body 'it'\\''s -R x'`.\n"],
     [skill, 'Run `gh pr comment 3 --body "a \\" -R x \\" b"`.\n'],
     [skill, 'Run `gh pr view 3 -R o/r"`.\n'],
+    // A backslash before a backtick is no escape, so a code span ending in
+    // one still ends there, and inside single quotes a backslash is literal.
+    [skill, "Run `gh pr view 3 \\` and add --repo o/r later.\n"],
+    [skill, "Run `gh issue create --body 'C:\\' --title ' -R x '`.\n"],
   ]) {
     it(`fails on a gh command not told its repository: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
@@ -322,6 +326,11 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, 'Run `gh pr comment 3 --body "a -R b" --repo o/r`.\n'],
     [skill, "Run `gh pr view 3 --jq '.a[] | .b' --repo o/r`.\n"],
     [skill, 'Run `gh pr view 3 --jq ".a | select(.b == \\"x (y)\\")" --repo o/r`.\n'],
+    [skill, 'Run `gh pr comment 3 --body "say \\"hi\\"" --repo o/r`.\n'],
+    [skill, "Run `gh issue create --body 'it'\\''s' --repo o/r`.\n"],
+    [skill, 'Run `gh pr view 3 --body "a\\\\" -R o/r --title "b"`.\n'],
+    [skill, "Run `gh issue create --body it\\'s --repo o/r`.\n"],
+    [skill, "Run `gh issue create --body 'C:\\' --repo o/r`.\n"],
     [skill, "Run `gh pr view 3 --repo o/r`, but don't run it twice.\n"],
   ]) {
     it(`passes a gh command told its repository, or text that runs none: ${JSON.stringify(content)} in ${file}`, () => {
@@ -360,6 +369,15 @@ describe("gate-checks.sh's gh repository check", () => {
       assert.match(result.stderr, new RegExp(`${file.replaceAll(".", "\\.")}:2:`));
     });
   }
+
+  // The scan ends at a backtick, so it can't read a quoted argument that holds
+  // one; the message says how to tell such a command its repository.
+  it("refuses a quoted argument holding a backtick, and says to give that command GH_REPO", () => {
+    const result = gateWith(skill, "Run `gh pr comment 3 --body 'Fixed in `abc`' --repo o/r`.\n");
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /a quoted argument that holds a backtick can't be read here: give that command GH_REPO/);
+  });
 
   it("names the file and line of each command it refuses", () => {
     const result = gateWith(".claude/skills/a b/SKILL.md", "first\nRun `gh pr view 3`.\n");
