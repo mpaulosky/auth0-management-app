@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { NOT_OWNED, OWNED_PATHS } from "./review-ledger.mts";
+
 // .github/ci/gate-checks.sh's local review check, run for real in a scratch
 // repository whose scripts/review.sh is a stub that logs its arguments and
 // exits with REVIEW_EXIT. The hook tests in .github/hooks/tests (Owned by the
@@ -205,6 +207,9 @@ describe("gate-checks.sh's gh repository check", () => {
       [skill, `Run \`GH_REPO=mpaulosky/auth0-management-app${c} gh pr view 3\`.\n`],
       [script, `#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app${c}\ngh pr checks 3\n`],
     ]),
+    [script, "#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app; echo hi\ngh pr checks 3\n"],
+    [script, "#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app && echo hi\ngh pr checks 3\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo.`\n"],
   ]) {
     it(`fails on a gh command not told its repository: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
@@ -244,6 +249,14 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, "GH_REPO=mpaulosky/auth0-management-app gh pr view 3\n"],
     [skill, "\tGH_REPO=mpaulosky/auth0-management-app gh pr view 3\n"],
     [script, "#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app;\ngh pr checks 3\n"],
+    [script, "#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app ;\ngh pr checks 3\n"],
+    [script, "#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app  \t\ngh pr checks 3\n"],
+    [script, "#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app # every gh below\ngh pr checks 3\n"],
+    [script, '#!/usr/bin/env bash\nexport GH_REPO="$repo"; # every gh below\ngh pr checks 3\n'],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repository view`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo-x view`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo_x view`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo2 view`.\n"],
   ]) {
     it(`passes a gh command told its repository, or text that runs none: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
@@ -261,6 +274,26 @@ describe("gate-checks.sh's gh repository check", () => {
     assert.match(result.stderr, /scripts\/b\.sh:2:/);
     assert.doesNotMatch(result.stderr, /scripts\/a\.sh/);
   });
+
+  // The Template's own check covers them (mpaulosky/dotfiles#267), and this
+  // repository can't change them.
+  const ownedScripts = OWNED_PATHS.filter((path) => path.startsWith("scripts/")).map((path) => path.replace("**", "any.test.sh"));
+  for (const file of ownedScripts) {
+    it(`leaves out the Owned Baseline script ${file}`, () => {
+      const result = gateWith(file, "#!/usr/bin/env bash\ngh pr checks 3\n");
+
+      assert.equal(result.status, 0, result.stderr);
+    });
+  }
+
+  for (const file of [...NOT_OWNED].filter((path) => path.startsWith("scripts/"))) {
+    it(`still checks ${file}, which this repository owns under an Owned pattern`, () => {
+      const result = gateWith(file, "#!/usr/bin/env bash\ngh pr checks 3\n");
+
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, new RegExp(`${file.replaceAll(".", "\\.")}:2:`));
+    });
+  }
 
   it("names the file and line of each command it refuses", () => {
     const result = gateWith(".claude/skills/a b/SKILL.md", "first\nRun `gh pr view 3`.\n");

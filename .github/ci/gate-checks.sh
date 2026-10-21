@@ -58,19 +58,25 @@ fi
 # subcommands don't read it, so each takes the repository as its first
 # argument (or -R), except list, create and clone, which name their own.
 # GH_REPO counts only as a prefix of the gh command itself, or an export
-# alone on its line, with a value that isn't empty. Text that reads gh and a
-# word or flag counts as a command, so prose rewords it, and a gh command is
-# kept on one line: a line that continues gh with a backslash fails, and so
-# does one that ends in gh, unless it's a shell file that has exported
-# GH_REPO (command -v gh). gh repo keeps its subcommand and repository on
-# its line.
-# Whole-line comments are skipped. Only files the worktree has are read, and a
-# listing that fails fails the gate. Cheap enough to run on every gate.
+# alone on its line but for a comment, with a value that isn't empty. Text
+# that reads gh and a word or flag counts as a command, so prose rewords it,
+# and a gh command is kept on one line: a line that continues gh with a
+# backslash fails, and so does one that ends in gh, unless it's a shell file
+# that has exported GH_REPO (command -v gh). gh repo keeps its subcommand and
+# repository on its line. Whole-line comments and the Owned Baseline scripts
+# are skipped. Only files the worktree has are read, and a listing that fails
+# fails the gate. Cheap enough to run on every gate.
 echo -e "${CYAN}🐙 gh commands are told their repository...${RESET}"
 # A process substitution's failure is lost, so list once where set -e sees it.
 git ls-files -z -- .claude/skills scripts > /dev/null
 gh_files=()
 while IFS= read -r -d '' file; do
+  case "$file" in
+    # The Owned Baseline scripts (.claude/rules/baseline.md): this repository
+    # can't change them, and the Template checks its own (mpaulosky/dotfiles#267).
+    scripts/tests/check-git-hooks.test.sh) ;;
+    scripts/gate.sh | scripts/check-branch-name.sh | scripts/check-pr-title.sh | scripts/tests/*) continue ;;
+  esac
   [[ -f "$file" ]] && gh_files+=("$file")
 done < <(git ls-files -z -- .claude/skills scripts)
 untold=""
@@ -81,7 +87,7 @@ if ((${#gh_files[@]} > 0)); then
       # A value gh receives: quoted and not empty, or bare up to the next blank.
       value = "(\"[^\" \t]+\"|" q "[^" q " \t]+" q "|[^ \t`\"" q ";&|,()<>]+)"
       told = "(^|[^A-Za-z0-9_])GH_REPO=" value "[ \t]+$"
-      exports = "^[ \t]*export GH_REPO=" value "([ \t]*;)?[ \t]*$"
+      exports = "^[ \t]*export GH_REPO=" value "[ \t]*(;[ \t]*)?(#.*)?$"
       # gh repo <subcommand>, then its repository: o/r (bare or quoted, not a
       # redirect), <owner>/<repo>, a variable, or -R and --repo.
       named = "^repo[ \t]+[a-z-]+[ \t]+([\"" q "]?[^- \t<>`\"" q "$&|;(][^ \t`<>&|;\"" q "]*/|<[A-Za-z]|\"?[$]|-R[ =]|--repo[ =])"
@@ -104,7 +110,7 @@ if ((${#gh_files[@]} > 0)); then
         rest = substr(rest, at + 2)
         sub(/^[ \t]+/, "", rest)
         # gh repo with no subcommand and repository on its line has none.
-        if (rest ~ /^repo([^A-Za-z0-9_.-]|$)/) {
+        if (rest ~ /^repo([^A-Za-z0-9_-]|$)/) {
           if (rest !~ /^repo[ \t]+(list|create|clone)/ && rest !~ named) {
             print FILENAME ":" FNR ": " $0
             next
@@ -117,7 +123,7 @@ if ((${#gh_files[@]} > 0)); then
     }' "${gh_files[@]}")"
 fi
 if [[ -n "$untold" ]]; then
-  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill, keeping each gh command on one line. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
+  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, alone on its line but for a comment, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill, keeping each gh command on one line. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
   echo "$untold" >&2
   exit 1
 fi
