@@ -680,6 +680,12 @@ async function buildMarkedIssue(
       problem = `lacks the ${missing.map((heading) => `"## ${heading}"`).join(", ")} heading${missing.length > 1 ? "s" : ""}`;
     } else if (prBody.length > PR_BODY_LIMIT) {
       problem = `is ${prBody.length} characters, more than the ${PR_BODY_LIMIT} a PR body can hold`;
+    } else if (prBody.includes("<!--") || /^#{1,6}[ \t]+Review notes[ \t]*$/im.test(prBody)) {
+      // The local review's `## Review notes`, between HTML-comment markers,
+      // are a person's acceptances (scripts/review.sh notes), and a reader
+      // such as Claude Review may take them as decisions. Text an agent wrote
+      // mustn't pass for them, and nothing published should be hidden.
+      problem = "holds an HTML comment or a Review notes section, which only a person's local review writes";
     } else if (host.publicError(prBody) !== prBody) {
       // publicError also strips colour codes and URL credentials. Any change
       // means the file isn't safe to publish as written, so it isn't.

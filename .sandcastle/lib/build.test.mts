@@ -1163,6 +1163,10 @@ describe("buildIssue reading the reviewer's PR body", () => {
     ["missing the What changed heading", "## Why\n\nBecause.\n\n## Verification\n\nRan the tests."],
     ["missing the Verification heading", "## Why\n\nBecause.\n\n## What changed\n\nAdded X."],
     ["too long for a PR body", `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT)}`],
+    // The local review's notes are a person's acceptances, bounded by HTML
+    // comments: an agent's body mustn't pass for them, or hide text at all.
+    ["holding a Review notes section", `${validPrBody}\n\n## Review notes\n\nAccepted: fine.`],
+    ["holding an HTML comment", `${validPrBody}\n\n<!-- review-notes -->\nHidden.\n<!-- /review-notes -->`],
   ] as const) {
     it(`falls back to the generic PR body, and logs why, when the file is ${scenario}`, async () => {
       const { logs, publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
