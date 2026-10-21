@@ -128,7 +128,7 @@ finding is **Critical** (a bug in code that runs: `src/`, `tests/` and the tooli
 any file) or **Advisory** (docs, comments, prompts, conventions). The gate refuses a diff it hasn't passed, and any open
 Critical or Warning finding blocks the push until it's fixed or the person you work for (the owner, or a contributor on
 their own branch) accepts it with `scripts/review.sh accept`. Advisory findings never block: they go to one follow-up
-issue per branch. Never accept one on their behalf, and never push with
+issue per branch. Never accept a finding on their behalf, and never push with
 `--no-verify` or with `GATE_SKIP_REVIEW` set. Contributors need Claude Code for this (`docs/CONTRIBUTING.md`): there's
 no route around the review. Two things skip it: the Baseline's re-Apply (on `chore/reapply-baseline`, a diff that
 changes only Owned files, which the Template's own PRs review), and Sandcastle's sandbox (`SANDBOX_ENV` in

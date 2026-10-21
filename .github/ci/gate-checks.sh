@@ -32,8 +32,9 @@ run_clean() {
   env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX "$@"
 }
 
-# The local review (/pre-push-review) must have passed this branch's diff:
-# every finding fixed, dismissed or accepted. First, so a push it would refuse
+# The local review (/pre-push-review) must have passed this branch's diff,
+# with no open Critical or Warning finding (open Advisory findings pass and go
+# to the branch's follow-up issue). First, so a push it would refuse
 # doesn't wait for the build. GATE_SKIP_REVIEW=1 (that value only) skips it:
 # the skill sets it on its own gate runs, and Sandcastle on every gate in its
 # sandbox (.sandcastle/lib/skills.mts) until its reviewer runs the same review.

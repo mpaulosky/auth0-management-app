@@ -23,7 +23,7 @@ Every finding has a severity, and the severity decides what happens to it:
 
 | Severity | What it covers | Fix | Blocks the push? |
 | --- | --- | --- | --- |
-| **Critical** | Bugs in code that runs: application code (`src/`), tests (`tests/`) and the repository's tooling (`.sandcastle/`, `scripts/`, `.github/ci/`, `.github/scripts/`, workflows, git hooks) | Fixed in the review, behind a regression test | Yes, until fixed |
+| **Critical** | Bugs in code that runs: application code (`src/`), tests (`tests/`) and the repository's tooling (`.sandcastle/`, `scripts/`, `.github/ci/`, `.github/scripts/`, workflows, git hooks) | Fixed in the review, behind a regression test | Yes, until fixed, or until the person accepts one left open for them (`needsPerson`, or an earlier decision) |
 | **Warning** | Security weaknesses, whatever file they're in | Suggested; the person chooses to fix it or accept it | Yes, until the person decides |
 | **Advisory** | Docs, comments, skill and prompt text, conventions, everything else | Suggested, reported only | Never |
 
