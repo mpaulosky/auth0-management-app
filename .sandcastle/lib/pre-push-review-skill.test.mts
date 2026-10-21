@@ -17,6 +17,16 @@ describe("the pre-push-review skill's reviewers", () => {
     assert.match(frontMatter, /^tools: Read, Grep, Glob$/m);
   });
 
+  // A key Claude Code reads that this test doesn't know, or a second `tools`
+  // line it might read instead, could give them more than these.
+  it("are defined by exactly a name, a description, their tools and a model, each once", () => {
+    const frontMatter = /^---\n([\s\S]*?)\n---\n/.exec(agent)?.[1] ?? "";
+
+    const keys = frontMatter.split("\n").flatMap((line) => /^([^\s#][^:]*):/.exec(line)?.[1] ?? []);
+
+    assert.deepEqual(keys, ["name", "description", "tools", "model"]);
+  });
+
   // Rooted at the filesystem (`//`): a rule without it is relative to the
   // session's folder, and from a worktree the ledgers are in the main
   // checkout's .git. The folder itself is denied too, so a Grep or Glob of it

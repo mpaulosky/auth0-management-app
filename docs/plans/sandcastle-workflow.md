@@ -336,7 +336,7 @@ Between the lints and the build, `scripts/gate.sh` runs the repository's own che
 refuses a diff `/pre-push-review` hasn't passed. Every gate in the sandbox skips it, because `SANDBOX_ENV` (`lib/skills.mts`) sets `GATE_SKIP_REVIEW=1` there until Sandcastle's
 reviewer runs that review, so the sandbox can pass a gate a person's pre-push would refuse. The others are the Copilot review sync check, the test of `scripts/check-git-hooks.sh`, and
 the Sandcastle TypeScript check of step 3, which also reruns when any other file `gate-checks.sh` lists for it changes (the review's and the gate's scripts, the
-skills and agent it tests, and `.claude/rules/baseline.md`).
+skills and agent it tests, `.claude/settings.json`, `README.md` and `.claude/rules/baseline.md`).
 
 CodeQL, metrics and coverage stay in CI. `yamllint` is added to `.sandcastle/Dockerfile`, and `lint-yaml.yml` reads `config_file: .yamllint.yml` so there is one YAML config. The
 pre-push hook keeps its branch-name and protected-branch checks, then calls the script.

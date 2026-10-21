@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 // .github/ci/gate-checks.sh's local review check, run for real in a scratch
 // repository whose scripts/review.sh is a stub that logs its arguments and
-// exits with REVIEW_EXIT. The hook tests in .github/hooks/tests (Owned by the
+// exits with REVIEW_EXIT, and whose hook test is a stub that passes. The hook tests in .github/hooks/tests (Owned by the
 // Baseline) replace this file with a stub, so nothing else runs it.
 // Only the config each test sets, not the machine's (see review-ledger.test.mts).
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";
@@ -29,6 +29,10 @@ beforeEach(() => {
   copyFileSync(gateChecks, join(repo, ".github/ci/gate-checks.sh"));
   writeFileSync(join(repo, "scripts/review.sh"), `#!/usr/bin/env bash\necho "$*" >> '${log}'\nexit "\${REVIEW_EXIT:-0}"\n`);
   chmodSync(join(repo, "scripts/review.sh"), 0o755);
+  // The hook test reruns on some of the same files (.claude/settings.json), so
+  // it passes here and the Sandcastle check after it is reached.
+  mkdirSync(join(repo, "scripts/tests"));
+  writeFileSync(join(repo, "scripts/tests/check-git-hooks.test.sh"), "exit 0\n");
   run("add", ".");
   run("commit", "--quiet", "-m", "start");
 });
@@ -115,6 +119,30 @@ describe("gate-checks.sh's local review check", () => {
     assert.match(result.stdout, /Sandcastle TypeScript check/);
     assert.match(calls(), /^run check:sandcastle$/m);
   });
+
+  // pre-push-review-skill.test.mts reads these three, so a change to only one
+  // of them must rerun it.
+  for (const file of [".claude/agents/pre-push-reviewer.md", ".claude/skills/pre-push-review/SKILL.md", ".claude/settings.json"]) {
+    it(`reruns the Sandcastle check when only ${file} changes, since pre-push-review-skill.test.mts reads it`, () => {
+      // Arrange
+      const base = head();
+      mkdirSync(join(repo, file, ".."), { recursive: true });
+      writeFileSync(join(repo, file), "changed\n");
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "add", "."], { cwd: repo });
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "change"], { cwd: repo });
+      const bin = join(repo, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "pnpm"), `#!/bin/sh\necho "$*" >> '${log}'\n`);
+      chmodSync(join(bin, "pnpm"), 0o755);
+
+      // Act
+      const result = gate(base, { GATE_SKIP_REVIEW: "1", PATH: `${bin}:${process.env.PATH ?? ""}` });
+
+      // Assert
+      assert.match(result.stdout, /Sandcastle TypeScript check/);
+      assert.match(calls(), /^run check:sandcastle$/m);
+    });
+  }
 
   it("doesn't skip the check for any other value of GATE_SKIP_REVIEW", () => {
     const result = gate(head(), { GATE_SKIP_REVIEW: "true", REVIEW_EXIT: "1" });
