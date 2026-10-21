@@ -27,12 +27,22 @@ import { commentOnIssue, markerComments, openPullRequest, repoName, type Sandcas
 import { handBackWorkflowChange, recordFailedAttempt, type WorkflowChange } from "./handback.mts";
 import { repoGitDir, worktreeLinkProblems, worktreePathFor } from "./host-safety.mts";
 import { runLimits, type RunLimits } from "./limits.mts";
+import { visibleLetters } from "./plain-text.mts";
 import { architectPromptArgs, backendPromptArgs, gateFixerPromptArgs, issuePromptArgs } from "./prompts.mts";
 import type { Outcome } from "./report.mts";
 import { containsSandboxSecret, containsSecret, sandboxSecrets } from "./sandbox-env.mts";
 import { describeSecretMatch, firstSecretMatch, type SecretMatch } from "./scan.mts";
 import { git } from "./shell.mts";
 import { agentSandbox } from "./skills.mts";
+
+// What in a reviewer's PR description GitHub renders as nothing, so a reader
+// of the raw text (Claude Review, the release post's summary) would see what
+// the people reading the PR don't: an HTML comment, declaration, CDATA or
+// processing instruction (`<!`, `<?`); a link reference definition, which
+// may sit in a quote or list and escape a bracket (`]:`); a character
+// reference, which can spell what the other checks look for; and an element
+// GitHub drops with its content.
+const HIDDEN_TEXT = /<[!?]|\]:|&#?\w+;|<\/?(?:script|style|noscript|template|textarea|iframe|svg|math|xmp|plaintext|noembed|noframes)\b/i;
 
 // Re-exported for the callers and tests that already import it from here.
 export { UncountedStopError };
@@ -663,10 +673,6 @@ async function buildMarkedIssue(
   // commit, the Release's notes, the release blog), so anything it can't be
   // trusted with as it is returns undefined, for publish()'s generic body,
   // and the log says why: a missing description never blocks publishing.
-  // Text as a reader sees its words: compatibility forms folded (NFKC),
-  // zero-width characters dropped and every kind of space made one.
-  const visibleWords = (text: string) => text.normalize("NFKC").replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, "").replace(/\s+/g, " ");
-
   async function reviewerPrBody(): Promise<string | undefined> {
     let read: { stdout: string; exitCode: number };
     try {
@@ -684,16 +690,16 @@ async function buildMarkedIssue(
       problem = `lacks the ${missing.map((heading) => `"## ${heading}"`).join(", ")} heading${missing.length > 1 ? "s" : ""}`;
     } else if (prBody.length > PR_BODY_LIMIT) {
       problem = `is ${prBody.length} characters, more than the ${PR_BODY_LIMIT} a PR body can hold`;
-    } else if (prBody.includes("<!--") || /^ {0,3}\[[^\]]*\]:/m.test(prBody) || /review\s*notes/i.test(visibleWords(prBody))) {
+    } else if (HIDDEN_TEXT.test(prBody) || visibleLetters(prBody).includes("reviewnotes")) {
       // The local review's `## Review notes`, between HTML-comment markers,
       // are a person's acceptances (scripts/review.sh notes), and a reader
       // such as Claude Review may take them as decisions: text an agent wrote
-      // mustn't pass for them, in any heading form, so the words are refused
-      // wherever they are. Nothing published is hidden from the people
-      // reading it either: no HTML comment, even quoted (the host adds its
-      // own marker), and no link reference definition, which renders as
-      // nothing.
-      problem = "holds an HTML comment, a link reference definition or the words Review notes, which only the host and a person's local review write";
+      // mustn't pass for them in any form, so the words are refused wherever
+      // a reader would see them, even run together in a name. Nothing
+      // published is hidden from the people reading it either (see
+      // HIDDEN_TEXT). Each is refused even quoted in code: a false refusal
+      // only costs the generic body.
+      problem = "holds markup GitHub hides, or the words Review notes, which only a person's local review writes";
     } else if (host.publicError(prBody) !== prBody) {
       // publicError also strips colour codes and URL credentials. Any change
       // means the file isn't safe to publish as written, so it isn't.

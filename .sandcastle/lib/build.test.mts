@@ -1174,6 +1174,18 @@ describe("buildIssue reading the reviewer's PR body", () => {
     ["holding an HTML comment", `${validPrBody}\n\n<!-- review-notes -->\nHidden.\n<!-- /review-notes -->`],
     ["holding an HTML comment quoted in a code span", `${validPrBody}\n\nRemoved the \`<!-- TODO -->\`.`],
     ["holding a link reference definition, which renders as nothing", `${validPrBody}\n\n[//]: # (Hidden from people.)`],
+    ["holding a link reference definition in a quote", `${validPrBody}\n\n> [x]: # (Hidden.)`],
+    ["holding a link reference definition in a list item", `${validPrBody}\n\n- [x]: # (Hidden.)`],
+    ["holding a link reference definition with an escaped bracket", `${validPrBody}\n\n[a\\]]: # (Hidden.)`],
+    ["holding a processing instruction", `${validPrBody}\n\nDone.<?x hidden ?>`],
+    ["holding a declaration", `${validPrBody}\n\nDone.<!X hidden>`],
+    ["holding CDATA", `${validPrBody}\n\nDone.<![CDATA[hidden]]>`],
+    ["holding an element GitHub drops with its content", `${validPrBody}\n\n<style>hidden</style>`],
+    ["holding Review notes in fullwidth letters", `${validPrBody}\n\n## \uff32\uff45\uff56\uff49\uff45\uff57 \uff4e\uff4f\uff54\uff45\uff53`],
+    ["holding Review notes with emphasis inside a word", `${validPrBody}\n\n## Re*view* **notes**`],
+    ["holding Review notes with a character reference", `${validPrBody}\n\n## Review&#32;notes`],
+    ["holding Review notes with an invisible format character", `${validPrBody}\n\n## Review\u200e\u034f notes`],
+    ["holding Review notes in a name", `${validPrBody}\n\nRenamed renderReviewNotes.`],
   ] as const) {
     it(`falls back to the generic PR body, and logs why, when the file is ${scenario}`, async () => {
       const { logs, publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
