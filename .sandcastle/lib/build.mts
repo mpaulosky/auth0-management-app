@@ -43,9 +43,11 @@ export const HIDDEN_ELEMENTS = ["script", "style", "noscript", "template", "text
 
 // The character references HTML decodes without their semicolon (the legacy
 // names in its spec), so `Review&nbspnotes` reads "Review notes" where HTML
-// is shown. Any other `&` and letters is printed as written (`&tabs=` in a
+// is shown. They are matched in any case and at the start of a longer word
+// (`&section=` starts with `&sect`), outside a link: a false refusal only costs
+// the generic body. Any other `&` and letters is printed as written (`&tabs=` in a
 // link's query string, `R&D`).
-const LEGACY_REFERENCES = [
+export const LEGACY_REFERENCES = [
   "AElig", "AMP", "Aacute", "Acirc", "Agrave", "Aring", "Atilde", "Auml", "COPY", "Ccedil", "ETH", "Eacute", "Ecirc", "Egrave", "Euml", "GT", "Iacute",
   "Icirc", "Igrave", "Iuml", "LT", "Ntilde", "Oacute", "Ocirc", "Ograve", "Oslash", "Otilde", "Ouml", "QUOT", "REG", "THORN", "Uacute", "Ucirc",
   "Ugrave", "Uuml", "Yacute", "aacute", "acirc", "acute", "aelig", "agrave", "amp", "aring", "atilde", "auml", "brvbar", "ccedil", "cedil", "cent",
@@ -62,16 +64,25 @@ const LEGACY_REFERENCES = [
 // a quote or list and escape a bracket (`]:`); an element in HIDDEN_ELEMENTS;
 // and a character reference, which GitHub does show but which can spell what
 // the other checks look for: one with its semicolon, a numeric one without
-// (`&#` and a digit or letter), and a legacy named one without (above).
+// (`&#` and a digit or letter), and a legacy named one without (above), which
+// isn't looked for in a link's destination, a bare URL or an autolink, where
+// GitHub prints it as written.
 const HIDDEN_TEXT = new RegExp(
-  String.raw`<[!?]|\]:|&#?\w+;|&#[0-9a-z]|&(?:${LEGACY_REFERENCES.join("|")})|<\/?(?:${HIDDEN_ELEMENTS.join("|")})\b`,
+  String.raw`<[!?]|\]:|&#?\w+;|&#[0-9a-z]|<\/?(?:${HIDDEN_ELEMENTS.join("|")})\b`,
   "i",
 );
+const LEGACY_REFERENCE = new RegExp(String.raw`&(?:${LEGACY_REFERENCES.join("|")})`, "i");
+const withoutLinks = (text: string) => text.replace(/\]\([^)\s]*|<https?:\/\/[^>\s]*>|\bhttps?:\/\/[^\s)>\]]*/gi, " ");
 
-// A letter outside the Latin script. A description of this repository's change
-// is plain English, and no table of look-alikes could cover the scripts that
-// spell "Review notes" whole (Lisu, Cherokee), so any other script is refused.
-const NON_LATIN_LETTER = /[^\P{L}\p{Script=Latin}]/u;
+// A character a plain English description needs: printable ASCII, tab and
+// newline, the Latin-1 and Latin Extended-A letters and signs with their
+// accents (not the no-break space, soft hyphen or inverted exclamation mark,
+// which are invisible or look like an i) and a few typographic marks (dashes,
+// curly quotes, an ellipsis, arrows, comparisons, check marks). Anything else
+// is refused: no table of look-alikes could cover every script and symbol that
+// draws a letter of "Review notes" (Lisu and Cherokee spell it whole, the
+// estimated sign draws an e), and a false refusal only costs the generic body.
+const OUTSIDE_PLAIN_ENGLISH = /[^\t\n\x20-\x7e\u00a2-\u00ac\u00ae-\u017f\u2013\u2014\u2018\u2019\u201c\u201d\u2026\u2190-\u2193\u2264\u2265\u2713\u2714]/u;
 
 // Re-exported for the callers and tests that already import it from here.
 export { UncountedStopError };
@@ -725,7 +736,7 @@ async function buildMarkedIssue(
       problem = `lacks the ${missing.map((heading) => `"## ${heading}"`).join(", ")} heading${missing.length > 1 ? "s" : ""}`;
     } else if (published.length > PR_BODY_LIMIT) {
       problem = `is ${published.length} characters once its references are broken, more than the ${PR_BODY_LIMIT} a PR body can hold`;
-    } else if (HIDDEN_TEXT.test(prBody) || NON_LATIN_LETTER.test(prBody) || visibleLetters(prBody).includes("reviewnotes")) {
+    } else if (HIDDEN_TEXT.test(prBody) || LEGACY_REFERENCE.test(withoutLinks(prBody)) || OUTSIDE_PLAIN_ENGLISH.test(prBody) || visibleLetters(prBody).includes("reviewnotes")) {
       // The local review's `## Review notes`, between HTML-comment markers,
       // are a person's acceptances (scripts/review.sh notes), and a reader
       // such as Claude Review may take them as decisions: text an agent wrote
@@ -734,7 +745,7 @@ async function buildMarkedIssue(
       // published is hidden from the people reading it either (see
       // HIDDEN_TEXT). Each is refused even quoted in code: a false refusal
       // only costs the generic body.
-      problem = "holds markup GitHub hides, a character reference, a letter that isn't Latin, or the words Review notes, which only a person's local review writes";
+      problem = "holds markup GitHub hides, a character reference, a character outside plain English, or the words Review notes, which only a person's local review writes";
     } else if (host.publicError(prBody) !== prBody) {
       // publicError also strips colour codes and URL credentials. Any change
       // means the file isn't safe to publish as written, so it isn't.

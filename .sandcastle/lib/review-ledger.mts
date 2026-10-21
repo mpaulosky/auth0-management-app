@@ -300,11 +300,11 @@ const pinnedDiff = [
 ];
 
 // The extensions of files that are binary by nature: only files named as one
-// of these may have a NUL in their first 8000 bytes, so a source or text file
-// with a stray NUL is refused. A file named as a binary format is taken for
-// one whatever it holds, and the reviewers see only its name. The list errs
-// short: a binary file with another extension is refused, and the person adds
-// it here.
+// of these may have a NUL in their first 8000 bytes, and git then shows the
+// reviewers only their names, so a source or text file with a stray NUL is
+// refused. (A byte order mark, and a binary file turned into text, are refused
+// whatever the name.) The list errs short: a binary file with another
+// extension is refused, and the person adds it here.
 export const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
   "png", "jpg", "jpeg", "gif", "ico", "webp", "avif", "bmp", "tif", "tiff", "woff", "woff2", "ttf", "otf", "eot",
   "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "jar", "nupkg", "snupkg",
@@ -773,14 +773,15 @@ export function spliceReviewNotes(body: string, notes: string): string {
   const unmarked = (index: number) => !fenced[index] && (index < first || index > last);
   if (outside((line, index) => unmarked(index) && readsReviewNotes(line)).length > 0) throw ask("has a Review notes section without markers");
   // A heading can span lines (setext text, an <h2> broken across two), so each
-  // paragraph is read as one line as well.
+  // paragraph is read as one text as well, its line endings kept (a tag or a
+  // blockquote's marker depends on them).
   let paragraph: string[] = [];
   for (const [index, line] of [...lines, ""].entries()) {
     if (index < lines.length && line.trim() !== "" && unmarked(index)) {
       paragraph.push(line);
       continue;
     }
-    if (paragraph.length > 1 && readsReviewNotes(paragraph.join(" "))) throw ask("has a Review notes section without markers");
+    if (paragraph.length > 1 && readsReviewNotes(paragraph.join("\n"))) throw ask("has a Review notes section without markers");
     paragraph = [];
   }
   if (lines.slice(first, last + 1).some((line) => isClosingLine(line) || isFooter(line))) throw ask("has its closing line or footer inside the Review notes markers");

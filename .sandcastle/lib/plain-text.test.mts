@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, visibleLetters } from "./plain-text.mts";
+import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, TAG, visibleLetters } from "./plain-text.mts";
 
 describe("visibleLetters", () => {
   for (const [form, text] of [
@@ -101,15 +101,78 @@ describe("visibleLetters", () => {
     });
   }
 
+  // The tag grammar itself (CommonMark's), tested on TAG directly since the
+  // other readings of visibleLetters would hide a change to it.
   for (const [form, text] of [
-    ["a blank line", 'Re<a\n\nhref="u">view'],
-    ["a blank line holding spaces", 'Re<a\n \t \nhref="u">view'],
+    ["a blank line between attributes", 'Re<a\n\nhref="u">view'],
+    ["a blank line holding spaces and a tab", 'Re<a\n \t \nhref="u">view'],
     ["a no-break space between a name and an attribute", 'Re<a\u00a0href="u">view'],
+    ["a blank line inside a double-quoted value", '<a _="\n\nx">'],
+    ["a blank line inside a single-quoted value", "<a _='\n \nx'>"],
+    ["a blank line holding a tab inside a quoted value", '<a _="x\n\t\ny">'],
+    ["a name that starts with a digit", "<1a>"],
+    ["an autolink", "<https://example.com/x>"],
   ] as const) {
-    it(`doesn't take a < and a > with ${form} between them for a tag`, () => {
-      assert.ok(!visibleLetters(text).split(" ").includes("review"), visibleLetters(text));
+    it(`doesn't take ${form} for a tag`, () => {
+      assert.equal(text.match(TAG), null);
     });
   }
+
+  for (const [form, text] of [
+    ["a quoted value holding one line ending", '<a title="x\ny">'],
+    ["a quoted value holding a >", '<a title="x>y">'],
+    ["an unquoted value holding a no-break space", "<a href=x\u00a0y>"],
+    ["an unquoted value holding an ideographic space", "<a href=x\u3000y>"],
+    ["a form feed between attributes", "<b\f>"],
+    ["a vertical tab between attributes", "<b\v>"],
+    ["a closing tag", "</b >"],
+    ["a self-closing tag", "<br/>"],
+  ] as const) {
+    it(`takes ${form} for a tag`, () => {
+      assert.equal(text.match(TAG)?.[0], text);
+    });
+  }
+
+  // Round 4: what the browser reads as a tag where CommonMark doesn't, a
+  // blockquote's marker, a literal < beside a real tag, a title beside an alt.
+  for (const [form, text] of [
+    ["an unquoted value with a no-break space", "Re<a href=x\u00a0>view notes</a>"],
+    ["an unquoted value with an ideographic space", "Re<a href=x\u3000>view notes</a>"],
+    ["an unquoted value with a no-break space inside the tag", "Rev<b title=x\u00a0y>iew notes"],
+    ["a form feed inside a tag", "Rev<b\f>iew notes"],
+    ["a tag name the browser accepts, in an HTML block", "<div>\nRev<x_>iew notes\n</div>"],
+    ["a no-break space inside a tag, in an HTML block", '<div>\nRe<a\u00a0href="u">view notes\n</div>'],
+    ["a heading made of a tag the browser accepts", "<h2><x_>Review notes</h2>"],
+    ["a real tag and a code span", "Re<b>view</b> `<notes>`"],
+    ["a real tag and an escaped <", "Re<b>view</b> \\<notes>"],
+    ["a code span and an image's alt", '`<x Review>`<img alt="notes" src="b">'],
+    ["a title before an alt", '## Review <img title="x" alt="notes" src="missing.png">'],
+    ["a titled span inside the phrase and an alt", 'Re<span title="x">view <img alt="notes" src="x.png">'],
+    ["an aria-label inside the phrase", 'Rev<span aria-label="iew notes"></span>'],
+    ["a tag open across a blockquote's line", "> Re<b\n> x>view notes"],
+    ["a tag with an attribute across a blockquote's line", '> Re<span\n> class="x">view notes'],
+    ["a comment closed by --!>", "<!-- x --!><h2>Review notes</h2><!-- -->"],
+    ["a declaration-shaped text", "## <! Review notes>"],
+    ["a processing-instruction-shaped text", "## <? Review notes >"],
+    ["a comment that never closes", "## <!-- Review notes >"],
+  ] as const) {
+    it(`reads ${form} as the phrase`, () => {
+      assert.ok(visibleLetters(text).includes("reviewnotes"), visibleLetters(text));
+    });
+  }
+
+  it("doesn't read an attribute whose name only ends in alt as alt text", () => {
+    assert.ok(!visibleLetters('Review <img data-alt="notes" src=x>').split(" ").includes("reviewnotes"));
+  });
+
+  it("reads a real declaration, CDATA section and processing instruction as hidden", () => {
+    assert.equal(visibleLetters("a<!x>b<![CDATA[ hidden ]]>c<?php hidden ?>d"), "abcd");
+  });
+
+  // R95's browser reading drops what a browser calls a tag.
+  it("reads <div> and a tag a browser accepts as drawing nothing", () => {
+    assert.ok(visibleLetters("Re<a\u00a0href=x>view").split(" ").includes("review"));
+  });
 
   // The expected look-alikes, written out here rather than read from the
   // tables, so a wrong letter or a mistyped code point fails.

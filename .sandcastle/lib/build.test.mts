@@ -10,6 +10,7 @@ import {
   latestDesignNote,
   isGitHubServerError,
   isWorkflowPushRejection,
+  LEGACY_REFERENCES,
   PR_BODY_LIMIT,
   publicErrorText,
   publish,
@@ -1223,6 +1224,19 @@ describe("buildIssue reading the reviewer's PR body", () => {
     ["holding a two-letter legacy reference without its semicolon", `${validPrBody}\n\nUses &lt here.`],
     ["holding an upper-case two-letter reference without its semicolon", `${validPrBody}\n\nUses &AMP here.`],
     ["holding a legacy name at the start of a longer word", `${validPrBody}\n\nSee &notes.`],
+    ["holding Review notes finished by an alt after a title", `${validPrBody}\n\n## Review <img title="x" alt="notes" src="missing.png">`],
+    ["holding Review notes round a tag with a no-break space in a value", `${validPrBody}\n\nRe<a href=x\u00a0>view notes</a>`],
+    ["holding Review notes in an HTML block with a tag only a browser reads", `${validPrBody}\n\n<div>\nRev<x_>iew notes\n</div>`],
+    ["holding Review notes round a real tag and a code span", `${validPrBody}\n\nRe<b>view</b> \`<notes>\``],
+    ["holding Review notes across a blockquote's line", `${validPrBody}\n\n> Re<b\n> x>view notes`],
+    ["holding a micro-look-alike symbol, the estimated sign", `${validPrBody}\n\nR\u212Eview notes`],
+    ["holding a Latin letter outside the table, a small iota", `${validPrBody}\n\nRev\u0269ew notes`],
+    ["holding an inverted exclamation mark", `${validPrBody}\n\nRev\u00a1ew notes`],
+    ["holding a no-break space", `${validPrBody}\n\nA\u00a0b.`],
+    ["holding a soft hyphen", `${validPrBody}\n\nA\u00adb.`],
+    ["holding a modifier letter apostrophe", `${validPrBody}\n\nIt\u02bcs.`],
+    ["holding a fullwidth Latin letter", `${validPrBody}\n\n\uff32\uff45\uff56 test.`],
+    ["holding a legacy name before an equals sign outside a link", `${validPrBody}\n\nSet &sect=1 now.`],
     ["holding Review notes in a name", `${validPrBody}\n\nRenamed renderReviewNotes.`],
     // The character-reference rule alone: visibleLetters drops these without
     // reading the letters they spell.
@@ -1264,7 +1278,11 @@ describe("buildIssue reading the reviewer's PR body", () => {
     ["a link with a query string", "See [the docs](https://learn.microsoft.com/dotnet/api?view=net-10.0&tabs=windows&pivots=cs)."],
     ["an ampersand and a word that no legacy reference starts", "Q&As and AT&T and fish&chips."],
     ["accented Latin letters", "Überprüfung of the café, naïve."],
-    ["fullwidth Latin letters", "\uff32\uff45\uff56 test."],
+    ["a micro sign", "Takes 3 \u00b5s."],
+    ["typographic marks", "A \u2013 B \u2014 \u201cC\u201d \u2018D\u2019 \u2026 \u2192 \u2264 \u2265 \u2713."],
+    ["a link whose query holds legacy-named keys", "See [docs](https://example.com/x?a=1&section=b&region=us&param=x&notify=1&center=2)."],
+    ["a bare URL whose query holds a legacy-named key", "See https://example.com/x?a=1&section=b."],
+    ["an autolink whose query holds a legacy-named key", "See <https://example.com/x?a=1&region=us>."],
     ["a fenced code block with an operator", "```csharp\nvar a = b < c;\n```"],
   ] as const) {
     it(`publishes the reviewer's description when it holds ${scenario}`, async () => {
@@ -1276,6 +1294,41 @@ describe("buildIssue reading the reviewer's PR body", () => {
       assert.equal(publishedPrBodies.at(-1), prBodyFile);
     });
   }
+
+  // The legacy names HTML decodes without a semicolon (the spec's list),
+  // written out here rather than read from the constant, so a dropped or
+  // mistyped name fails.
+  const legacyNames = [
+    "AElig", "AMP", "Aacute", "Acirc", "Agrave", "Aring", "Atilde", "Auml", "COPY", "Ccedil", "ETH", "Eacute", "Ecirc", "Egrave", "Euml", "GT",
+    "Iacute", "Icirc", "Igrave", "Iuml", "LT", "Ntilde", "Oacute", "Ocirc", "Ograve", "Oslash", "Otilde", "Ouml", "QUOT", "REG", "THORN",
+    "Uacute", "Ucirc", "Ugrave", "Uuml", "Yacute", "aacute", "acirc", "acute", "aelig", "agrave", "amp", "aring", "atilde", "auml", "brvbar",
+    "ccedil", "cedil", "cent", "copy", "curren", "deg", "divide", "eacute", "ecirc", "egrave", "eth", "euml", "frac12", "frac14", "frac34",
+    "gt", "iacute", "icirc", "iexcl", "igrave", "iquest", "iuml", "laquo", "lt", "macr", "micro", "middot", "nbsp", "not", "ntilde", "oacute",
+    "ocirc", "ograve", "ordf", "ordm", "oslash", "otilde", "ouml", "para", "plusmn", "pound", "quot", "raquo", "reg", "sect", "shy", "sup1",
+    "sup2", "sup3", "szlig", "thorn", "times", "uacute", "ucirc", "ugrave", "uml", "uuml", "yacute", "yen", "yuml",
+  ];
+
+  it("lists exactly the legacy character references HTML decodes without a semicolon", () => {
+    assert.deepEqual([...LEGACY_REFERENCES].sort(), [...legacyNames].sort());
+  });
+
+  for (const name of legacyNames) {
+    it(`falls back to the generic PR body when the file holds &${name} without its semicolon`, async () => {
+      const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile: `${validPrBody}\n\nUses &${name}x here.` });
+
+      await buildIssue(issue, branch, base, buildHost);
+
+      assert.equal(publishedPrBodies.at(-1), undefined);
+    });
+  }
+
+  it("falls back to the generic PR body when the file spells a letter of the phrase with a reference", async () => {
+    const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile: `${validPrBody}\n\nReview n&ordmtes.` });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(publishedPrBodies.at(-1), undefined);
+  });
 
   it("publishes a description of exactly the limit", async () => {
     const prBodyFile = `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT - validPrBody.length - 2)}`;
