@@ -157,7 +157,7 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo edit --description x`.\n"],
   ]) {
     it(`fails on a gh command not told its repository: ${JSON.stringify(content)} in ${file}`, () => {
-      const result = gateWith(file, content);
+      const result = gateWith(file ?? "", content ?? "");
 
       assert.equal(result.status, 1);
       assert.match(result.stderr, /GH_REPO=mpaulosky\/auth0-management-app/);
@@ -181,7 +181,7 @@ describe("gate-checks.sh's gh repository check", () => {
     ["docs/notes.md", "gh pr view 3\n"],
   ]) {
     it(`passes a gh command told its repository, or text that runs none: ${JSON.stringify(content)} in ${file}`, () => {
-      const result = gateWith(file, content);
+      const result = gateWith(file ?? "", content ?? "");
 
       assert.equal(result.status, 0, result.stderr);
     });
