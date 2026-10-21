@@ -35,14 +35,20 @@ import { describeSecretMatch, firstSecretMatch, type SecretMatch } from "./scan.
 import { git } from "./shell.mts";
 import { agentSandbox } from "./skills.mts";
 
-// What in a reviewer's PR description GitHub renders as nothing, so a reader
-// of the raw text (Claude Review, the release post's summary) would see what
-// the people reading the PR don't: an HTML comment, declaration, CDATA or
-// processing instruction (`<!`, `<?`); a link reference definition, which
-// may sit in a quote or list and escape a bracket (`]:`); a character
-// reference, which can spell what the other checks look for; and an element
-// GitHub drops with its content.
-const HIDDEN_TEXT = /<[!?]|\]:|&#?\w+;|<\/?(?:script|style|noscript|template|textarea|iframe|svg|math|xmp|plaintext|noembed|noframes)\b/i;
+// The elements a sanitizer such as GitHub's may drop with their content, which
+// would hide their text from the people reading a PR: the usual remove-with-
+// contents list (script, style and the like) plus template and textarea,
+// assumed rather than checked on GitHub. The reviewer prompt names each.
+export const HIDDEN_ELEMENTS = ["script", "style", "noscript", "template", "textarea", "iframe", "svg", "math", "xmp", "plaintext", "noembed", "noframes"] as const;
+
+// What in a reviewer's PR description a reader of the raw text (Claude Review,
+// the release post's summary) would see and the people reading the PR may
+// not: an HTML comment, declaration, CDATA or processing instruction (`<!`,
+// `<?`); a link reference definition, which renders as nothing and may sit in
+// a quote or list and escape a bracket (`]:`); an element in HIDDEN_ELEMENTS;
+// and a character reference, which GitHub does show but which can spell what
+// the other checks look for.
+const HIDDEN_TEXT = new RegExp(String.raw`<[!?]|\]:|&#?\w+;|<\/?(?:${HIDDEN_ELEMENTS.join("|")})\b`, "i");
 
 // Re-exported for the callers and tests that already import it from here.
 export { UncountedStopError };
@@ -699,7 +705,7 @@ async function buildMarkedIssue(
       // published is hidden from the people reading it either (see
       // HIDDEN_TEXT). Each is refused even quoted in code: a false refusal
       // only costs the generic body.
-      problem = "holds markup GitHub hides, or the words Review notes, which only a person's local review writes";
+      problem = "holds markup GitHub hides, a character reference, or the words Review notes, which only a person's local review writes";
     } else if (host.publicError(prBody) !== prBody) {
       // publicError also strips colour codes and URL credentials. Any change
       // means the file isn't safe to publish as written, so it isn't.

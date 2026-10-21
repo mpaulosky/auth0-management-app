@@ -97,7 +97,9 @@ sentences. Use exactly these three headings, in this order, and no others at tha
 - **What changed**: what the branch does, as a short list a reader can check against the diff. Name any departure from the design note.
 - **Verification**: the tests added or changed, by file and what they pin, and the gate checkpoints the branch passed. Claim only checks this run made or the commits record:
   never a manual test, a real-sandbox run or a CI result nobody ran.
-- Never write `<!`, `<?`, `]:`, a character reference such as `&amp;`, or a `<script>` or `<style>` tag, not even in backticks or a code block: describe them in words.
+- Never write a `<` directly followed by an exclamation mark or a question mark, a closing bracket directly followed by a colon, a character reference such as an ampersand, a
+  word and a semicolon, or any of these tags, opening or closing: `<script>`, `<style>`, `<noscript>`, `<template>`, `<textarea>`, `<iframe>`, `<svg>`, `<math>`, `<xmp>`,
+  `<plaintext>`, `<noembed>`, `<noframes>`. Not even in backticks or a code block: describe them in words.
   Never write the words "Review notes" either, in any form: the host also counts them run together or inside a name, such as `renderReviewNotes`, so name the file or
   describe the function instead. The host refuses a description with any of these and publishes its generic one: it adds its own HTML-comment marker, Review notes hold a
   person's accepted findings, which only their local review writes, and nothing published may be hidden from the people reading it.
