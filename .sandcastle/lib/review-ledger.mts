@@ -226,11 +226,14 @@ export const headCommit = (cwd: string) => git(cwd, "rev-parse", "--verify", "HE
 // depends on the two trees and not on whose config made it (the explicit
 // prefixes also override diff.noprefix and diff.mnemonicPrefix). A binary file is
 // keyed by its blob ids, not its compressed bytes, so zlib's settings don't
-// matter either. Submodules are never ignored: a pointer bump is a change to
-// review. A different git version could still print a patch differently;
-// that fails closed, with a new review.
+// matter either. core.bigFileThreshold is git's default, since a file above it
+// is printed as binary and reviewPatch would refuse a text file the person's
+// config made look like one. Submodules are never ignored: a pointer bump is
+// a change to review. A different git version could still print a patch
+// differently; that fails closed, with a new review.
 const pinnedDiff = [
   "-c", "core.quotePath=true",
+  "-c", "core.bigFileThreshold=512m",
   "-c", "core.attributesFile=/dev/null",
   "-c", "diff.relative=false",
   "-c", "diff.suppressBlankEmpty=false",
@@ -567,8 +570,15 @@ export function renderReport(ledger: Ledger): string {
   return [header, "", "| Id | Lens | Where | Finding | Status | Test or reason |", "| --- | --- | --- | --- | --- | --- |", ...rows, ""].join("\n");
 }
 
-// The PR description's `## Review notes`: the findings a person accepted, for
-// people reading the PR, except security findings, which are only counted.
+// The markers around the PR description's `## Review notes`, so the section
+// can be replaced without touching what follows it (`Fixes #`, the footer).
+// The release blog drops HTML comments.
+export const REVIEW_NOTES_START = "<!-- REVIEW_NOTES_START -->";
+export const REVIEW_NOTES_END = "<!-- REVIEW_NOTES_END -->";
+
+// The PR description's `## Review notes`, between its markers: the findings a
+// person accepted, for people reading the PR, except security findings, which
+// are only counted.
 // GitHub's reviewers aren't known to read the description, so a thread one
 // opens on an accepted finding gets the same "Left for the owner." reply as
 // every thread left for the owner (CLAUDE.md); the reason stays in the ledger
@@ -586,11 +596,12 @@ export function renderReviewNotes(ledger: Ledger): string {
     security.length === 0
       ? []
       : ["", `${security.length} accepted security finding(s) are left out here and reported privately, as docs/SECURITY.md describes.`];
-  if (listed.length === 0) return ["## Review notes", ...privately, ""].join("\n");
+  const section = (...body: string[]) => [REVIEW_NOTES_START, "## Review notes", ...body, REVIEW_NOTES_END, ""].join("\n");
+  if (listed.length === 0) return section(...privately);
   const lines = listed.map(
     (finding) => `- ${plainText(`${finding.path}:${finding.line}`)}: ${plainText(finding.summary)} Accepted: ${plainText(finding.reason ?? "")}`,
   );
-  return ["## Review notes", "", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately, ""].join("\n");
+  return section("", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately);
 }
 
 const USAGE = `Usage: scripts/review.sh <command>

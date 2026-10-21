@@ -206,13 +206,18 @@ decided.
 
 Keep the PR description's `## Review notes` section in step with the ledger, for people reading the PR: when findings
 were accepted it holds the output of `scripts/review.sh notes`, and when none were it has no such section, since an
-earlier review's acceptances no longer hold. Write it in the body when the PR is opened. After that, once
-`scripts/review.sh check` passes (the person's last accept made, before the push), read the body
-(`gh pr view <n> --json body -q .body`), replace its `## Review notes` section, add one or remove it, write the whole
-result to `<run>/body.md` and run `gh pr edit <n> --body-file <run>/body.md`. `--body-file` replaces the whole
-description, so never pass it the notes alone. GitHub's reviewers aren't known to read the description, so they may
-raise an accepted finding again: its thread gets the reply every thread left for the owner gets (CLAUDE.md), only
-"Left for the owner." and the `<!-- claude-session -->` marker.
+earlier review's acceptances no longer hold. That output starts with `<!-- REVIEW_NOTES_START -->` and ends with
+`<!-- REVIEW_NOTES_END -->`. Write it in the body, above the `Fixes #` line, when the PR is opened. After that, once
+`scripts/review.sh check` passes (the person's last accept made) and the branch is pushed, read the body
+(`gh pr view <n> --json body -q .body`). Replace everything from the start marker to the end marker, both included, with
+the new output, remove it when there's none, or add it above `Fixes #` when the body has no markers. Leave the rest of
+the body as it is, and never take a `## Review notes` heading outside the markers as the section's bounds. Write the
+whole result to `<run>/body.md` and run `gh pr edit <n> --body-file <run>/body.md`. `--body-file` replaces the whole
+description, so never pass it the notes alone. Editing the description starts PR Auto-Merge, which is why it waits for
+the push: before it, the PR could merge the head without this run's fixes. Push a thread's fix before replying to or
+resolving its thread, for the same reason. GitHub's reviewers aren't known to read the description, so they may raise
+an accepted finding again: its thread gets the reply every thread left for the owner gets (CLAUDE.md), only "Left for
+the owner." and the `<!-- claude-session -->` marker.
 
 The description becomes public release notes, so the notes leave out accepted security findings and only count them.
 Before the notes go into the PR, have the person check the `(security)` marks in the report on every accepted finding:

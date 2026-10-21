@@ -158,16 +158,19 @@ exits with the reason it woke you: the PR closed, it conflicts with or is behind
 or other feedback is waiting on you, or nothing changed for 30 minutes. Act on it, then run it again:
 
 - Merge `origin/main` into the branch in its worktree when it conflicts or is behind, and fix each red check.
-- On a thread you agree with, fix it and reply saying what changed; then resolve it if Claude Review or Copilot opened
-  it, and leave a person's thread for them to resolve. On every other thread, whoever opened it (one you decline, one
-  raising a finding someone accepted, one waiting on a person's decision), reply only "Left for the owner." with the
-  marker below, and leave it unresolved so the hold keeps it for the owner. The same reply on all of them means none
-  singles out an accepted security finding. The reason stays in the local review's record, and an accepted finding
-  that isn't a security one is also in the PR's `## Review notes`.
+- On a thread you agree with, fix it, push the fix, and only then reply saying what changed; then resolve it if Claude
+  Review or Copilot opened it, and leave a person's thread for them to resolve. Resolving the last thread first would let
+  PR Auto-Merge merge the head without the fix. On every other thread, whoever opened it (one you decline, one raising a
+  finding someone accepted, one waiting on a person's decision), reply only "Left for the owner." with the marker
+  below, and leave it unresolved so the hold keeps it for the owner. The same reply on all of them means none singles
+  out an accepted security finding. An accepted finding's reason stays in the local review's record, and one that isn't
+  a security finding is also in the PR's `## Review notes`. No record holds why you declined a thread or what it waits
+  on: tell the owner that when you stop.
 - End every reply and comment you post with `<!-- claude-session -->`. The script tells your comments from the owner's by
   that marker, not by login, because a local session posts with the owner's token.
 - Run `/pre-push-review` before pushing each fix, then push from the branch's worktree and update the description if the
-  change moved, and its `## Review notes` once the person's accepts are made (the skill's step 9).
+  change moved, and its `## Review notes` once the person's accepts are made (the skill's step 9). Editing the
+  description also starts PR Auto-Merge, so edit it only once the fix it describes is pushed.
 
 Stop when the PR has merged or closed, when only threads waiting on a person or a check you can't fix remain, or when it
 has sat 30 minutes with nothing to act on, and tell the owner which.

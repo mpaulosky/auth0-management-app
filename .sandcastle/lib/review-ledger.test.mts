@@ -276,6 +276,38 @@ describe("diffKey", () => {
     assert.notEqual(diffKey(repo, mergeBase(repo)), before);
   });
 
+  it("keys a text file as text whatever core.bigFileThreshold says, rather than refuse it as binary", () => {
+    const before = diffKey(repo, mergeBase(repo));
+
+    run(repo, "config", "core.bigFileThreshold", "1");
+
+    assert.equal(diffKey(repo, mergeBase(repo)), before);
+  });
+
+  for (const [change, after] of [
+    ["deletes", undefined],
+    ["turns into text", "now text\n"],
+  ] as const) {
+    it(`reviews a branch that ${change} a binary file, rather than refuse it`, () => {
+      writeFileSync(join(upstream, "logo.png"), Buffer.from([0, 1, 2, 3, 0, 255]));
+      run(upstream, "add", "logo.png");
+      run(upstream, "commit", "--quiet", "-m", "image");
+      run(repo, "fetch", "--quiet", "origin");
+      run(repo, "reset", "--quiet", "--hard", "origin/main");
+      if (after === undefined) {
+        run(repo, "rm", "--quiet", "logo.png");
+        run(repo, "commit", "--quiet", "-m", "delete the image");
+      } else {
+        commit(repo, "logo.png", after, "replace the image with text");
+      }
+
+      const key = diffKey(repo, mergeBase(repo));
+
+      assert.notEqual(key, EMPTY_DIFF_KEY);
+      assert.match(reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1"), /^Binary files .*logo\.png.* differ$/m);
+    });
+  }
+
   it("sees a submodule pointer bump even when git is told to ignore submodules", () => {
     const sub = join(root, "sub");
     run(root, "init", "--quiet", "-b", "main", sub);
@@ -427,10 +459,8 @@ describe("checkReview", () => {
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
   });
 
-  it("names a git too old to check the review across a merge of main, rather than say there's none", () => {
-    record([]);
-    commit(upstream, "other.cs", "y\n", "main moves on");
-    mergeMain();
+  // Run `check` with a git 2.34 on the PATH, which has no merge-tree --write-tree.
+  function checkWithOldGit(): ReturnType<typeof checkReview> {
     const bin = mkdtempSync(join(tmpdir(), "old-git-"));
     const real = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ "$1" = version ]; then echo "git version 2.34.1"; exit 0; fi\nfor a in "$@"; do [ "$a" = --write-tree ] && { echo "error: unknown option" >&2; exit 129; }; done\nexec '${real}' "$@"\n`);
@@ -438,14 +468,31 @@ describe("checkReview", () => {
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path ?? ""}`;
     try {
-      const result = checkReview(repo, mergeBase(repo), {});
-
-      assert.equal(result.ok, false);
-      assert.match(result.message, /git 2\.38 or later/);
+      return checkReview(repo, mergeBase(repo), {});
     } finally {
       process.env.PATH = path;
       rmSync(bin, { recursive: true, force: true });
     }
+  }
+
+  it("names a git too old to check the review across a merge of main, and its version, rather than say there's none", () => {
+    record([]);
+    commit(upstream, "other.cs", "y\n", "main moves on");
+    mergeMain();
+
+    const result = checkWithOldGit();
+
+    assert.equal(result.ok, false);
+    assert.match(result.message, /git 2\.38 or later/);
+    assert.match(result.message, /^git version 2\.34\.1 can't check/);
+  });
+
+  it("passes the reviewed commit itself on a git too old to check across a merge, which it doesn't need", () => {
+    record([]);
+
+    const result = checkWithOldGit();
+
+    assert.equal(result.ok, true, result.message);
   });
 
   it("passes the reviewed commit with a clean merge of main and nothing else", () => {
@@ -990,7 +1037,7 @@ describe("renderReviewNotes", () => {
 
     const notes = renderReviewNotes(ledger);
 
-    assert.match(notes, /^## Review notes/);
+    assert.match(notes, /^<!-- REVIEW_NOTES_START -->\n## Review notes\n/);
     assert.match(notes, /Accepted: Spec\./);
     assert.doesNotMatch(notes, /Guard_WhitespaceEmail_Fails/);
   });
@@ -1022,8 +1069,17 @@ describe("renderReviewNotes", () => {
 
     const notes = renderReviewNotes(ledger);
 
-    assert.match(notes, /^## Review notes\n\n1 accepted security finding/);
+    assert.match(notes, /^<!-- REVIEW_NOTES_START -->\n## Review notes\n\n1 accepted security finding/);
     assert.doesNotMatch(notes, /raised these|reaches the log/);
+  });
+
+  it("ends at a marker, so replacing the section in the description stops there and keeps what follows it", () => {
+    const ledger = record([finding({ status: "accepted", test: null, reason: "Spec." })]);
+
+    const notes = renderReviewNotes(ledger);
+
+    assert.match(notes, /\n<!-- REVIEW_NOTES_END -->\n$/);
+    assert.equal(notes.match(/<!--/g)?.length, 2);
   });
 
   it("is empty when nothing was accepted", () => {
@@ -1035,7 +1091,7 @@ describe("renderReviewNotes", () => {
       finding({ status: "accepted", test: null, summary: "Uses <AuthorizeView> and Result<T> <!-- x -->.", reason: "@someone said fixes #12 on github.com" }),
     ]);
 
-    const notes = renderReviewNotes(ledger);
+    const notes = renderReviewNotes(ledger).replace(/^<!-- REVIEW_NOTES_(?:START|END) -->$/gm, "");
 
     assert.doesNotMatch(notes, /<AuthorizeView>|<T>|<!--/);
     assert.match(notes, /&lt;AuthorizeView>/);
@@ -1097,7 +1153,7 @@ describe("main", () => {
     record([finding(), finding({ id: "R2", status: "accepted", test: null, reason: "Spec." })]);
 
     assert.match(cli(["report"]).out, /\| Id \| Lens \|/);
-    assert.match(cli(["notes"]).out, /^## Review notes/);
+    assert.match(cli(["notes"]).out, /^<!-- REVIEW_NOTES_START -->\n## Review notes/);
   });
 
   it("latest prints the branch's earlier review after a fix commit", () => {
