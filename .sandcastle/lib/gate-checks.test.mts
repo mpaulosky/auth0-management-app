@@ -308,6 +308,12 @@ describe("gate-checks.sh's gh repository check", () => {
     assert.match(result.stderr, /gh repo's subcommands don't read GH_REPO: give the repository as the first argument/);
   });
 
+  it("tells a script to export GH_REPO alone on its line, which is the only export it counts", () => {
+    const result = gateWith(script, "#!/usr/bin/env bash\ngh pr checks 3\n");
+
+    assert.match(result.stderr, /export it at the top of a script, alone on its line but for a comment/);
+  });
+
   it("skips a tracked file deleted from the worktree, rather than stop the gate", () => {
     gateWith("scripts/gone.sh", "echo\n");
     rmSync(join(repo, "scripts/gone.sh"));
