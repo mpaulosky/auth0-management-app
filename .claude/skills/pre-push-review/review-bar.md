@@ -34,10 +34,11 @@ one an earlier review left open for a person: report it again, naming it, unless
 fix its problem is still a finding: say what still goes wrong.
 
 **Severity.** Grade every finding from the **Severities** table in the skill, and never leave one ungraded: `critical` for a
-bug in code that runs (`src/`, `tests/`, `.sandcastle/`, `scripts/`, workflows, git hooks), `warning` for a security
-weakness in any file, and `advisory` for everything else (docs, comments, skill and prompt text, conventions). A security
-weakness is always `warning`. Give every finding a suggested fix, whatever its severity. In a later round, which reviews a
-round's fixes, report only problems on the lines the fixes changed or problems the fixes cause.
+bug in code that runs (`src/`, `tests/`, `.sandcastle/`, `scripts/`, `.github/ci/`, `.github/scripts/`, workflows, git
+hooks), `warning` for a security weakness in any file, and `advisory` for everything else (docs, comments, skill and
+prompt text, conventions). A security weakness is always `warning`. Give every finding a suggested fix, whatever its
+severity. In a later round, which reviews a round's fixes, report only problems on the lines the fixes changed or problems
+the fixes cause.
 
 **Where a finding goes.** Every finding names a file path relative to the repository root and a line number on the new side of
 that file, on a line the diff adds or shows as context. When the problem lies in code the diff doesn't touch, put the finding on

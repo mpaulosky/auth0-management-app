@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 // Claude Code reads both files, not this repository's code.
 const agent = readFileSync(new URL("../../.claude/agents/pre-push-reviewer.md", import.meta.url), "utf8");
 const skill = readFileSync(new URL("../../.claude/skills/pre-push-review/SKILL.md", import.meta.url), "utf8");
+const bar = readFileSync(new URL("../../.claude/skills/pre-push-review/review-bar.md", import.meta.url), "utf8");
 const settings = JSON.parse(readFileSync(new URL("../../.claude/settings.json", import.meta.url), "utf8")) as { permissions?: { deny?: string[] } };
 
 describe("the pre-push-review skill's reviewers", () => {
@@ -53,9 +54,21 @@ describe("the pre-push-review skill's severities", () => {
 
   it("reviews again only after a round that fixed a Critical or Warning finding, and then only the fixes", () => {
     assert.match(skill, /Only a round that fixed a Critical or Warning finding is followed by another/);
-    assert.match(skill, /A round that fixed only Advisory findings, or none, ends the review/);
+    assert.match(skill, /A round that fixed nothing ends the review/);
+    assert.doesNotMatch(skill, /fixed only Advisory/);
     assert.match(skill, /A later round reviews the fixes, not the whole branch again/);
     assert.doesNotMatch(skill, /Every round\s+reviews the whole branch/);
+  });
+
+  // The gate's own checks decide what merges, so a bug in them blocks.
+  it("grades a bug in the gate's and CI's own scripts Critical, in the table and the bar", () => {
+    const table = /\| \*\*Critical\*\* \|[^\n]*/.exec(skill)?.[0] ?? "";
+    const grading = /`critical` for a\s+bug in code that runs \([^)]*\)/.exec(bar)?.[0] ?? "";
+
+    for (const text of [table, grading]) {
+      assert.match(text, /`\.github\/ci\/`/);
+      assert.match(text, /`\.github\/scripts\/`/);
+    }
   });
 
   it("files Advisory findings in one follow-up issue per branch", () => {
@@ -68,6 +81,12 @@ describe("the pre-push-review skill's follow-up issue", () => {
   it("is written by scripts/review.sh advisory, never by hand", () => {
     assert.match(skill, /The body is the output of\s+`scripts\/review\.sh advisory`/);
     assert.match(skill, /Never write the body by hand/);
+  });
+
+  // record refuses an earlier id, so a re-raised finding gets a new one.
+  it("counts a re-raised Advisory finding as listed when the issue lists the id it names", () => {
+    assert.match(skill, /recorded open again as Advisory, its summary opening with the old id\s+\(`R3 again: \.\.\.`\)/);
+    assert.match(skill, /a finding whose\s+summary opens with an id the issue lists counts as listed/);
   });
 
   it("is looked for only among the person's own issues, by its exact title", () => {
