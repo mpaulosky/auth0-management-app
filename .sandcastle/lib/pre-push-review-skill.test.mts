@@ -77,3 +77,18 @@ describe("the pre-push-review skill's lenses", () => {
     assert.match(skill, /never rename or trim its lens to get past the refusal/);
   });
 });
+
+// A security weakness a reviewer raised never leaves the Warnings unseen, and
+// reviewers never read one that's still in the code (issue #83's review).
+describe("the pre-push-review skill's Warnings", () => {
+  it("never regrades a reviewer's Warning, which wins any merge and is only dismissed with evidence", () => {
+    assert.match(skill, /it's a Warning whenever any reviewer graded it one/);
+    assert.match(skill, /A finding any\s+reviewer graded Warning stays a Warning: never regrade it/);
+    assert.doesNotMatch(skill, /keeping the higher severity/);
+  });
+
+  it("names which findings reviewers see by id, lens and path only, from this run's rounds as well as latest", () => {
+    assert.match(skill, /every finding the report marks\s+`\(security\)`/);
+    assert.match(skill, /from `latest` or from this run's earlier\s+rounds, by its id, lens and path only/);
+  });
+});

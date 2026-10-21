@@ -111,8 +111,10 @@ Run `scripts/review.sh prepare <run>`. It writes the branch's whole diff against
 reviews. In a later round, run `scripts/review.sh prepare <run> <HEAD the round before printed>`: it also writes the
 diff of that round's fixes to `<run>/fixes.patch`. Write to `<run>/decisions.md` the earlier decisions from step 3 and every finding this run's earlier rounds
 raised, each with its id, outcome and reason, so no round raises again what an earlier one fixed or dismissed. Label
-accepted and open ones "raise again if still in the code". Give a security finding whose weakness is still in the code
-(open, accepted, or decided as part of another) by its id, lens and path only, never its summary, reason or outcome: only
+accepted and open ones "raise again if still in the code". Give a security finding (every finding the report marks
+`(security)`: a Warning, one whose lens names security, or an older ledger's unless its mark says it isn't one) whose
+weakness is still in the code (open, accepted, or decided as part of another), from `latest` or from this run's earlier
+rounds, by its id, lens and path only, never its summary, reason or outcome: only
 a fixed one keeps its summary. When the diff changes a workflow that pins an action, fetch each file of the action's
 source at the pinned commit into `<run>/actions/<owner>/<repo>/<path>`, as the raw file
 (`gh api -H 'Accept: application/vnd.github.raw' 'repos/<owner>/<repo>/contents/<path>?ref=<sha>'`), since reviewers
@@ -155,9 +157,11 @@ Refuse a finding whose `severity` is missing or isn't `critical`, `warning` or `
 that raised it (SendMessage, to the same agent) to grade, and don't triage it until it has one. `record` refuses a finding
 without one too.
 
-Merge findings that are the same problem, keeping the higher severity, and give the merged finding every lens that
-raised it, joined with `/` (`Bar/Security`): the ledger tells a security finding by its grade or by a lens that names
-security, so a merge never drops one. Check each grade against the **Severities**
+Merge findings that are the same problem, and give the merged finding every lens that raised it, joined with `/`
+(`Bar/Security`). It takes the higher severity, except that it's a Warning whenever any reviewer graded it one: the
+ledger tells a security finding by its grade or by a lens that names security, so a merge never drops one. A finding any
+reviewer graded Warning stays a Warning: never regrade it, and when the code shows it isn't a security weakness,
+dismiss it with a reason citing that code (`file:line`). Check every other grade against the **Severities**
 table and correct it: every security weakness (a secret or token exposed, authorization or permissions, injection, a
 fork or an agent reaching a write token) is a Warning, whichever lens raised it and whatever file it's in, and Warning
 when in doubt; a bug in code that runs is Critical, and Critical when in doubt between Critical and Advisory. Read the
