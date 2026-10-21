@@ -148,12 +148,12 @@ export const findingSchema = findingFields
     }
   });
 
-// A finding as stored. A ledger recorded before `severity` existed has none
-// and still parses, so check, accept, report and latest read it; one recorded
-// before that has no `security` mark either. The mark severity replaced is
-// read and ignored: a finding with no severity counts as a Warning (see
-// severityOf), so it blocks until a person decides it and isn't published
-// ungraded.
+// A finding as stored. A ledger recorded before `severity` existed has none,
+// nor a `fix`, and still parses, so check, accept, report and latest read it;
+// one recorded before that has no `security` mark either. A finding with no
+// severity counts as a Warning (see severityOf), so it blocks until a person
+// decides it; the mark severity replaced still decides whether it's published
+// (see isSecurity).
 export const storedFindingSchema = findingFields
   .extend({ severity: z.enum(SEVERITIES).optional(), security: z.boolean().optional() })
   .strict()
@@ -165,12 +165,16 @@ export type Finding = z.infer<typeof storedFindingSchema>;
 export const severityOf = (finding: Finding): Severity => finding.severity ?? "warning";
 
 // Whether a finding is a security weakness: a Warning, or one whose lens names
-// security whatever it was graded, so a misgraded one isn't published. The
-// report's mark and the notes both ask this, so they never disagree.
-export const isSecurity = (finding: Finding) => severityOf(finding) === "warning" || /security/i.test(finding.lens);
+// security whatever it was graded, so a misgraded one isn't published. A
+// finding with no severity is one unless its old `security` mark says it
+// isn't, as triage decided then. The report's mark, the notes, the follow-up
+// issue and the check all ask this, so they never disagree.
+export const isSecurity = (finding: Finding) =>
+  (finding.severity === undefined ? finding.security !== false : finding.severity === "warning") || /security/i.test(finding.lens);
 
-// Whether a finding blocks the push: open, and not Advisory.
-const isBlocking = (finding: Finding) => finding.status === "open" && severityOf(finding) !== "advisory";
+// Whether a finding blocks the push: open, and not Advisory, or a security
+// finding whatever its grade.
+const isBlocking = (finding: Finding) => finding.status === "open" && (severityOf(finding) !== "advisory" || isSecurity(finding));
 
 // What the skill hands to `record`: the key and the HEAD `scripts/review.sh
 // prepare` printed when the last round started, from the patch its reviewers

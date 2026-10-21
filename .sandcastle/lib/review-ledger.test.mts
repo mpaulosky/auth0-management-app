@@ -413,6 +413,16 @@ describe("checkReview", () => {
     assert.match(result.message, /2 Advisory finding\(s\) open for the follow-up issue/);
   });
 
+  it("fails with a stored open Advisory finding whose lens names security, which record no longer takes", () => {
+    const ledger = record([finding({ severity: "advisory", status: "open", test: null })]);
+    rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), (stored) => ({ ...stored, lens: "Security" }));
+
+    const result = checkReview(repo, mergeBase(repo), {});
+
+    assert.equal(result.ok, false);
+    assert.match(result.message, /R1 advisory app\.cs:3 \(Security\)/);
+  });
+
   it("names only the blocking findings when Advisory ones are open beside them", () => {
     record([finding({ status: "open", test: null }), finding({ id: "R2", severity: "advisory", status: "open", test: null })]);
 
@@ -763,7 +773,7 @@ describe("recordReview", () => {
   it("still reads and checks a ledger recorded before findings had a security mark or a severity", () => {
     const ledger = record([finding({ status: "accepted", test: null, reason: "Old acceptance." })]);
     const path = join(ledgerDir(repo), `${ledger.key}.json`);
-    rewriteFindings(path, ({ severity: _, ...rest }) => rest);
+    rewriteFindings(path, ({ severity: _, fix: _fix, ...rest }) => rest);
 
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
     const latest = latestLedger(repo, mergeBase(repo));
@@ -771,9 +781,18 @@ describe("recordReview", () => {
     assert.equal(latest?.findings[0]?.severity, undefined);
   });
 
+  it("still takes the ids of a ledger recorded before findings had a severity or a fix", () => {
+    const ledger = record([finding({ status: "open", test: null })]);
+    rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), ({ severity: _, fix: _fix, ...rest }) => ({ ...rest, security: false }));
+    commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "fix" : undefined)), "fix");
+
+    assert.equal(cli(["next"]).out, "R2\n");
+    assert.equal(latestLedger(repo, mergeBase(repo))?.key, ledger.key);
+  });
+
   it("accepts an open finding on a ledger recorded before findings had a severity, so the check passes", () => {
     const ledger = record([finding({ status: "open", test: null })]);
-    rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), ({ severity: _, ...rest }) => ({ ...rest, security: false }));
+    rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), ({ severity: _, fix: _fix, ...rest }) => ({ ...rest, security: false }));
 
     acceptFinding(repo, mergeBase(repo), "R1", "Old.");
 
@@ -784,7 +803,7 @@ describe("recordReview", () => {
   it("still reads a ledger recorded with a security mark and no severity, and treats its open finding as a Warning that blocks", () => {
     const ledger = record([finding({ status: "open", test: null })]);
     const path = join(ledgerDir(repo), `${ledger.key}.json`);
-    rewriteFindings(path, ({ severity: _, ...rest }) => ({ ...rest, security: false }));
+    rewriteFindings(path, ({ severity: _, fix: _fix, ...rest }) => ({ ...rest, security: false }));
 
     const result = checkReview(repo, mergeBase(repo), {});
 
@@ -1057,14 +1076,15 @@ describe("renderReport", () => {
     assert.match(report, /\| R1 \| Security \(security\) \|/);
   });
 
-  it("shows a stored finding with no severity as a security Warning, as the check and the notes treat it", () => {
-    const { severity: _, ...ungraded } = finding();
-    const ledger: Ledger = { ...record([]), findings: [{ ...ungraded, security: false }] };
+  it("shows a stored finding with no severity under Warning, as the check treats it, marked security unless its old mark said it isn't", () => {
+    const { severity: _, fix: _fix, ...ungraded } = finding();
+    const ledger: Ledger = { ...record([]), findings: [{ ...ungraded, security: false }, { ...ungraded, id: "R2" }] };
 
     const report = renderReport(ledger);
 
     assert.match(report, /^### Warning$/m);
-    assert.match(report, /\| R1 \| Edge cases \(security\) \|/);
+    assert.match(report, /\| R1 \| Edge cases \|/);
+    assert.match(report, /\| R2 \| Edge cases \(security\) \|/);
   });
 
   it("says there were no findings when a review found nothing", () => {
@@ -1156,8 +1176,16 @@ describe("renderReviewNotes", () => {
     assert.equal(renderReviewNotes(ledger), "");
   });
 
-  it("counts a stored finding with no severity as a Warning, since nobody graded it", () => {
-    const { severity: _, ...unmarked } = finding({ status: "accepted", test: null, summary: "An unmarked finding.", reason: "Later." });
+  it("lists an accepted stored finding with no severity whose old mark said it isn't a security weakness", () => {
+    const { severity: _, fix: _fix, ...old } = finding({ status: "accepted", test: null, summary: "An old finding.", reason: "Spec." });
+    const ledger: Ledger = { ...record([]), findings: [{ ...old, security: false }] };
+
+    assert.match(renderReviewNotes(ledger), /An old finding\. Accepted: Spec\./);
+    assert.doesNotMatch(renderReviewNotes(ledger), /accepted security finding/);
+  });
+
+  it("counts a stored finding with neither a severity nor a security mark, since nobody decided it isn't one", () => {
+    const { severity: _, fix: _fix, ...unmarked } = finding({ status: "accepted", test: null, summary: "An unmarked finding.", reason: "Later." });
     const ledger: Ledger = { ...record([]), findings: [unmarked] };
 
     assert.doesNotMatch(renderReviewNotes(ledger), /unmarked finding/);
@@ -1440,9 +1468,12 @@ describe("main", () => {
     });
   }
 
-  it("report and notes exit 1 when no review is recorded", () => {
+  it("report, notes and advisory exit 1 when no review is recorded", () => {
     assert.equal(cli(["report"]).code, 1);
     assert.equal(cli(["notes"]).code, 1);
+    const advisory = cli(["advisory"]);
+    assert.equal(advisory.code, 1);
+    assert.doesNotMatch(advisory.out, /No open Advisory findings/);
   });
 
   it("record exits 1 with the schema's message on a review that doesn't parse", () => {

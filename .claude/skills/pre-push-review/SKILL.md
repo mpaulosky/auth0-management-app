@@ -155,7 +155,9 @@ Refuse a finding whose `severity` is missing or isn't `critical`, `warning` or `
 that raised it (SendMessage, to the same agent) to grade, and don't triage it until it has one. `record` refuses a finding
 without one too.
 
-Merge findings that are the same problem, keeping the higher severity. Check each grade against the **Severities**
+Merge findings that are the same problem, keeping the higher severity, and give the merged finding every lens that
+raised it, joined with `/` (`Bar/Security`): the ledger tells a security finding by its grade or by a lens that names
+security, so a merge never drops one. Check each grade against the **Severities**
 table and correct it: every security weakness (a secret or token exposed, authorization or permissions, injection, a
 fork or an agent reaching a write token) is a Warning, whichever lens raised it and whatever file it's in, and Warning
 when in doubt; a bug in code that runs is Critical, and Critical when in doubt between Critical and Advisory. Read the
@@ -226,7 +228,7 @@ The ids in the example are illustrative: use the ones step 5 gave.
 `status` is `fixed` (with `test`, or `reason` when it has none), `dismissed` (with `reason`) or `open`. Never
 `accepted`: `record` refuses it, since only the person accepts a finding, with `scripts/review.sh accept`. `severity` is
 the grade from step 5, and an Advisory finding is `open` unless it was dismissed. `record` refuses an Advisory finding
-whose lens names security: grade it Warning. `line` is 0 when a finding has no line. The record holds this run's findings only, from every
+whose lens names security: grade it Warning, and never rename or trim its lens to get past the refusal. `line` is 0 when a finding has no line. The record holds this run's findings only, from every
 round, and replaces any earlier record of the same diff: an acceptance made on the earlier code doesn't carry, so the
 person accepts again what still needs it. `record` refuses when HEAD isn't the code the last round reviewed. A record
 ends the run: it can't be made again with the same ids.

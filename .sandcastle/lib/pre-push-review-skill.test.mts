@@ -68,3 +68,12 @@ describe("the pre-push-review skill's follow-up issue", () => {
     assert.match(skill, /select\(\.title == "chore\(review\): Advisory review findings: <branch>"\)/);
   });
 });
+
+// The ledger tells a security finding by its grade or its lens (isSecurity),
+// so triage must never drop "security" from a lens.
+describe("the pre-push-review skill's lenses", () => {
+  it("keeps every lens that raised a merged finding, and never renames a lens to get past record", () => {
+    assert.match(skill, /give the merged finding every lens that\s+raised it/);
+    assert.match(skill, /never rename or trim its lens to get past the refusal/);
+  });
+});
