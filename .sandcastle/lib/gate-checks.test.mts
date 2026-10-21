@@ -97,6 +97,25 @@ describe("gate-checks.sh's local review check", () => {
     assert.match(calls(), /^run check:sandcastle$/m);
   });
 
+  it("reruns the Sandcastle check when README.md changes, since readme.test.mts guards the Releases section", () => {
+    // Arrange
+    const base = head();
+    writeFileSync(join(repo, "README.md"), "# Readme\n");
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "add", "."], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "readme"], { cwd: repo });
+    const bin = join(repo, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "pnpm"), `#!/bin/sh\necho "$*" >> '${log}'\n`);
+    chmodSync(join(bin, "pnpm"), 0o755);
+
+    // Act
+    const result = gate(base, { GATE_SKIP_REVIEW: "1", PATH: `${bin}:${process.env.PATH ?? ""}` });
+
+    // Assert
+    assert.match(result.stdout, /Sandcastle TypeScript check/);
+    assert.match(calls(), /^run check:sandcastle$/m);
+  });
+
   it("doesn't skip the check for any other value of GATE_SKIP_REVIEW", () => {
     const result = gate(head(), { GATE_SKIP_REVIEW: "true", REVIEW_EXIT: "1" });
 
