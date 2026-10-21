@@ -106,9 +106,11 @@ SANDCASTLE_LABEL=<label> pnpm run sandcastle          # work the issues labelled
 ```
 
 `scripts/gate.sh` is the definition of "ready to push": lint of the changed YAML, Markdown, workflows and shell
-scripts, then this repo's own checks in `.github/ci/gate-checks.sh` (the local review check, then the Copilot review sync
-check, the test of `scripts/check-git-hooks.sh` and the Sandcastle check, each when its files changed), then a Release
-build and each test project under `tests/`, run one by one.
+scripts, then this repo's own checks in `.github/ci/gate-checks.sh` (the local review check, the `gh` repository check on
+every gate, which refuses a `gh` command in `.claude/skills/` or `scripts/` given neither
+`GH_REPO=mpaulosky/auth0-management-app` nor `--repo`, then the Copilot review sync check, the test of
+`scripts/check-git-hooks.sh` and the Sandcastle check, each when its files changed), then a Release build and each test
+project under `tests/`, run one by one.
 `scripts/gate.sh` is an Owned file of the CI Baseline (see `.claude/rules/baseline.md`), overwritten on every Apply,
 so a new repo-only check goes in `gate-checks.sh`. Don't use `dotnet test --solution` as the check: under Microsoft
 Testing Platform it can report zero tests while the project runs pass. The pre-push hook runs the gate after its own branch
@@ -122,10 +124,14 @@ at the start of a session when it isn't set. Don't report the pre-push gate as p
 "All gates passed" line, or ran `scripts/gate.sh` by hand, without `GATE_SKIP_REVIEW`, and it passed.
 
 Before every push, the first and every fix, run the `pre-push-review` skill (`/pre-push-review`). It reviews the
-branch's whole diff against `origin/main` with a reviewer per lens in the code-review skill, fixes each finding behind a
-regression test, reviews again, and records the outcome in `.git/review/`. The gate refuses a diff it hasn't passed, and
-any finding still open blocks the push until it's fixed or the person you work for (the owner, or a contributor on
-their own branch) accepts it with `scripts/review.sh accept`. Never accept one on their behalf, and never push with
+branch's whole diff against `origin/main` with a reviewer per lens in the code-review skill, grades each finding, fixes
+the Critical ones behind a regression test and the Advisory ones as they're found, reviews the fixes again, and records
+the outcome in `.git/review/`. A finding is **Critical** (a bug in code that runs: `src/`, `tests/`, the tooling and
+build and dependency configuration, or new or changed behaviour with no test), **Warning** (a security weakness, in any
+file) or **Advisory** (docs, comments, prompts, conventions). The gate refuses a diff it hasn't passed, and any open
+Critical or Warning finding blocks the push until it's fixed or the person you work for (the owner, or a contributor on
+their own branch) accepts it with `scripts/review.sh accept`. Advisory findings are fixed in the review too, and never
+block: one left for a person goes to one follow-up issue per branch. Never accept a finding on the person's behalf, and never push with
 `--no-verify` or with `GATE_SKIP_REVIEW` set. Contributors need Claude Code for this (`docs/CONTRIBUTING.md`): there's
 no route around the review. Two things skip it: the Baseline's re-Apply (on `chore/reapply-baseline`, a diff that
 changes only Owned files, which the Template's own PRs review), and Sandcastle's sandbox (`SANDBOX_ENV` in
@@ -161,9 +167,12 @@ or other feedback is waiting on you, or nothing changed for 30 minutes. Act on i
 - On a thread you agree with, fix it and reply saying what changed; then resolve it if Claude Review or Copilot opened
   it, and leave a person's thread for them to resolve. On every other thread, whoever opened it (one you decline, one
   raising a finding someone accepted, one waiting on a person's decision), reply only "Left for the owner." with the
-  marker below, and leave it unresolved so the hold keeps it for the owner. The same reply on all of them means none
-  singles out an accepted security finding. The reason stays in the local review's record, and an accepted finding
-  that isn't a security one is also in the PR's `## Review notes`.
+  marker below, and leave it unresolved so the hold keeps it for the owner. The same reply on all of them doesn't say
+  which thread an accepted security finding is on, while the PR's `## Review notes` count them. The reason stays in the
+  local review's record, and an accepted finding that isn't a security one is also in the notes.
+- When Claude Review's thread finds a problem the local review missed, fix it with a lesson, so the next branch catches
+  it locally: a test, a check in `.github/ci/gate-checks.sh`, or a sharper lens or `review-bar.md` instruction. Name the
+  lesson in the reply (the `pre-push-review` skill's **Lessons from GitHub's review**).
 - End every reply and comment you post with `<!-- claude-session -->`. The script tells your comments from the owner's by
   that marker, not by login, because a local session posts with the owner's token.
 - Run `/pre-push-review` before pushing each fix, then push from the branch's worktree and update the description if the

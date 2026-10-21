@@ -5,6 +5,7 @@
 #   scripts/review.sh report                 the review of HEAD's diff
 #   scripts/review.sh accept R3 "<reason>"   the person accepts a finding (never on their behalf)
 #   scripts/review.sh notes                  the PR description's "## Review notes"
+#   scripts/review.sh advisory               the follow-up issue's open Advisory findings
 # The logic and the other commands are in .sandcastle/lib/review-ledger.mts. It
 # works on the repository of the current directory, with the tsx this checkout
 # installed (`pnpm install`).
