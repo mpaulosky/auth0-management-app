@@ -327,6 +327,20 @@ describe("diffKey", () => {
     assert.throws(() => diffKey(repo, mergeBase(repo)), /logo\.png.*into text/);
   });
 
+  for (const [encoding, bom] of [
+    ["UTF-16LE", Buffer.from([0xff, 0xfe])],
+    ["UTF-16BE", Buffer.from([0xfe, 0xff])],
+  ] as const) {
+    it(`refuses a ${encoding} text file, which git shows only as binary`, () => {
+      const text = Buffer.from("class A { }\n", "utf16le");
+      writeFileSync(join(repo, "a.cs"), Buffer.concat([bom, encoding === "UTF-16LE" ? text : text.swap16()]));
+      run(repo, "add", "a.cs");
+      run(repo, "commit", "--quiet", "-m", "a UTF-16 file");
+
+      assert.throws(() => diffKey(repo, mergeBase(repo)), /a\.cs.*UTF-8/);
+    });
+  }
+
   it("sees a submodule pointer bump even when git is told to ignore submodules", () => {
     const sub = join(root, "sub");
     run(root, "init", "--quiet", "-b", "main", sub);
@@ -1223,6 +1237,34 @@ describe("spliceReviewNotes", () => {
     assert.equal(spliceReviewNotes(`${body.replace("Fixes #81\n", "")}${section("Old.")}\n\nFixes #81\n`, ""), body);
   });
 
+  it("takes a line that opens with a code span of three backticks for text, not a code block", () => {
+    const body = `## Verification\n\n\`\`\`pnpm test\`\`\` passes.\n\n${section("Old.")}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), body.replace(section("Old."), section("New.")));
+  });
+
+  it("sees a code block that opens on a list item's line close, rather than take its closing fence for an opening one", () => {
+    const body = `## Verification\n\n1. \`\`\`bash\n   scripts/gate.sh\n   \`\`\`\n\n${section("Old.")}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), body.replace(section("Old."), section("New.")));
+  });
+
+  it("takes a marker with trailing spaces, as an editor may leave it, for the marker", () => {
+    const body = `## Why\n\nA.\n\n${section("Old.").replace(REVIEW_NOTES_END, `${REVIEW_NOTES_END}  `)}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## Why\n\nA.\n\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("doesn't take an indented marker, which shows as code, for the marker", () => {
+    const body = `## What changed\n\n    ${REVIEW_NOTES_START}\n    ${REVIEW_NOTES_END}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), body.replace("Fixes #81", `${section("New.")}\n\nFixes #81`));
+  });
+
+  it("adds the section above a closing line that is the body's first line", () => {
+    assert.equal(spliceReviewNotes("Fixes #81\n", notes), `${section("New.")}\n\nFixes #81\n`);
+  });
+
   it("ends the result in one newline, however many the body ended in", () => {
     const once = spliceReviewNotes("## Why\n\nA.\n", notes);
 
@@ -1236,6 +1278,18 @@ describe("spliceReviewNotes", () => {
     ["a Review notes heading in emphasis with a colon", "## Why\n\n## **Review notes:**\n\nOld.\n"],
     ["a setext Review notes heading", "## Why\n\nReview notes\n---\n\nOld.\n"],
     ["an HTML Review notes heading", "## Why\n\n<h2>Review notes</h2>\n\nOld.\n"],
+    ["a setext Review notes heading underlined with =", "## Why\n\nReview notes\n===\n\nOld.\n"],
+    ["a Review notes heading in a quote", "## Why\n\n> ## Review notes\n\nOld.\n"],
+    ["a Review notes heading in a list item", "## Why\n\n- ## Review notes\n\nOld.\n"],
+    ["emphasis on one word of a Review notes heading", "## Why\n\n## **Review** notes\n\nOld.\n"],
+    ["a Review notes heading with more words after it", "## Why\n\n## Review notes (round 2)\n\nOld.\n"],
+    ["a character reference in a Review notes heading", "## Why\n\n## Re&#118;iew&#32;notes\n\nOld.\n"],
+    ["an invisible character in a Review notes heading", "## Why\n\n## Review\u200e\u034f notes\n\nOld.\n"],
+    ["an unmarked Review notes heading beside a marked section", `## Review notes\n\nOld.\n\n${section("Old.")}\n`],
+    ["a closing line inside the marked section", `${section("Old.\n\nFixes #81")}\n`],
+    ["the footer inside the marked section", `${section("Old.\n\n🤖 Generated with x")}\n`],
+    ["a code block that never closes", `## Why\n\n\`\`\`\n${section("Old.")}\n`],
+    ["an end marker with no start", `## Why\n\n${REVIEW_NOTES_END}\n`],
     ["two marked sections", `${section("A.")}\n\n${section("B.")}\n`],
     ["a start marker with no end", `${REVIEW_NOTES_START}\n## Review notes\n\nFixes #81\n`],
     ["an end marker before the start", `${REVIEW_NOTES_END}\n\n${REVIEW_NOTES_START}\n`],

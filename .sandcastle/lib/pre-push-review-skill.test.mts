@@ -23,6 +23,12 @@ describe("the pre-push-review skill's reviewers", () => {
   // an indented line into the value before it) could give them more than
   // these. So every line is checked, not only the ones shaped like a key: a
   // YAML explicit key (`? hooks`) matches none of the allowed shapes.
+  // YAML breaks a line at a lone carriage return too, so a key after one is
+  // a key to Claude Code and part of the line before it to the test below.
+  it("are defined in a file with no line break but \\n", () => {
+    assert.doesNotMatch(agent, /[\r\u0085\u2028\u2029]/);
+  });
+
   it("are defined by exactly a name, a description, their tools and a model, each once", () => {
     const lines = (/^---\n([\s\S]*?)\n---\n/.exec(agent)?.[1] ?? "").split("\n");
     const keys: string[] = [];
@@ -59,7 +65,7 @@ describe("the pre-push-review skill's Review notes", () => {
   it("are spliced into the description by scripts/review.sh body, never by hand", () => {
     // One && chain, so a failed fetch or a refused splice never reaches gh.
     assert.match(skill, /gh pr view <n> --json body -q \.body > <run>\/old-body\.md && scripts\/review\.sh body <run>\/old-body\.md <run>\/body\.md && gh pr edit <n> --body-file <run>\/body\.md/);
-    assert.match(skill, /scripts\/review\.sh body <run>\/old-body\.md <run>\/body\.md && gh pr create /);
+    assert.match(skill, /scripts\/review\.sh body <run>\/old-body\.md <run>\/body\.md && gh pr create [^`\n]*--body-file <run>\/body\.md`/);
   });
 
   it("name the markers renderReviewNotes writes", () => {

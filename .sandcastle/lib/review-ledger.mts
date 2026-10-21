@@ -32,7 +32,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, rea
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { plainText } from "./plain-text.mts";
+import { plainText, visibleLetters } from "./plain-text.mts";
 
 // The variable that skips the review check, for the gate runs that come
 // before or during the review: the skill's own (each round's), and every gate
@@ -245,8 +245,9 @@ const pinnedDiff = [
 // The pinned patch of `head` against `base`: what the reviewers read. Throws
 // when it shows text only as "Binary files differ", since the reviewers
 // couldn't read it: a text file a diff attribute (in .gitattributes or the
-// clone's info/attributes) marks binary, or a binary file the branch turns
-// into text, which git prints whole as binary because one side is. A real
+// clone's info/attributes) marks binary, a binary file the branch turns into
+// text, which git prints whole as binary because one side is, or UTF-16 or
+// UTF-32 text (known by its byte order mark), whose NULs make it look binary. A real
 // binary file has a NUL byte in its first 8000 bytes, as git's own test for
 // one does: a NUL past them doesn't make git print a text file as binary.
 export function reviewPatch(cwd: string, base: string, head: string = headCommit(cwd)): Buffer {
@@ -258,6 +259,10 @@ export function reviewPatch(cwd: string, base: string, head: string = headCommit
     if (!/^Binary files .* differ$/m.test(section)) continue;
     const [before, after] = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(section)?.slice(1) ?? [];
     const file = /^diff --git (.*)$/m.exec(section)?.[1] ?? "a file";
+    const head = absent(after) ? Buffer.alloc(0) : gitBytes(cwd, ["cat-file", "blob", after as string]).subarray(0, 4);
+    if ([[0xff, 0xfe], [0xfe, 0xff], [0, 0, 0xfe, 0xff]].some((bom) => Buffer.from(bom).equals(head.subarray(0, bom.length)))) {
+      throw new Error(`${file}: this text is UTF-16 or UTF-32, which git shows only as "Binary files differ", so the reviewers couldn't read it. Re-encode it as UTF-8.`);
+    }
     if (binary(before) && !absent(after) && !binary(after)) {
       throw new Error(`${file}: the branch turns a binary file into text, which git shows only as "Binary files differ", so the reviewers couldn't read the text. Add the text at a new path instead.`);
     }
@@ -578,8 +583,9 @@ export function renderReport(ledger: Ledger): string {
 
 // The markers around the PR description's `## Review notes`, so the section
 // can be replaced without touching what follows it (`Fixes #`, the footer).
-// They're the ones PR #82 asked the Template's Claude Review to read the
-// notes between. The release blog drops HTML comments.
+// They're the pair PR #82's own description used: its request to the
+// Template's Claude Review names the first, and #81's PR names both. The
+// release blog drops HTML comments.
 export const REVIEW_NOTES_START = "<!-- review-notes -->";
 export const REVIEW_NOTES_END = "<!-- /review-notes -->";
 
@@ -611,55 +617,65 @@ export function renderReviewNotes(ledger: Ledger): string {
   return section("", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately);
 }
 
-// Whether each line of a Markdown text is inside a fenced code block (the
-// fence lines included): a line opening with ``` or ~~~, up to 3 spaces in,
-// until a closing fence of the same character at least as long.
-function fencedLines(lines: readonly string[]): boolean[] {
+// Which lines of a Markdown text are inside a fenced code block (the fence
+// lines included), and whether one is still open at the end. A fence opens
+// with ``` or ~~~, up to 3 spaces in or after a list item's marker, but not a
+// ``` whose line has another backtick (that's a code span); it closes with a
+// line of only the same character, at least as many.
+function codeBlocks(lines: readonly string[]): { fenced: boolean[]; open: boolean } {
   let fence: string | undefined;
-  return lines.map((line) => {
-    const mark = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+  const fenced = lines.map((line) => {
     if (fence === undefined) {
-      if (mark !== undefined) fence = mark;
-      return mark !== undefined;
+      const [, mark, rest] = /^ {0,3}(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)*(`{3,}|~{3,})(.*)$/.exec(line) ?? [];
+      if (mark === undefined || (mark[0] === "`" && (rest ?? "").includes("`"))) return false;
+      fence = mark;
+      return true;
     }
-    if (mark !== undefined && mark[0] === fence[0] && mark.length >= fence.length && /^ {0,3}[`~]+[ \t]*$/.test(line)) fence = undefined;
+    const close = /^[ \t]*(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
+    if (close !== undefined && close[0] === fence[0] && close.length >= fence.length) fence = undefined;
     return true;
   });
+  return { fenced, open: fence !== undefined };
 }
 
-// Whether line `index` starts a heading that reads "Review notes", in any
-// form GitHub renders as one: ATX (up to 3 spaces in, closing hashes,
-// emphasis or a colon around the words), setext, or an HTML <h1> to <h6>.
-function isReviewNotesHeading(lines: readonly string[], index: number): boolean {
-  const line = lines[index] ?? "";
-  const words = String.raw`[*_]*review\s+notes[*_:]*`;
-  if (new RegExp(String.raw`^ {0,3}#{1,6}[ \t]+${words}(?:[ \t]+#+)?[ \t]*$`, "i").test(line)) return true;
-  if (/<h[1-6][^>]*>\s*[*_]*review\s+notes/i.test(line)) return true;
-  return new RegExp(String.raw`^ {0,3}${words}[ \t]*$`, "i").test(line) && /^ {0,3}(?:=+|-+)[ \t]*$/.test(lines[index + 1] ?? "");
-}
+// A line that reads "Review notes" first, in any form a reader sees those
+// words in: a heading of any kind, in a quote or a list, with emphasis, tags,
+// character references or invisible characters (see visibleLetters).
+const readsReviewNotes = (line: string) => visibleLetters(line).startsWith("reviewnotes");
+
+// A closing line (`Fixes #n`, `Closes #n` or `Resolves #n`), or the footer.
+const isClosingLine = (line: string) => /^(?:fixes|closes|resolves) #\d+/i.test(line);
+const isFooter = (line: string) => line.startsWith("🤖 Generated with");
 
 // `body` with its Review notes section replaced by `notes` (renderReviewNotes'
 // output; empty removes the section). A marker counts only as a line of its
-// own outside a code block, so one quoted in the text or shown in an example
-// isn't taken for it. A body with no section gets one above its closing line
-// (the last `Fixes #n` that starts a paragraph), else above the footer, else
-// at the end. Throws, rather than guess, on an empty body (a `gh pr view` that
-// failed, which would publish the notes alone), on markers that don't make
-// one pair, and on a Review notes heading written without markers, which
-// would otherwise stay beside the new one. CRLF, as GitHub may store a
-// description, comes back as LF, and the result ends in one newline.
+// own, unindented and outside a code block, so one quoted in the text or shown
+// in an example isn't taken for it. A body with no section gets one above its
+// closing line (the last `Fixes`, `Closes` or `Resolves #n` that starts a
+// paragraph), else above the footer, else at the end. Throws, rather than
+// guess, on an empty body (a `gh pr view` that failed, which would publish
+// the notes alone), on a code block that never closes, on markers that don't
+// make one pair, on a closing line or the footer inside the section (replacing
+// it would delete them), and on any other line outside it that reads "Review
+// notes", such as an unmarked section, which would otherwise stay beside the
+// new one. CRLF, as GitHub may store a description, comes back as LF, and the
+// result ends in one newline.
 export function spliceReviewNotes(body: string, notes: string): string {
   const ask = (problem: string) =>
     new Error(`the PR description ${problem}, so its Review notes can't be replaced safely: show it to the person and ask the person what to keep`);
   if (body.trim() === "") throw ask("is empty");
   const lines = body.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
-  const fenced = fencedLines(lines);
+  const { fenced, open } = codeBlocks(lines);
+  if (open) throw ask("has a code block that never closes");
   const outside = (test: (line: string, index: number) => boolean) =>
     lines.flatMap((line, index) => (!fenced[index] && test(line, index) ? [index] : []));
   const starts = outside((line) => line.trimEnd() === REVIEW_NOTES_START);
   const ends = outside((line) => line.trimEnd() === REVIEW_NOTES_END);
   if (starts.length > 1 || ends.length > 1) throw ask("has more than one Review notes section");
   if (starts.length !== ends.length || (starts[0] ?? 0) > (ends[0] ?? 0)) throw ask("has Review notes markers that don't make one pair");
+  const [first, last] = [starts[0] ?? lines.length, ends[0] ?? -1];
+  if (outside((line, index) => (index < first || index > last) && readsReviewNotes(line)).length > 0) throw ask("has a Review notes section without markers");
+  if (lines.slice(first, last + 1).some((line) => isClosingLine(line) || isFooter(line))) throw ask("has its closing line or footer inside the Review notes markers");
   const added = notes === "" ? [] : notes.replace(/\n+$/, "").split("\n");
   let start: number;
   let removed: number;
@@ -676,10 +692,9 @@ export function spliceReviewNotes(body: string, notes: string): string {
       }
     }
   } else {
-    if (outside((_, index) => isReviewNotesHeading(lines, index)).length > 0) throw ask("has a Review notes section without markers");
     if (added.length === 0) return `${lines.join("\n")}\n`;
-    const closing = outside((line, index) => /^(?:fixes|closes|resolves) #\d+/i.test(line) && (index === 0 || lines[index - 1] === "")).at(-1);
-    const footer = outside((line) => line.startsWith("🤖 Generated with")).at(-1);
+    const closing = outside((line, index) => isClosingLine(line) && (index === 0 || lines[index - 1] === "")).at(-1);
+    const footer = outside(isFooter).at(-1);
     start = closing ?? footer ?? lines.length;
     removed = 0;
     // A blank line between it and what it's added above, or after the text

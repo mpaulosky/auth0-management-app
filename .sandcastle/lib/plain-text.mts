@@ -36,3 +36,24 @@ export function plainText(text: string): string {
     .replace(/^(\d+)([.)])(?=\s)/, "$1\\$2");
 }
 
+
+// A code point as text, or nothing for one that isn't a character.
+const character = (codePoint: number) => (codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : "");
+
+// The letters a reader sees in Markdown `text`, lowercased and run together:
+// HTML tags dropped, numeric character references decoded and named ones
+// dropped, compatibility forms folded (NFKC), and everything that isn't a
+// letter dropped (spaces, punctuation, emphasis and code marks, format and
+// combining characters). So `## Re*view*&#32;**notes**` reads "reviewnotes",
+// as it renders. Letters that only look alike, from another script, aren't
+// folded.
+export function visibleLetters(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, "")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => character(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, decimal: string) => character(Number(decimal)))
+    .replace(/&[a-z][a-z0-9]*;/gi, " ")
+    .normalize("NFKC")
+    .replace(/[^\p{L}]+/gu, "")
+    .toLowerCase();
+}
