@@ -241,6 +241,10 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, "Run `gh pr view 3; gh pr checks 3 --repo o/r`.\n"],
     [skill, "Run `gh pr view 3` and then `gh pr checks 3 -R o/r`.\n"],
     [skill, "Run `gh pr view 3 && GH_REPO=o/r gh pr checks 3 --repo o/r`.\n"],
+    // A quoted argument that holds the flag's words isn't the flag.
+    [skill, 'Run `gh pr comment 3 --body "use -R foo now"`.\n'],
+    [skill, "Run `gh issue create --title 'fix --repo handling now'`.\n"],
+    [skill, "Run `gh pr view 3 --repo ''`.\n"],
   ]) {
     it(`fails on a gh command not told its repository: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
@@ -294,6 +298,9 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, "Run `gh pr checks 3 --repo=mpaulosky/auth0-management-app`.\n"],
     [skill, "Run `gh pr view 3 --repo o/r` and `gh issue view 4 -R o/r`.\n"],
     [script, '#!/usr/bin/env bash\ngh pr checks "$pr" --repo "$repo" --json bucket\n'],
+    [skill, "Run `gh pr -R mpaulosky/auth0-management-app view 3`.\n"],
+    [skill, "Run `gh run --repo o/r list`.\n"],
+    [skill, 'Run `gh pr comment 3 --body "a -R b" --repo o/r`.\n'],
   ]) {
     it(`passes a gh command told its repository, or text that runs none: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");

@@ -90,17 +90,22 @@ if ((${#gh_files[@]} > 0)); then
       value = "(\"[^\" \t]+\"|" q "[^" q " \t]+" q "|[^ \t`\"" q ";&|,()<>]+)"
       told = "(^|[^A-Za-z0-9_])GH_REPO=" value "[ \t]+$"
       exports = "^[ \t]*export GH_REPO=" value "[ \t]*(;[ \t]*)?(#.*)?$"
+      # --repo or -R with its value, anywhere after the command group (gh pr
+      # -R o/r view, gh pr view 3 -R o/r) of a gh command other than gh api.
+      # It reads a command whose quoted arguments own() has blanked out.
+      flagged = "^[a-z][a-z-]*[ \t]([^`;&|()]*[ \t])?(-R|--repo)([ \t]+|=)" value "([ \t`;&|()]|$)"
       # gh repo <subcommand>, then its repository: o/r (bare or quoted, not a
       # redirect), <owner>/<repo>, a variable, or -R and --repo.
-      # --repo or -R with its value, after the subcommand of a gh command
-      # other than gh api.
-      flagged = "^[a-z][a-z-]*[ \t][^`;&|()]*[ \t](-R|--repo)([ \t]+|=)" value "([ \t`;&|()]|$)"
       named = "^repo[ \t]+[a-z-]+[ \t]+([\"" q "]?[^- \t<>`\"" q "$&|;(][^ \t`<>&|;\"" q "]*/|<[A-Za-z]|\"?[$]|-R[ =]|--repo[ =])"
     }
-    # The text of one gh command: up to the next command or gh.
+    # The text of one gh command, up to the next command or gh, with each
+    # quoted argument a bare Q (an empty one dropped), so the words of a flag
+    # inside one, as in --body "use -R x", are not the flag.
     function own(text) {
       if (match(text, /[`;&|()]/)) text = substr(text, 1, RSTART - 1)
       if (match(text, /[^A-Za-z0-9_.-]gh[ \t]/)) text = substr(text, 1, RSTART)
+      gsub("\"\"|" q q, "", text)
+      gsub("\"[^\"]*\"|" q "[^" q "]*" q, "Q", text)
       return text
     }
     FNR == 1 { shell = (FILENAME ~ /\.sh$/ || $0 ~ /^#!/); exported = 0 }
