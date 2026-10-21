@@ -155,12 +155,13 @@ fi
 # gate.sh pins, review-ledger.test.mts and gate-checks.test.mts check the
 # local review's ledger (and its Owned list against .claude/rules/baseline.md)
 # and this file, and pre-push-review-skill.test.mts checks that the review's
-# reviewers are read-only, readme.test.mts checks README.md's Releases
-# section, and config.test.mts and watch-pr.test.mts check scripts/watch-pr.sh,
+# reviewers are read-only, its severities, and the rules they change where
+# CLAUDE.md and this file restate them, readme.test.mts checks README.md's
+# Releases section, and config.test.mts and watch-pr.test.mts check scripts/watch-pr.sh,
 # so a change to any of them reruns them.
 if changed .sandcastle README.md package.json ':(glob)pnpm-*.yaml' scripts/check-branch-name.sh .claude/skills/code-review scripts/gate.sh \
   scripts/review.sh .github/ci/gate-checks.sh .claude/rules/baseline.md .claude/agents .claude/skills/pre-push-review \
-  .claude/settings.json scripts/watch-pr.sh; then
+  .claude/settings.json scripts/watch-pr.sh CLAUDE.md; then
   echo -e "${CYAN}🏰 Sandcastle TypeScript check...${RESET}"
   run_clean pnpm run check:sandcastle
 else
