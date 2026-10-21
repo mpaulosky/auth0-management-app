@@ -74,6 +74,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.29](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.29) | 2026-10-21 | feat(review): Grade local review findings as Critical, Warning or Advisory | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-89-feat-review-grade-local-review-findings-as-critical-warning-or-advisory.md) |
 | [v0.0.28](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.28) | 2026-10-21 | docs(README): Point the Releases table to how Releases are cut | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-86-docs-readme-point-the-releases-table-to-how-releases-are-cut.md) |
 | [v0.0.27](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.27) | 2026-10-21 | feat(review): Review every branch locally before it's pushed | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-82-feat-review-review-every-branch-locally-before-it-s-pushed.md) |
 | [v0.0.26](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.26) | 2026-10-20 | feat(sandcastle): Show why each Sandcastle PR is held | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-79-feat-sandcastle-show-why-each-sandcastle-pr-is-held.md) |
@@ -83,7 +84,6 @@ Blue, the default, renders no attribute.
 | [v0.0.22](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.22) | 2026-10-20 | feat(Roles): List the Roles and the Users who hold them | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-69-feat-roles-list-the-roles-and-the-users-who-hold-them.md) |
 | [v0.0.21](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.21) | 2026-10-20 | feat(sandcastle): Follow up on hand-opened PRs labelled for it | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-70-feat-sandcastle-follow-up-on-hand-opened-prs-labelled-for-it.md) |
 | [v0.0.20](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.20) | 2026-10-20 | feat(Users): List and search the Tenant's Users | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-59-feat-users-list-and-search-the-tenant-s-users.md) |
-| [v0.0.19](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.19) | 2026-10-20 | ci(sandcastle): Answer PR follow-ups without waiting behind a build | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-64-ci-sandcastle-answer-pr-follow-ups-without-waiting-behind-a-build.md) |
 
 <!-- RELEASES_END -->
 
