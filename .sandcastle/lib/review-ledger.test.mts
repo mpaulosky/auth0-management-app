@@ -337,6 +337,36 @@ describe("diffKey", () => {
     assert.notEqual(diffKey(repo, mergeBase(repo)), EMPTY_DIFF_KEY);
   });
 
+  // git calls a file binary when a NUL is among its first 8000 bytes: the byte
+  // at index 7999 is the last it looks at.
+  for (const [index, binary] of [
+    [7999, true],
+    [8000, false],
+  ] as const) {
+    it(`takes a NUL at byte ${index} of a new file ${binary ? "for" : "not for"} binary, as git does`, () => {
+      const bytes = Buffer.alloc(8100, "a");
+      bytes[index] = 0;
+      writeFileSync(join(repo, "n.cs"), bytes);
+      run(repo, "add", "n.cs");
+      run(repo, "commit", "--quiet", "-m", "a file with a NUL");
+
+      const patch = reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1");
+
+      assert.equal(/^Binary files .*n\.cs.* differ$/m.test(patch), binary);
+    });
+  }
+
+  it("reviews a text file emptied or deleted, and an empty file added", () => {
+    run(repo, "rm", "--quiet", "other.cs");
+    writeFileSync(join(repo, "empty.txt"), "");
+    run(repo, "add", "empty.txt");
+    run(repo, "commit", "--quiet", "-m", "delete one, add an empty one");
+    writeFileSync(join(repo, "app.cs"), "");
+    run(repo, "commit", "--quiet", "-am", "empty app.cs");
+
+    assert.doesNotThrow(() => diffKey(repo, mergeBase(repo)));
+  });
+
   it("refuses a binary file turned into text with a NUL past git's first 8000 bytes, which git still prints as text", () => {
     writeFileSync(join(upstream, "logo.png"), Buffer.from([0, 1, 2, 3, 0, 255]));
     run(upstream, "add", "logo.png");
@@ -1575,6 +1605,51 @@ describe("spliceReviewNotes", () => {
     assert.equal(spliceReviewNotes(body, notes), `## What changed\n\n${example}\n${section("New.")}\n\nFixes #81\n`);
   });
 
+  it("refuses to publish an empty description when the section was all the body held", () => {
+    assert.throws(() => spliceReviewNotes(`${section("Old.")}\n`, ""), /empty/);
+  });
+
+  it("removes a section at the very start of the body without leaving a gap", () => {
+    assert.equal(spliceReviewNotes(`${section("Old.")}\n\n## Why\n\nA.\n`, ""), "## Why\n\nA.\n");
+  });
+
+  it("removes a section whose neighbours are text on the next line, with no blank line either side", () => {
+    assert.equal(spliceReviewNotes(`## Why\nA.\n${section("Old.")}\nFixes #81\n`, ""), "## Why\nA.\nFixes #81\n");
+  });
+
+  it("reads a body whose line endings are lone carriage returns", () => {
+    const body = `## Why\r\rA.\r\r${section("Old.").replaceAll("\n", "\r")}\r\rFixes #81\r`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## Why\n\nA.\n\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("takes notes with no trailing newline the same as notes with one", () => {
+    assert.equal(spliceReviewNotes("## Why\n\nA.\n", notes.trimEnd()), spliceReviewNotes("## Why\n\nA.\n", notes));
+  });
+
+  it("takes a body with no trailing newline the same as one with it", () => {
+    assert.equal(spliceReviewNotes("## Why\n\nA.", notes), spliceReviewNotes("## Why\n\nA.\n", notes));
+  });
+
+  it("closes a fence with a longer one, and doesn't close it with one followed by text", () => {
+    const closed = `\`\`\`markdown\n${section("Example.")}\n\`\`\`\`\`\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(closed, notes), closed.replace("Fixes #81", `${section("New.")}\n\nFixes #81`));
+    assert.throws(() => spliceReviewNotes(`\`\`\`markdown\n\`\`\` not a closer\n${section("Old.")}\n`, notes), /never closes/);
+  });
+
+  it("lets a line that mentions review notes in the middle of a sentence stand", () => {
+    const body = "## Why\n\nSee the review notes below.\nThey were agreed.\n\nFixes #81\n";
+
+    assert.equal(spliceReviewNotes(body, notes), body.replace("Fixes #81", `${section("New.")}\n\nFixes #81`));
+  });
+
+  it("lets a heading about something else, with similar words, stand", () => {
+    const body = "## Reviewing the notes\n\nA.\n\n## Preview\n\nB.\n\nFixes #81\n";
+
+    assert.equal(spliceReviewNotes(body, notes), body.replace("Fixes #81", `${section("New.")}\n\nFixes #81`));
+  });
+
   it("ends the result in one newline, however many the body ended in", () => {
     const once = spliceReviewNotes("## Why\n\nA.\n", notes);
 
@@ -1912,6 +1987,29 @@ describe("main", () => {
       assert.equal(result.code, 1, output);
       assert.equal(readFileSync(input, "utf8"), "## Why\n\nA.\n");
     }
+  });
+
+  it("body fails, and leaves nothing, when the output's folder doesn't exist", () => {
+    record([]);
+    const input = join(root, "old-body.md");
+    writeFileSync(input, "## Why\n\nA.\n");
+    const output = join(root, "missing", "body.md");
+
+    const result = cli(["body", input, output]);
+
+    assert.equal(result.code, 1);
+    assert.equal(existsSync(output), false);
+  });
+
+  it("body fails when the input file doesn't exist, and leaves no output", () => {
+    record([]);
+    const output = join(root, "body.md");
+    writeFileSync(output, "an earlier run's description\n");
+
+    const result = cli(["body", join(root, "nope.md"), output]);
+
+    assert.equal(result.code, 1);
+    assert.equal(existsSync(output), false);
   });
 
   it("body names the input when the output has the same name", () => {

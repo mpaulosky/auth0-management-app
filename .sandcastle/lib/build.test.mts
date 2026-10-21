@@ -1213,6 +1213,27 @@ describe("buildIssue reading the reviewer's PR body", () => {
     assert.ok(logs.some((line) => /PR body/i.test(line)), logs.join("\n"));
   });
 
+  // What refusals must not catch: a description like these is ordinary in this
+  // repository, and a false refusal loses the reviewer's description.
+  for (const [scenario, text] of [
+    ["a generic type", "Returns `Result<T>` from the handler."],
+    ["a comparison and an arrow", "Holds when 0 < n, and maps x => y, or a -> b."],
+    ["an ampersand in a name", "Fixes the R&D table."],
+    ["a link", "See [the docs](https://example.com/docs) for how."],
+    ["a checkbox list", "- [x] Added a test\n- [ ] Ran it"],
+    ["a word that holds review", "A review of the previews, and the notes for them."],
+    ["a fenced code block with an operator", "```csharp\nvar a = b < c;\n```"],
+  ] as const) {
+    it(`publishes the reviewer's description when it holds ${scenario}`, async () => {
+      const prBodyFile = `${validPrBody}\n\n${text}`;
+      const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
+
+      await buildIssue(issue, branch, base, buildHost);
+
+      assert.equal(publishedPrBodies.at(-1), prBodyFile);
+    });
+  }
+
   it("removes an earlier round's pr-body.md before any role runs, so its description never goes out with this round's change", async () => {
     const { workCommands, buildHost } = host([0, 0], { prBodyFile: validPrBody });
 

@@ -729,12 +729,12 @@ const isFooter = (line: string) => line.startsWith("🤖 Generated with");
 // closing line (the last `Fixes`, `Closes` or `Resolves #n` that starts a
 // paragraph), else above the footer, else at the end. Throws, rather than
 // guess, on an empty body (a `gh pr view` that failed, which would publish
-// the notes alone), on a code block that never closes, on markers that don't
-// make one pair, on a closing line or the footer inside the section (replacing
-// it would delete them), and on any other line outside it that reads "Review
-// notes", such as an unmarked section, which would otherwise stay beside the
-// new one. CRLF, as GitHub may store a description, comes back as LF, and the
-// result ends in one newline.
+// the notes alone) or one that removing the section leaves empty, on a code
+// block that never closes, on markers that don't make one pair, on a closing
+// line or the footer inside the section (replacing it would delete them), and
+// on any other line outside it that reads "Review notes", such as an unmarked
+// section, which would otherwise stay beside the new one. CRLF, as GitHub may
+// store a description, comes back as LF, and the result ends in one newline.
 export function spliceReviewNotes(body: string, notes: string): string {
   const ask = (problem: string) =>
     new Error(`the PR description ${problem}, so its Review notes can't be replaced safely: show it to the person and ask the person what to keep`);
@@ -793,6 +793,8 @@ export function spliceReviewNotes(body: string, notes: string): string {
     }
   }
   lines.splice(start, removed, ...added);
+  // The section was all the body held and nothing is accepted any more.
+  if (lines.every((line) => line.trim() === "")) throw ask("would be empty without its Review notes");
   return `${lines.join("\n")}\n`;
 }
 

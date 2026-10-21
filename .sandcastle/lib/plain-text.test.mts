@@ -18,6 +18,19 @@ describe("visibleLetters", () => {
     });
   }
 
+  it("reads nothing as nothing, and markup alone as nothing", () => {
+    assert.equal(visibleLetters(""), "");
+    assert.equal(visibleLetters("<br><hr/> ## ** &nbsp; &#33;"), "");
+  });
+
+  it("reads a character reference with leading zeros, and one for a lone surrogate or a NUL, without throwing", () => {
+    assert.equal(visibleLetters("&#0118;iew&#0;&#xD800;"), "view");
+  });
+
+  it("keeps the letters of any script, since it only reads letters", () => {
+    assert.equal(visibleLetters("Überprüfung 検討 Δ"), "überprüfung検討δ");
+  });
+
   it("takes a reference to a code point that doesn't exist for nothing, rather than throw", () => {
     assert.equal(visibleLetters("a&#99999999;b&#x110000;c"), "abc");
   });
@@ -26,5 +39,10 @@ describe("visibleLetters", () => {
 describe("plainText", () => {
   it("escapes a leading tilde, which would otherwise open a code fence", () => {
     assert.equal(plainText("~~~x"), "\\~~~x");
+  });
+
+  it("escapes it after leading whitespace too, and leaves a tilde elsewhere in the line alone", () => {
+    assert.equal(plainText("  ~~~x"), "\\~~~x");
+    assert.equal(plainText("a ~~~x"), "a ~~~x");
   });
 });
