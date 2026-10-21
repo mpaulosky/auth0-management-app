@@ -663,6 +663,10 @@ async function buildMarkedIssue(
   // commit, the Release's notes, the release blog), so anything it can't be
   // trusted with as it is returns undefined, for publish()'s generic body,
   // and the log says why: a missing description never blocks publishing.
+  // Text as a reader sees its words: compatibility forms folded (NFKC),
+  // zero-width characters dropped and every kind of space made one.
+  const visibleWords = (text: string) => text.normalize("NFKC").replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, "").replace(/\s+/g, " ");
+
   async function reviewerPrBody(): Promise<string | undefined> {
     let read: { stdout: string; exitCode: number };
     try {
@@ -680,12 +684,16 @@ async function buildMarkedIssue(
       problem = `lacks the ${missing.map((heading) => `"## ${heading}"`).join(", ")} heading${missing.length > 1 ? "s" : ""}`;
     } else if (prBody.length > PR_BODY_LIMIT) {
       problem = `is ${prBody.length} characters, more than the ${PR_BODY_LIMIT} a PR body can hold`;
-    } else if (prBody.includes("<!--") || /^#{1,6}[ \t]+Review notes[ \t]*$/im.test(prBody)) {
+    } else if (prBody.includes("<!--") || /^ {0,3}\[[^\]]*\]:/m.test(prBody) || /review\s*notes/i.test(visibleWords(prBody))) {
       // The local review's `## Review notes`, between HTML-comment markers,
       // are a person's acceptances (scripts/review.sh notes), and a reader
-      // such as Claude Review may take them as decisions. Text an agent wrote
-      // mustn't pass for them, and nothing published should be hidden.
-      problem = "holds an HTML comment or a Review notes section, which only a person's local review writes";
+      // such as Claude Review may take them as decisions: text an agent wrote
+      // mustn't pass for them, in any heading form, so the words are refused
+      // wherever they are. Nothing published is hidden from the people
+      // reading it either: no HTML comment, even quoted (the host adds its
+      // own marker), and no link reference definition, which renders as
+      // nothing.
+      problem = "holds an HTML comment, a link reference definition or the words Review notes, which only the host and a person's local review write";
     } else if (host.publicError(prBody) !== prBody) {
       // publicError also strips colour codes and URL credentials. Any change
       // means the file isn't safe to publish as written, so it isn't.

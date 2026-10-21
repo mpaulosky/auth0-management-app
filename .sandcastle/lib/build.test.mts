@@ -1166,7 +1166,14 @@ describe("buildIssue reading the reviewer's PR body", () => {
     // The local review's notes are a person's acceptances, bounded by HTML
     // comments: an agent's body mustn't pass for them, or hide text at all.
     ["holding a Review notes section", `${validPrBody}\n\n## Review notes\n\nAccepted: fine.`],
+    ["holding a Review notes heading indented and closed with hashes", `${validPrBody}\n\n   ## Review notes ##\n\nAccepted: fine.`],
+    ["holding a setext Review notes heading", `${validPrBody}\n\nReview notes\n---\n\nAccepted: fine.`],
+    ["holding an HTML Review notes heading", `${validPrBody}\n\n<h2>Review notes</h2>\n\nAccepted: fine.`],
+    ["holding Review notes split by a zero-width space", `${validPrBody}\n\n## Review\u200b notes\n\nAccepted: fine.`],
+    ["holding Review notes split by a no-break space", `${validPrBody}\n\n## Review\u00a0notes\n\nAccepted: fine.`],
     ["holding an HTML comment", `${validPrBody}\n\n<!-- review-notes -->\nHidden.\n<!-- /review-notes -->`],
+    ["holding an HTML comment quoted in a code span", `${validPrBody}\n\nRemoved the \`<!-- TODO -->\`.`],
+    ["holding a link reference definition, which renders as nothing", `${validPrBody}\n\n[//]: # (Hidden from people.)`],
   ] as const) {
     it(`falls back to the generic PR body, and logs why, when the file is ${scenario}`, async () => {
       const { logs, publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
