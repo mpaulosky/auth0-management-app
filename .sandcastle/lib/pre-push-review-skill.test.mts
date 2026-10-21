@@ -8,6 +8,8 @@ import { describe, it } from "node:test";
 const agent = readFileSync(new URL("../../.claude/agents/pre-push-reviewer.md", import.meta.url), "utf8");
 const skill = readFileSync(new URL("../../.claude/skills/pre-push-review/SKILL.md", import.meta.url), "utf8");
 const bar = readFileSync(new URL("../../.claude/skills/pre-push-review/review-bar.md", import.meta.url), "utf8");
+const claude = readFileSync(new URL("../../CLAUDE.md", import.meta.url), "utf8");
+const gateChecks = readFileSync(new URL("../../.github/ci/gate-checks.sh", import.meta.url), "utf8");
 const settings = JSON.parse(readFileSync(new URL("../../.claude/settings.json", import.meta.url), "utf8")) as { permissions?: { deny?: string[] } };
 
 describe("the pre-push-review skill's reviewers", () => {
@@ -141,5 +143,27 @@ describe("the pre-push-review skill's Warnings", () => {
 describe("the pre-push-review skill's misgraded Warnings", () => {
   it("records a real non-security problem again at its own grade when its Warning is dismissed", () => {
     assert.match(skill, /also record the problem as a new finding with\s+its own id, graded from the table/);
+  });
+});
+
+// Lessons from Claude Review's threads on #89: each restated an old rule, or
+// lost what it referred to, beside the new severities.
+describe("the rules the severities change, where they're restated", () => {
+  it("lets the person accept a Critical finding left open for them, in the Severities table", () => {
+    const table = /\| \*\*Critical\*\* \|[^\n]*/.exec(skill)?.[0] ?? "";
+
+    assert.match(table, /Yes, until fixed, or until the person accepts one left open for them/);
+  });
+
+  it("forbids accepting any finding on the person's behalf in CLAUDE.md, not only an Advisory one", () => {
+    assert.match(claude.replace(/\s+/g, " "), /Never accept a finding on their behalf/);
+    assert.doesNotMatch(claude.replace(/\s+/g, " "), /Never accept one on their behalf/);
+  });
+
+  it("says the gate's review check passes open Advisory findings", () => {
+    const flat = gateChecks.replace(/\n#\s*/g, " ");
+
+    assert.match(flat, /no open Critical or Warning finding \(open Advisory findings pass/);
+    assert.doesNotMatch(flat, /every finding fixed, dismissed or accepted/);
   });
 });
