@@ -116,8 +116,9 @@ const findingFields = z.object({
   status: z.enum(["fixed", "dismissed", "accepted", "open"]),
   test: z.string().trim().min(1).nullable(),
   reason: z.string().trim().min(1).nullable(),
-  // The reviewer's suggested fix, kept for the person deciding a Warning and
-  // for the follow-up issue's Advisory findings (renderAdvisories).
+  // The reviewer's suggested fix, kept for the follow-up issue's Advisory
+  // findings (renderAdvisories); the agent gives the person deciding an open
+  // Critical or Warning finding its fix in the skill's step 9.
   fix: z.string().trim().min(1).nullable().optional(),
 });
 
@@ -130,18 +131,25 @@ function checkOutcome(finding: z.infer<typeof findingFields>, context: z.Refinem
   }
 }
 
-// A finding a review records: triage must grade every one. A finding whose
+// A finding a review records: triage must grade every one, and decide whether
+// it's a security weakness. The grade alone doesn't decide what's published: a
+// weakness misgraded Critical or Advisory under a lens that doesn't say
+// security would reach the follow-up issue or the notes, so `security` is
+// always given, and a security weakness is always a Warning. A finding whose
 // lens names security is never Advisory: it would pass the check without a
 // person deciding it, and go to the public follow-up issue.
 // Its `fix` is always given, null when unused, and given for every open
 // finding: the person deciding it, or the follow-up issue, needs it.
 export const findingSchema = findingFields
-  .extend({ severity: z.enum(SEVERITIES), fix: z.string().trim().min(1).nullable() })
+  .extend({ severity: z.enum(SEVERITIES), security: z.boolean(), fix: z.string().trim().min(1).nullable() })
   .strict()
   .superRefine(checkOutcome)
   .superRefine((finding, context) => {
     if (finding.status === "open" && finding.fix === null) {
       context.addIssue({ code: "custom", message: `${finding.id} is open without a suggested fix` });
+    }
+    if (finding.security && finding.severity !== "warning") {
+      context.addIssue({ code: "custom", message: `${finding.id} is a security weakness: grade it warning, not ${finding.severity}` });
     }
     if (finding.severity === "advisory" && /security/i.test(finding.lens)) {
       context.addIssue({ code: "custom", message: `${finding.id}'s lens names security, so it's a security weakness: grade it warning, not advisory` });
@@ -150,10 +158,10 @@ export const findingSchema = findingFields
 
 // A finding as stored. A ledger recorded before `severity` existed has none,
 // nor a `fix`, and still parses, so check, accept, report and latest read it;
-// one recorded before that has no `security` mark either. A finding with no
-// severity counts as a Warning (see severityOf), so it blocks until a person
-// decides it; the mark severity replaced still decides whether it's published
-// (see isSecurity).
+// one recorded before `security` existed, or between its two lives, has no
+// `security` mark. A finding with no severity counts as a Warning (see
+// severityOf), so it blocks until a person decides it, and one with no mark
+// counts as a security finding (see isSecurity).
 export const storedFindingSchema = findingFields
   .extend({ severity: z.enum(SEVERITIES).optional(), security: z.boolean().optional() })
   .strict()
@@ -164,13 +172,13 @@ export type Finding = z.infer<typeof storedFindingSchema>;
 // A finding's severity, a Warning when it has none.
 export const severityOf = (finding: Finding): Severity => finding.severity ?? "warning";
 
-// Whether a finding is a security weakness: a Warning, or one whose lens names
-// security whatever it was graded, so a misgraded one isn't published. A
-// finding with no severity is one unless its old `security` mark says it
-// isn't, as triage decided then. The report's mark, the notes, the follow-up
-// issue and the check all ask this, so they never disagree.
+// Whether a finding is a security weakness: a Warning, one whose lens names
+// security whatever it was graded, or one triage didn't mark as no security
+// weakness, so a misgraded or unmarked one isn't published. The report's mark,
+// the notes, the follow-up issue and the check all ask this, so they never
+// disagree.
 export const isSecurity = (finding: Finding) =>
-  (finding.severity === undefined ? finding.security !== false : finding.severity === "warning") || /security/i.test(finding.lens);
+  finding.severity === "warning" || finding.security !== false || /security/i.test(finding.lens);
 
 // Whether a finding blocks the push: open, and not Advisory, or a security
 // finding whatever its grade.

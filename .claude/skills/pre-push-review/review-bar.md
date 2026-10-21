@@ -35,8 +35,10 @@ fix its problem is still a finding: say what still goes wrong.
 
 **Severity.** Grade every finding from the **Severities** table in the skill, and never leave one ungraded: `critical` for a
 bug in code that runs (`src/`, `tests/`, `.sandcastle/`, `scripts/`, `.github/ci/`, `.github/scripts/`, workflows, git
-hooks), `warning` for a security weakness in any file, and `advisory` for everything else (docs, comments, skill and
-prompt text, conventions). A security weakness is always `warning`. Give every finding a suggested fix, whatever its
+hooks, and build and dependency configuration such as `*.csproj`, `Directory.*.props`, `global.json`, `package.json` and
+pnpm files) and for new or changed behaviour with no test, `warning` for a security weakness in any file, and `advisory`
+for everything else (docs, comments, skill and prompt text, conventions). A security weakness is always `warning`. Grade
+`critical` when in doubt between `critical` and `advisory`, and `warning` when in doubt whether it's a security weakness. Give every finding a suggested fix, whatever its
 severity. In a later round, which reviews a round's fixes, report only problems on the lines the fixes changed or problems
 the fixes cause.
 

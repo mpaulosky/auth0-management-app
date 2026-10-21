@@ -73,6 +73,7 @@ const finding = (overrides: Partial<Finding> = {}): Finding => ({
   line: 3,
   summary: "An email of only spaces passes the guard.",
   severity: "critical",
+  security: false,
   status: "fixed",
   test: "tests/AppTests.cs::Guard_WhitespaceEmail_Fails",
   reason: null,
@@ -422,6 +423,17 @@ describe("checkReview", () => {
     assert.equal(result.ok, false);
     assert.match(result.message, /R1 advisory app\.cs:3 \(Security\)/);
   });
+
+  for (const lens of ["GitHub Actions", "Edge cases"]) {
+    it(`fails with a stored open Advisory finding from ${lens} with no security decision, since nobody decided it isn't one`, () => {
+      const ledger = record([finding({ lens, severity: "advisory", status: "open", test: null })]);
+      rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), ({ security: _, ...rest }) => rest);
+
+      const result = checkReview(repo, mergeBase(repo), {});
+
+      assert.equal(result.ok, false);
+    });
+  }
 
   it("names only the blocking findings when Advisory ones are open beside them", () => {
     record([finding({ status: "open", test: null }), finding({ id: "R2", severity: "advisory", status: "open", test: null })]);
@@ -845,9 +857,19 @@ describe("recordReview", () => {
     assert.throws(() => record([finding({ severity: "minor" as Finding["severity"] })]), /severity/);
   });
 
-  it("refuses the security mark ledgers used to hold, since a Warning is what marks a security weakness now", () => {
-    assert.throws(() => record([{ ...finding(), security: true } as Finding]), /security/);
+  // Triage decides every finding's security mark, so a weakness misgraded
+  // under a lens that doesn't say security is still held back (#89's review).
+  it("refuses a finding without its security decision", () => {
+    const { security: _, ...undecided } = finding();
+
+    assert.throws(() => record([undecided as Finding]), /security/);
   });
+
+  for (const severity of ["critical", "advisory"] as const) {
+    it(`refuses a ${severity} finding marked security, since a security weakness is graded warning`, () => {
+      assert.throws(() => record([finding({ severity, security: true, status: "open", test: null })]), /R1 is a security weakness: grade it warning/);
+    });
+  }
 
   it("refuses findings that share an id", () => {
     assert.throws(() => record([finding(), finding()]), /repeat: R1/);
@@ -1077,7 +1099,7 @@ describe("renderReport", () => {
   });
 
   it("shows a stored finding with no severity under Warning, as the check treats it, marked security unless its old mark said it isn't", () => {
-    const { severity: _, fix: _fix, ...ungraded } = finding();
+    const { severity: _, fix: _fix, security: _security, ...ungraded } = finding();
     const ledger: Ledger = { ...record([]), findings: [{ ...ungraded, security: false }, { ...ungraded, id: "R2" }] };
 
     const report = renderReport(ledger);
@@ -1185,10 +1207,18 @@ describe("renderReviewNotes", () => {
   });
 
   it("counts a stored finding with neither a severity nor a security mark, since nobody decided it isn't one", () => {
-    const { severity: _, fix: _fix, ...unmarked } = finding({ status: "accepted", test: null, summary: "An unmarked finding.", reason: "Later." });
+    const { severity: _, fix: _fix, security: _security, ...unmarked } = finding({ status: "accepted", test: null, summary: "An unmarked finding.", reason: "Later." });
     const ledger: Ledger = { ...record([]), findings: [unmarked] };
 
     assert.doesNotMatch(renderReviewNotes(ledger), /unmarked finding/);
+    assert.match(renderReviewNotes(ledger), /1 accepted security finding/);
+  });
+
+  it("counts an accepted Critical finding with no security decision, since nobody decided it isn't one", () => {
+    const { security: _, ...undecided } = finding({ lens: "GitHub Actions", status: "accepted", test: null, summary: "A fork reaches the token.", reason: "Later." });
+    const ledger: Ledger = { ...record([]), findings: [undecided] };
+
+    assert.doesNotMatch(renderReviewNotes(ledger), /reaches the token/);
     assert.match(renderReviewNotes(ledger), /1 accepted security finding/);
   });
 
@@ -1246,6 +1276,13 @@ describe("renderAdvisories", () => {
 
   it("leaves out a stored Advisory finding whose lens names security, though record no longer takes one", () => {
     const ledger: Ledger = { ...record([]), findings: [{ ...finding({ severity: "advisory", status: "open", test: null, summary: "A token leaks." }), lens: "Security" }] };
+
+    assert.equal(renderAdvisories(ledger), "");
+  });
+
+  it("leaves out a stored Advisory finding with no security decision, whatever its lens", () => {
+    const { security: _, ...undecided } = finding({ lens: "GitHub Actions", severity: "advisory", status: "open", test: null, summary: "A fork reaches the token." });
+    const ledger: Ledger = { ...record([]), findings: [undecided] };
 
     assert.equal(renderAdvisories(ledger), "");
   });

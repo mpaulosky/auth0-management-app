@@ -167,3 +167,47 @@ describe("the rules the severities change, where they're restated", () => {
     assert.doesNotMatch(flat, /every finding fixed, dismissed or accepted/);
   });
 });
+
+// #89's review: what the follow-up issue and the notes publish rests on an
+// explicit security mark, not on the grade and the lens alone.
+describe("the pre-push-review skill's security mark", () => {
+  const flat = skill.replace(/\s+/g, " ");
+
+  it("has triage mark every finding, true when in doubt, and record it", () => {
+    assert.ok(flat.includes("Then mark every finding's `security`"));
+    assert.ok(flat.includes("`true` when in doubt"));
+    assert.match(skill, /"severity": "critical", "security": false,/);
+  });
+
+  it("holds back from the notes every finding not marked as no security weakness", () => {
+    assert.ok(flat.includes("any finding not marked `security: false`"));
+  });
+
+  it("records a real problem found under a dismissed Security-lens Warning under the lens that fits it", () => {
+    assert.ok(flat.includes("under the lens that fits its problem"));
+  });
+});
+
+describe("the pre-push-review skill's follow-up comment", () => {
+  it("adds the unlisted findings only when some aren't listed", () => {
+    const flat = skill.replace(/\s+/g, " ");
+
+    assert.ok(flat.includes("post nothing. Otherwise add the rest as a comment"));
+    assert.doesNotMatch(flat, /post nothing\. Then add the rest/);
+  });
+});
+
+// Untested behaviour and build configuration aren't docs, so a reviewer who
+// grades them Advisory lets the branch go out without them (#89's review).
+describe("the pre-push-review skill's Critical grade", () => {
+  it("covers untested behaviour and build configuration, and is the grade when in doubt, in the table and the bar", () => {
+    const table = /\| \*\*Critical\*\* \|[^\n]*/.exec(skill)?.[0] ?? "";
+    const flatBar = bar.replace(/\s+/g, " ");
+
+    for (const text of [table, flatBar]) {
+      assert.match(text, /new or changed behaviour with no test/);
+      assert.match(text, /`Directory\.\*\.props`/);
+    }
+    assert.ok(flatBar.includes("`critical` when in doubt between `critical` and `advisory`"));
+  });
+});
