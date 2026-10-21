@@ -1222,6 +1222,27 @@ describe("renderReviewNotes", () => {
     assert.match(renderReviewNotes(ledger), /1 accepted security finding/);
   });
 
+  // A ledger recorded before severity existed marks its security findings
+  // with security: true alone; a later one may mark a Critical one so.
+  for (const severity of [undefined, "critical"] as const) {
+    it(`counts an accepted stored finding marked security with ${severity ?? "no"} severity, whatever its lens`, () => {
+      const { severity: _, ...base } = finding({ status: "accepted", test: null, summary: "A token reaches the log.", reason: "Later." });
+      const ledger: Ledger = { ...record([]), findings: [{ ...base, ...(severity === undefined ? {} : { severity }), security: true }] };
+
+      assert.doesNotMatch(renderReviewNotes(ledger), /reaches the log/);
+      assert.match(renderReviewNotes(ledger), /1 accepted security finding/);
+      assert.match(renderReport(ledger), /\| R1 \| Edge cases \(security\) \|/);
+    });
+  }
+
+  it("holds back and blocks on a stored open Advisory finding marked security", () => {
+    const ledger = record([finding({ severity: "advisory", status: "open", test: null, summary: "A token reaches the log." })]);
+    rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), (stored) => ({ ...stored, security: true }));
+
+    assert.equal(renderAdvisories(readLedger(repo, ledger.key) ?? ledger), "");
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+  });
+
   it("only counts them when every accepted finding is a security finding", () => {
     const ledger = record([finding({ status: "accepted", test: null, severity: "warning", summary: "The token reaches the log.", reason: "Later." })]);
 
@@ -1266,6 +1287,18 @@ describe("renderAdvisories", () => {
     const body = renderAdvisories(record([finding({ severity: "advisory", status: "open", test: null })]));
 
     assert.equal(body.split("\n")[0], "Advisory findings from the local review of feature/1-thing, left for a follow-up:");
+  });
+
+  it("can't mention anyone or link an issue through a finding's path or the branch's name", () => {
+    const ledger: Ledger = {
+      ...record([finding({ path: "src/@someone/a#12.cs", severity: "advisory", status: "open", test: null })]),
+      branch: "feature/1-@someone-#12",
+    };
+
+    const body = renderAdvisories(ledger);
+
+    assert.match(body, /^- R1 /m);
+    assert.doesNotMatch(body.replace(/<!-- claude-session -->\n$/, ""), /@someone|#12|<!--/);
   });
 
   it("names HEAD for a ledger recorded on a detached HEAD", () => {
