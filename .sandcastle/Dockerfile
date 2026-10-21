@@ -4,6 +4,7 @@ FROM node:22-bookworm
 RUN apt-get update && apt-get install -y \
   git \
   curl \
+  gawk \
   jq \
   libicu72 \
   python3-pytest \

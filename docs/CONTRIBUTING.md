@@ -195,8 +195,12 @@ Pull requests without unit tests will be delayed and asked for unit tests to pro
 ### Review Process
 
 Contributing needs [Claude Code](https://claude.com/claude-code). Every branch passes the local review before each push:
-run `/pre-push-review` in your branch's worktree. It reviews the whole branch, fixes what it finds behind regression tests,
-and leaves any finding that needs a decision for you to fix or to accept with `scripts/review.sh accept <id> "<reason>"`.
+run `/pre-push-review` in your branch's worktree. It reviews the whole branch and grades each finding. It fixes
+**Critical** findings (bugs in code that runs: application code, tests, tooling and build and dependency configuration,
+and new or changed behaviour with no test) behind regression tests, and leaves
+each **Warning** (a security weakness), and any finding that needs your decision, for you to fix or to accept with `scripts/review.sh accept <id> "<reason>"`.
+**Advisory** findings (docs, comments, conventions) are fixed in the review too, and never block: one left for you to
+decide goes to one follow-up issue for your branch.
 Your acceptances appear in your PR's `## Review notes`, and the maintainer reviews them before merging. An accepted
 security finding is never listed there, and never goes in a commit message or a thread reply: report it privately, as
 [SECURITY.md](SECURITY.md#how-to-report) describes, before you push, naming your branch. Report each weakness once: a

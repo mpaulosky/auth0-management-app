@@ -4,7 +4,7 @@ Every reviewer the `pre-push-review` skill starts reads this first. The first tw
 prompt in `.github/workflows/claude-review.yml`, so the local review asks at least what GitHub's will. One sentence is adapted:
 GitHub's reviewer reads pinned actions' source from the runner, and a local one reads what the agent running the review
 fetched into the run folder. The rest is adapted from the same
-prompt for a review that runs before the push.
+prompt for a review that runs before the push, except the **Severity** paragraph, which is this review's own.
 
 Your review may be the only one this PR gets before it merges on its own, so be
 thorough. For each change, ask what happens on the paths the author didn't test:
@@ -32,6 +32,15 @@ changed. A problem a person accepted is still in the code: report it again, nami
 the person can accept it for this code. The same goes for a problem the repository owner declined on a PR thread, and for
 one an earlier review left open for a person: report it again, naming it, unless the code now fixes it. A fix that doesn't
 fix its problem is still a finding: say what still goes wrong.
+
+**Severity.** Grade every finding from the **Severities** table in the skill, and never leave one ungraded: `critical` for a
+bug in code that runs (`src/`, `tests/`, `.sandcastle/`, `scripts/`, `.github/ci/`, `.github/scripts/`, workflows, git
+hooks, and build and dependency configuration such as `*.csproj`, `Directory.*.props`, `global.json`, `package.json` and
+pnpm files) and for new or changed behaviour with no test, `warning` for a security weakness in any file, and `advisory`
+for everything else (docs, comments, skill and prompt text, conventions). A security weakness is always `warning`. Grade
+`critical` when in doubt between `critical` and `advisory`, and `warning` when in doubt whether it's a security weakness. Give every finding a suggested fix, whatever its
+severity. In a later round, which reviews a round's fixes, report only problems on the lines the fixes changed or problems
+the fixes cause.
 
 **Where a finding goes.** Every finding names a file path relative to the repository root and a line number on the new side of
 that file, on a line the diff adds or shows as context. When the problem lies in code the diff doesn't touch, put the finding on

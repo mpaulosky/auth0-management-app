@@ -89,47 +89,102 @@ export const underOwnedPattern = (path: string) => ownedPatterns.some((pattern) 
 // Whether `path` is an Owned Baseline file.
 export const isOwnedPath = (path: string) => !NOT_OWNED.has(path) && underOwnedPattern(path);
 
+// How much a finding matters, which decides what happens to it. `critical`:
+// a bug in code that runs (src/, tests/, the repository's tooling, which
+// decides what merges and releases, and build and dependency configuration),
+// or new or changed behaviour with no test, fixed in the review behind a regression
+// test, and blocking until it is fixed, or until the person accepts one left
+// open for them. `warning`: a security weakness, whatever file it's in, which
+// blocks until the person fixes or accepts it. `advisory`: everything else
+// (docs, comments, prompts, conventions), fixed in the review too, which never
+// blocks: one left for a person goes to the branch's follow-up issue.
+export const SEVERITIES = ["critical", "warning", "advisory"] as const;
+
+export type Severity = (typeof SEVERITIES)[number];
+
 // One finding. `fixed` needs the regression test that pins it, or the reason
 // it has none (a workflow or prose finding); `dismissed` needs the evidence
 // that the reviewer was wrong, read from the code; `accepted` needs the reason
-// a person accepted it; `open` waits for a person. `security` says whether
-// it's a security weakness, whichever lens raised it: an accepted one is
-// never published (renderReviewNotes).
-const findingOf = <S extends z.ZodType<boolean | undefined>>(security: S) =>
-  z
-    .object({
-      id: z.string().regex(/^R[1-9]\d{0,5}$/, "ids are R1, R2, ... up to R999999, with no leading zero"),
-      lens: z.string().trim().min(1),
-      // A repository path: no whitespace, markup or backtick, so it can't carry
-      // anything into the PR description that plainText would have to undo.
-      path: z.string().trim().min(1).regex(/^[^\s<>`]+$/, "a path has no whitespace, <, > or backtick"),
-      line: z.number().int().nonnegative(),
-      summary: z.string().trim().min(1),
-      security,
-      status: z.enum(["fixed", "dismissed", "accepted", "open"]),
-      test: z.string().trim().min(1).nullable(),
-      reason: z.string().trim().min(1).nullable(),
-    })
-    .strict()
-    .superRefine((finding, context) => {
-      if (finding.status === "fixed" && finding.test === null && finding.reason === null) {
-        context.addIssue({ code: "custom", message: `${finding.id} is fixed but names neither its test nor why it has none` });
-      }
-      if ((finding.status === "accepted" || finding.status === "dismissed") && finding.reason === null) {
-        context.addIssue({ code: "custom", message: `${finding.id} is ${finding.status} without a reason` });
-      }
-    });
+// a person accepted it; `open` waits for a person, or for the follow-up issue
+// when it's Advisory.
+const findingFields = z.object({
+  id: z.string().regex(/^R[1-9]\d{0,5}$/, "ids are R1, R2, ... up to R999999, with no leading zero"),
+  lens: z.string().trim().min(1),
+  // A repository path: no whitespace, markup or backtick, so it can't carry
+  // anything into the PR description that plainText would have to undo.
+  path: z.string().trim().min(1).regex(/^[^\s<>`]+$/, "a path has no whitespace, <, > or backtick"),
+  line: z.number().int().nonnegative(),
+  summary: z.string().trim().min(1),
+  status: z.enum(["fixed", "dismissed", "accepted", "open"]),
+  test: z.string().trim().min(1).nullable(),
+  reason: z.string().trim().min(1).nullable(),
+  // The reviewer's suggested fix, kept for the follow-up issue's Advisory
+  // findings (renderAdvisories); the agent gives the person deciding an open
+  // Critical or Warning finding its fix in the skill's step 9.
+  fix: z.string().trim().min(1).nullable().optional(),
+});
 
-// A finding a review records: triage must decide `security` for every one.
-export const findingSchema = findingOf(z.boolean());
+function checkOutcome(finding: z.infer<typeof findingFields>, context: z.RefinementCtx): void {
+  if (finding.status === "fixed" && finding.test === null && finding.reason === null) {
+    context.addIssue({ code: "custom", message: `${finding.id} is fixed but names neither its test nor why it has none` });
+  }
+  if ((finding.status === "accepted" || finding.status === "dismissed") && finding.reason === null) {
+    context.addIssue({ code: "custom", message: `${finding.id} is ${finding.status} without a reason` });
+  }
+}
 
-// A finding as stored. A ledger recorded before `security` existed has none
-// and still parses, so check, accept, report and latest read it. The report
-// and the notes treat a missing mark as a security finding, so it isn't
-// published undecided.
-export const storedFindingSchema = findingOf(z.boolean().optional());
+// A finding a review records: triage must grade every one, and decide whether
+// it's a security weakness. The grade alone doesn't decide what's published: a
+// weakness misgraded Critical or Advisory under a lens that doesn't say
+// security would reach the follow-up issue or the notes, so `security` is
+// always given, and a security weakness is always a Warning. A finding whose
+// lens names security is never Advisory: it would pass the check without a
+// person deciding it, and go to the public follow-up issue.
+// Its `fix` is always given, null when unused, and given for every open
+// finding: the person deciding it, or the follow-up issue, needs it.
+export const findingSchema = findingFields
+  .extend({ severity: z.enum(SEVERITIES), security: z.boolean(), fix: z.string().trim().min(1).nullable() })
+  .strict()
+  .superRefine(checkOutcome)
+  .superRefine((finding, context) => {
+    if (finding.status === "open" && finding.fix === null) {
+      context.addIssue({ code: "custom", message: `${finding.id} is open without a suggested fix` });
+    }
+    if (finding.security && finding.severity !== "warning") {
+      context.addIssue({ code: "custom", message: `${finding.id} is a security weakness: grade it warning, not ${finding.severity}` });
+    }
+    if (finding.severity === "advisory" && /security/i.test(finding.lens)) {
+      context.addIssue({ code: "custom", message: `${finding.id}'s lens names security, so it's a security weakness: grade it warning, not advisory` });
+    }
+  });
+
+// A finding as stored. A ledger recorded before `severity` existed has none,
+// nor a `fix`, and still parses, so check, accept, report and latest read it;
+// one recorded before `security` existed, or by a version that graded
+// findings without requiring the mark, has no `security` mark. A finding with no severity counts as a Warning (see
+// severityOf), so it blocks until a person decides it, and one with no mark
+// counts as a security finding (see isSecurity).
+export const storedFindingSchema = findingFields
+  .extend({ severity: z.enum(SEVERITIES).optional(), security: z.boolean().optional() })
+  .strict()
+  .superRefine(checkOutcome);
 
 export type Finding = z.infer<typeof storedFindingSchema>;
+
+// A finding's severity, a Warning when it has none.
+export const severityOf = (finding: Finding): Severity => finding.severity ?? "warning";
+
+// Whether a finding is a security weakness: one graded Warning, one whose lens
+// names security whatever it was graded, or one triage didn't mark as no
+// security weakness, so a misgraded or unmarked one isn't published. The report's mark,
+// the notes, the follow-up issue and the check all ask this, so they never
+// disagree.
+export const isSecurity = (finding: Finding) =>
+  finding.severity === "warning" || finding.security !== false || /security/i.test(finding.lens);
+
+// Whether a finding blocks the push: open, and not Advisory, or a security
+// finding whatever its grade.
+const isBlocking = (finding: Finding) => finding.status === "open" && (severityOf(finding) !== "advisory" || isSecurity(finding));
 
 // What the skill hands to `record`: the key and the HEAD `scripts/review.sh
 // prepare` printed when the last round started, from the patch its reviewers
@@ -515,7 +570,7 @@ export function acceptFinding(cwd: string, base: string, id: string, reason: str
 export type ReviewCheck = { ok: boolean; message: string };
 
 // The gate's review check: HEAD's diff has a recorded review with no open
-// finding. Three things pass without one: `GATE_SKIP_REVIEW=1` (that value
+// Critical or Warning finding. Three things pass without one: `GATE_SKIP_REVIEW=1` (that value
 // only), a branch with no changes against the base, and a Baseline re-Apply
 // on REAPPLY_BRANCH that changes only Owned files.
 export function checkReview(cwd: string, base: string, env: NodeJS.ProcessEnv = process.env): ReviewCheck {
@@ -547,19 +602,21 @@ export function checkReview(cwd: string, base: string, env: NodeJS.ProcessEnv = 
   if (ledger === undefined || !isReviewedCode(cwd, ledger.head, base, head)) {
     return { ok: false, message: "No review is recorded for this diff. Run /pre-push-review, which reviews, fixes and records it." };
   }
-  const open = ledger.findings.filter((finding) => finding.status === "open");
-  if (open.length > 0) {
-    const lines = open.map((finding) => `  ${finding.id} ${finding.path}:${finding.line} (${finding.lens}): ${finding.summary}`);
+  const blocking = ledger.findings.filter(isBlocking);
+  if (blocking.length > 0) {
+    const lines = blocking.map((finding) => `  ${finding.id} ${severityOf(finding)} ${finding.path}:${finding.line} (${finding.lens}): ${finding.summary}`);
     return {
       ok: false,
       message: [
-        `${open.length} review finding(s) wait for a person. Fix them and run /pre-push-review again, or the person you work for accepts each one (never an agent on their behalf):`,
+        `${blocking.length} review finding(s) wait for a person. Fix them and run /pre-push-review again, or the person you work for accepts each one (never an agent on their behalf):`,
         ...lines,
         '  scripts/review.sh accept <id> "<reason>"',
       ].join("\n"),
     };
   }
-  return { ok: true, message: `Reviewed clean: ${ledger.findings.length} finding(s), all fixed, dismissed or accepted.` };
+  const advisory = ledger.findings.filter((finding) => finding.status === "open").length;
+  const followUp = advisory === 0 ? "" : ` ${advisory} Advisory finding(s) open for the follow-up issue.`;
+  return { ok: true, message: `Reviewed clean: ${ledger.findings.length} finding(s), none blocking.${followUp}` };
 }
 
 // Reviewer and person text as one line of plain Markdown (plainText, in
@@ -569,16 +626,25 @@ const cell = (text: string) => plainText(text).replace(/\|/g, "\\|");
 
 const where = (finding: Finding) => cell(`${finding.path}:${finding.line}`);
 
-// The review report: every finding, where it is, what happened to it, and the
-// test or reason behind that.
+const severityHeadings: Record<Severity, string> = { critical: "Critical", warning: "Warning", advisory: "Advisory" };
+
+// The review report: every finding, grouped by severity, where it is, what
+// happened to it, and the test or reason behind that. A severity no finding
+// has gets no section.
 export function renderReport(ledger: Ledger): string {
   const header = `Review of ${ledger.branch === "" ? "HEAD" : cell(ledger.branch)} at ${ledger.head.slice(0, 12)}: ${ledger.rounds} round(s), ${ledger.findings.length} finding(s).`;
   if (ledger.findings.length === 0) return `${header}\n\nNo findings.\n`;
-  const rows = ledger.findings.map(
-    (finding) =>
-      `| ${finding.id} | ${cell(finding.lens)}${finding.security === false ? "" : " (security)"} | ${where(finding)} | ${cell(finding.summary)} | ${finding.status} | ${cell(finding.test ?? finding.reason ?? "")} |`,
-  );
-  return [header, "", "| Id | Lens | Where | Finding | Status | Test or reason |", "| --- | --- | --- | --- | --- | --- |", ...rows, ""].join("\n");
+  const sections = SEVERITIES.flatMap((severity) => {
+    const rows = ledger.findings
+      .filter((finding) => severityOf(finding) === severity)
+      .map(
+        (finding) =>
+          `| ${finding.id} | ${cell(finding.lens)}${isSecurity(finding) ? " (security)" : ""} | ${where(finding)} | ${cell(finding.summary)} | ${finding.status} | ${cell(finding.test ?? finding.reason ?? "")} |`,
+      );
+    if (rows.length === 0) return [];
+    return ["", `### ${severityHeadings[severity]}`, "", "| Id | Lens | Where | Finding | Status | Test or reason |", "| --- | --- | --- | --- | --- | --- |", ...rows];
+  });
+  return [header, ...sections, ""].join("\n");
 }
 
 // The markers around the PR description's `## Review notes`, so the section
@@ -589,12 +655,14 @@ export function renderReport(ledger: Ledger): string {
 export const REVIEW_NOTES_START = "<!-- review-notes -->";
 export const REVIEW_NOTES_END = "<!-- /review-notes -->";
 
-// The PR description's `## Review notes`, between its markers: the findings a
-// person accepted, for people reading the PR, except security findings, which
-// are only counted.
-// GitHub's reviewers aren't known to read the description, so a thread one
-// opens on an accepted finding gets the same "Left for the owner." reply as
-// every thread left for the owner (CLAUDE.md); the reason stays in the ledger
+// The PR description's `## Review notes`, between its markers: the Critical and Advisory findings a
+// person accepted, for people reading the PR. Security findings (see
+// isSecurity: graded Warning, a lens naming security, or unmarked) are only
+// counted, so the maintainer knows to wait for the
+// private report. GitHub's reviewers aren't known to read the description, so
+// a thread one opens on an accepted finding gets the same "Left for the
+// owner." reply as every thread left for the owner (CLAUDE.md), which doesn't
+// say which thread a security finding is on; the reason stays in the ledger
 // and, for a finding that isn't a security one, in these notes. Empty when
 // none was accepted.
 export function renderReviewNotes(ledger: Ledger): string {
@@ -602,7 +670,7 @@ export function renderReviewNotes(ledger: Ledger): string {
   // An accepted security finding is a known weakness left as it is, and the
   // description becomes public release notes: it's tracked privately instead
   // (docs/SECURITY.md), and only counted here.
-  const security = accepted.filter((finding) => finding.security !== false || /security/i.test(finding.lens));
+  const security = accepted.filter(isSecurity);
   const listed = accepted.filter((finding) => !security.includes(finding));
   if (accepted.length === 0) return "";
   const privately =
@@ -709,14 +777,56 @@ export function spliceReviewNotes(body: string, notes: string): string {
   return `${lines.join("\n")}\n`;
 }
 
+// The patch of the fixes a later round reviews: `since`, the HEAD the round
+// before read, to `head`. The reasons it can't be, as a message: a commit that
+// isn't one of HEAD's, no round prepared in `dir`, a commit later than the
+// HEAD the last prepare in `dir` printed (it would leave fixes unread; an
+// earlier one only rereads more, as when a round is prepared twice), a merge
+// of main since (the patch would hold main's changes), or no fixes at all.
+function fixesPatch(cwd: string, dir: string, since: string, base: string, head: string): Buffer | string {
+  if (!isAncestor(cwd, since, head)) {
+    return `${since} isn't one of HEAD's commits: give the HEAD prepare printed in the round before. After an amend or a rebase there's none: start again at round 1 (prepare without <since>).`;
+  }
+  const headFile = join(dir, "head");
+  const before = existsSync(headFile) ? readFileSync(headFile, "utf8").trim() : undefined;
+  if (before === undefined || !isAncestor(cwd, since, before)) {
+    return `${since} is later than the HEAD prepare printed in the round before (${before ?? "none in this folder"}): give that one, so no fix goes unread.`;
+  }
+  if (git(cwd, "merge-base", "origin/main", since) !== base) {
+    return "main was merged in since the round before, so the fixes can't be told from main's changes: start again at round 1.";
+  }
+  const fixes = reviewPatch(cwd, since, head);
+  if (fixes.length === 0) return `no fixes since ${since}: a later round follows a round that fixed something, after its fix commits.`;
+  return fixes;
+}
+
+// The follow-up issue's list of the open Advisory findings, each with where it
+// is, what goes wrong and the suggested fix, as plain Markdown (plainText: no
+// mention, reference, closing keyword, tag or code span gets through), ending
+// with the session marker. A finding isSecurity marks is left out, whatever
+// its grade: the issue is public. Empty when there's none.
+export function renderAdvisories(ledger: Ledger): string {
+  const open = ledger.findings.filter((finding) => finding.status === "open" && severityOf(finding) === "advisory" && !isSecurity(finding));
+  if (open.length === 0) return "";
+  const lines = open.map((finding) => {
+    const fix = finding.fix == null ? "" : ` Suggested fix: ${plainText(finding.fix)}`;
+    return `- ${finding.id} ${plainText(`${finding.path}:${finding.line}`)}: ${plainText(finding.summary)}${fix}`;
+  });
+  const branch = ledger.branch === "" ? "HEAD" : plainText(ledger.branch);
+  return [`Advisory findings from the local review of ${branch}, left for a follow-up:`, "", ...lines, "", "<!-- claude-session -->", ""].join("\n");
+}
+
 const USAGE = `Usage: scripts/review.sh <command>
-  prepare <absolute dir> write HEAD's diff to <dir>/diff.patch for the reviewers; print its key, then HEAD
+  prepare <absolute dir> [<since>]
+                         write HEAD's diff to <dir>/diff.patch for the reviewers, and with <since> (the HEAD
+                         the round before printed) the fixes since to <dir>/fixes.patch; print the key, then HEAD
   key                    print the ledger key of HEAD's diff against origin/main
   check [<base>]         the gate's check: exit 1 unless HEAD's diff was reviewed clean
   record <file>          record a review from JSON ({ reviewedKey, reviewedHead, rounds, findings }); - reads stdin
   accept <id> <reason>   accept an open finding on HEAD's review
   report                 print HEAD's review report
   notes                  print the "## Review notes" section for the PR description
+  advisory               print the follow-up issue's list of open Advisory findings
   body <in> <out>        write to <out> the PR description in <in> (- reads stdin) with its Review notes replaced;
                          <out> is removed first and written only on success
   latest                 print the nearest earlier review of this branch's work as JSON ({} when none)
@@ -742,10 +852,19 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         if (rest[0] === undefined || !isAbsolute(rest[0])) return fail(USAGE);
         // One read of the patch gives both, so the key names exactly the text
         // the reviewers get.
+        // A fixes patch is only ever this prepare's: an earlier round's would
+        // have the reviewers read old fixes.
+        rmSync(join(rest[0], "fixes.patch"), { force: true });
         const head = headCommit(cwd);
-        const patch = reviewPatch(cwd, mergeBase(cwd), head);
+        const base = mergeBase(cwd);
+        const patch = reviewPatch(cwd, base, head);
+        const fixes = rest[1] === undefined ? undefined : fixesPatch(cwd, rest[0], rest[1], base, head);
+        if (typeof fixes === "string") return fail(fixes);
         mkdirSync(rest[0], { recursive: true });
         writeFileSync(join(rest[0], "diff.patch"), patch);
+        if (fixes !== undefined) writeFileSync(join(rest[0], "fixes.patch"), fixes);
+        // The HEAD this round reads, for the next round's fixesPatch.
+        writeFileSync(join(rest[0], "head"), `${head}\n`);
         out(`${patchKey(patch)}\n${head}`);
         return 0;
       }
@@ -768,10 +887,13 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         return 0;
       }
       case "report":
-      case "notes": {
+      case "notes":
+      case "advisory": {
         const ledger = readLedger(cwd, diffKey(cwd, mergeBase(cwd)));
         if (ledger === undefined) return fail("No review is recorded for this diff.");
-        out(command === "report" ? renderReport(ledger) : renderReviewNotes(ledger) || "No accepted findings.");
+        if (command === "report") out(renderReport(ledger));
+        else if (command === "notes") out(renderReviewNotes(ledger) || "No accepted findings.");
+        else out(renderAdvisories(ledger) || "No open Advisory findings.");
         return 0;
       }
       case "body": {

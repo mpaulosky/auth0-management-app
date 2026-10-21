@@ -21,6 +21,7 @@ import {
   readLedger,
   recordReview,
   takenIds,
+  renderAdvisories,
   renderReport,
   renderReviewNotes,
   REVIEW_NOTES_END,
@@ -37,7 +38,7 @@ import {
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 
-// A finding as a review records it, with `security` decided.
+// A finding as a review records it, with its severity graded.
 type Finding = ReviewInput["findings"][number];
 
 const moduleFile = fileURLToPath(new URL("./review-ledger.mts", import.meta.url));
@@ -74,10 +75,12 @@ const finding = (overrides: Partial<Finding> = {}): Finding => ({
   path: "app.cs",
   line: 3,
   summary: "An email of only spaces passes the guard.",
+  severity: "critical",
   security: false,
   status: "fixed",
   test: "tests/AppTests.cs::Guard_WhitespaceEmail_Fails",
   reason: null,
+  fix: "Trim the email before the guard.",
   ...overrides,
 });
 
@@ -93,6 +96,13 @@ function record(findings: Finding[], rounds = 1, now?: Date): Ledger {
   let accepted = ledger;
   for (const found of toAccept) accepted = acceptFinding(repo, mergeBase(repo), found.id, found.reason ?? "");
   return accepted;
+}
+
+// Rewrite every finding in the ledger file at `path`, as an older version of
+// the ledger would have written it.
+function rewriteFindings(path: string, change: (finding: Record<string, unknown>) => Record<string, unknown>): void {
+  const ledger = JSON.parse(readFileSync(path, "utf8")) as { findings: Record<string, unknown>[] };
+  writeFileSync(path, JSON.stringify({ ...ledger, findings: ledger.findings.map(change) }));
 }
 
 // The branch's nearest earlier review.
@@ -444,9 +454,60 @@ describe("checkReview", () => {
     const result = checkReview(repo, mergeBase(repo), {});
 
     assert.equal(result.ok, false);
-    assert.match(result.message, /R4 app\.cs:3 \(Edge cases\)/);
+    assert.match(result.message, /R4 critical app\.cs:3 \(Edge cases\)/);
     assert.match(result.message, /scripts\/review\.sh accept/);
     assert.match(result.message, /the person you work for accepts each one \(never an agent on their behalf\)/);
+  });
+
+  for (const severity of ["critical", "warning"] as const) {
+    it(`fails with an open ${severity} finding`, () => {
+      record([finding({ severity, status: "open", test: null })]);
+
+      const result = checkReview(repo, mergeBase(repo), {});
+
+      assert.equal(result.ok, false);
+      assert.match(result.message, new RegExp(`R1 ${severity} app\\.cs:3`));
+    });
+  }
+
+  it("passes with open Advisory findings, which never block, and counts them for the follow-up issue", () => {
+    record([finding(), finding({ id: "R2", severity: "advisory", status: "open", test: null }), finding({ id: "R3", severity: "advisory", status: "open", test: null })]);
+
+    const result = checkReview(repo, mergeBase(repo), {});
+
+    assert.equal(result.ok, true);
+    assert.match(result.message, /2 Advisory finding\(s\) open for the follow-up issue/);
+  });
+
+  it("fails with a stored open Advisory finding whose lens names security, which record no longer takes", () => {
+    const ledger = record([finding({ severity: "advisory", status: "open", test: null })]);
+    rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), (stored) => ({ ...stored, lens: "Security" }));
+
+    const result = checkReview(repo, mergeBase(repo), {});
+
+    assert.equal(result.ok, false);
+    assert.match(result.message, /R1 advisory app\.cs:3 \(Security\)/);
+  });
+
+  for (const lens of ["GitHub Actions", "Edge cases"]) {
+    it(`fails with a stored open Advisory finding from ${lens} with no security decision, since nobody decided it isn't one`, () => {
+      const ledger = record([finding({ lens, severity: "advisory", status: "open", test: null })]);
+      rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), ({ security: _, ...rest }) => rest);
+
+      const result = checkReview(repo, mergeBase(repo), {});
+
+      assert.equal(result.ok, false);
+    });
+  }
+
+  it("names only the blocking findings when Advisory ones are open beside them", () => {
+    record([finding({ status: "open", test: null }), finding({ id: "R2", severity: "advisory", status: "open", test: null })]);
+
+    const result = checkReview(repo, mergeBase(repo), {});
+
+    assert.equal(result.ok, false);
+    assert.match(result.message, /^1 review finding\(s\) wait/);
+    assert.doesNotMatch(result.message, /R2/);
   });
 
   it("fails again once a new commit changes the diff the review vouched for", () => {
@@ -719,9 +780,9 @@ describe("recordReview", () => {
   });
 
   it("refuses an id a review of the same diff at the same commit used, so an accept read from it can't land on another finding", () => {
-    record([finding({ status: "open", test: null }), finding({ id: "R2", lens: "Security", security: true, status: "open", test: null })]);
+    record([finding({ status: "open", test: null }), finding({ id: "R2", lens: "Security", severity: "warning", status: "open", test: null })]);
 
-    assert.throws(() => record([finding({ lens: "Security", security: true, status: "open", test: null })]), /after R2/);
+    assert.throws(() => record([finding({ lens: "Security", severity: "warning", status: "open", test: null })]), /after R2/);
   });
 
   it("refuses an id the branch's earlier review used, so the two are never confused", () => {
@@ -801,19 +862,100 @@ describe("recordReview", () => {
     });
   }
 
-  it("still reads and checks a ledger recorded before findings had a security mark", () => {
+  it("still reads and checks a ledger recorded before findings had a security mark or a severity", () => {
     const ledger = record([finding({ status: "accepted", test: null, reason: "Old acceptance." })]);
     const path = join(ledgerDir(repo), `${ledger.key}.json`);
-    writeFileSync(path, readFileSync(path, "utf8").replace(/\s*"security": false,/g, ""));
+    rewriteFindings(path, ({ severity: _, fix: _fix, ...rest }) => rest);
 
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
-    assert.equal(latestLedger(repo, mergeBase(repo))?.findings[0]?.security, undefined);
+    const latest = latestLedger(repo, mergeBase(repo));
+    assert.equal(latest?.key, ledger.key);
+    assert.equal(latest?.findings[0]?.severity, undefined);
   });
 
-  it("refuses a finding whose security weakness wasn't decided", () => {
+  it("still takes the ids of a ledger recorded before findings had a severity or a fix", () => {
+    const ledger = record([finding({ status: "open", test: null })]);
+    rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), ({ severity: _, fix: _fix, ...rest }) => ({ ...rest, security: false }));
+    commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "fix" : undefined)), "fix");
+
+    assert.equal(cli(["next"]).out, "R2\n");
+    assert.equal(latestLedger(repo, mergeBase(repo))?.key, ledger.key);
+  });
+
+  it("accepts an open finding on a ledger recorded before findings had a severity, so the check passes", () => {
+    const ledger = record([finding({ status: "open", test: null })]);
+    rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), ({ severity: _, fix: _fix, ...rest }) => ({ ...rest, security: false }));
+
+    acceptFinding(repo, mergeBase(repo), "R1", "Old.");
+
+    assert.equal(readLedger(repo, ledger.key)?.findings[0]?.status, "accepted");
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
+  });
+
+  it("still reads a ledger recorded with a security mark and no severity, and treats its open finding as a Warning that blocks", () => {
+    const ledger = record([finding({ status: "open", test: null })]);
+    const path = join(ledgerDir(repo), `${ledger.key}.json`);
+    rewriteFindings(path, ({ severity: _, fix: _fix, ...rest }) => ({ ...rest, security: false }));
+
+    const result = checkReview(repo, mergeBase(repo), {});
+
+    assert.equal(result.ok, false);
+    assert.match(result.message, /R1 warning app\.cs:3/);
+  });
+
+  it("refuses a finding without a severity", () => {
+    const { severity: _, ...ungraded } = finding();
+
+    assert.throws(() => record([ungraded as Finding]), /severity/);
+  });
+
+  for (const lens of ["Security", "Edge/Security", "security"]) {
+    it(`refuses an Advisory finding whose lens names security (${lens}), which would pass the check and be published`, () => {
+      assert.throws(() => record([finding({ lens, severity: "advisory", status: "open", test: null })]), /names security.*warning/);
+    });
+  }
+
+  it("refuses a finding without the fix field, which is null when unused", () => {
+    const { fix: _, ...fixless } = finding();
+
+    assert.throws(() => record([fixless as Finding]), /fix/);
+  });
+
+  for (const severity of ["critical", "warning", "advisory"] as const) {
+    it(`refuses an open ${severity} finding with no suggested fix, which the person or the follow-up issue needs`, () => {
+      assert.throws(() => record([finding({ severity, status: "open", test: null, fix: null })]), /R1 is open without a suggested fix/);
+    });
+  }
+
+  it("keeps a finding's suggested fix", () => {
+    const ledger = record([finding({ severity: "advisory", status: "open", test: null, fix: "Reword the comment." })]);
+
+    assert.equal(readLedger(repo, ledger.key)?.findings[0]?.fix, "Reword the comment.");
+  });
+
+  it("refuses a severity that isn't critical, warning or advisory", () => {
+    assert.throws(() => record([finding({ severity: "minor" as Finding["severity"] })]), /severity/);
+  });
+
+  // Triage decides every finding's security mark, so a weakness misgraded
+  // under a lens that doesn't say security is still held back (#89's review).
+  it("refuses a finding without its security decision", () => {
     const { security: _, ...undecided } = finding();
 
     assert.throws(() => record([undecided as Finding]), /security/);
+  });
+
+  for (const severity of ["critical", "advisory"] as const) {
+    it(`refuses a ${severity} finding marked security, since a security weakness is graded warning`, () => {
+      assert.throws(() => record([finding({ severity, security: true, status: "open", test: null })]), /R1 is a security weakness: grade it warning/);
+    });
+  }
+
+  it("records a Warning marked security, which blocks and which the notes only count", () => {
+    const ledger = record([finding({ severity: "warning", security: true, status: "open", test: null })]);
+
+    assert.equal(readLedger(repo, ledger.key)?.findings[0]?.security, true);
+    assert.match(checkReview(repo, mergeBase(repo), {}).message, /R1 warning/);
   });
 
   it("refuses findings that share an id", () => {
@@ -1007,18 +1149,51 @@ describe("renderReport", () => {
     assert.match(report, /\| R2 .* \| accepted \| Spec\. \|/);
   });
 
-  it("shows which findings are marked security, so a person can see what the notes will leave out", () => {
-    const report = renderReport(record([finding({ security: true }), finding({ id: "R2" })]));
+  it("groups the findings by severity, Critical first, then Warning, then Advisory", () => {
+    const report = renderReport(
+      record([finding({ severity: "advisory", status: "open", test: null }), finding({ id: "R2" }), finding({ id: "R3", severity: "warning", status: "open", test: null })]),
+    );
+
+    const sections = report.split(/^### /m).slice(1);
+    assert.deepEqual(
+      sections.map((section) => section.split("\n")[0]),
+      ["Critical", "Warning", "Advisory"],
+    );
+    assert.deepEqual(
+      sections.map((section) => [...section.matchAll(/^\| (R\d+) \|/gm)].map((match) => match[1])),
+      [["R2"], ["R3"], ["R1"]],
+    );
+  });
+
+  it("leaves out a severity no finding has", () => {
+    const report = renderReport(record([finding()]));
+
+    assert.match(report, /^### Critical$/m);
+    assert.doesNotMatch(report, /^### (Warning|Advisory)$/m);
+  });
+
+  it("marks every Warning as security, so a person can see what the notes will leave out", () => {
+    const report = renderReport(record([finding({ severity: "warning" }), finding({ id: "R2" })]));
 
     assert.match(report, /\| R1 \| Edge cases \(security\) \|/);
     assert.match(report, /\| R2 \| Edge cases \|/);
   });
 
-  it("shows a stored finding with no security mark as security, as the notes treat it", () => {
-    const { security: _, ...unmarked } = finding();
-    const ledger: Ledger = { ...record([]), findings: [unmarked] };
+  it("marks a finding whose lens names security as security, whatever its severity, as the notes hold it back", () => {
+    const report = renderReport(record([finding({ lens: "Security", severity: "critical" })]));
 
-    assert.match(renderReport(ledger), /\| R1 \| Edge cases \(security\) \|/);
+    assert.match(report, /\| R1 \| Security \(security\) \|/);
+  });
+
+  it("shows a stored finding with no severity under Warning, as the check treats it, marked security unless its old mark said it isn't", () => {
+    const { severity: _, fix: _fix, security: _security, ...ungraded } = finding();
+    const ledger: Ledger = { ...record([]), findings: [{ ...ungraded, security: false }, { ...ungraded, id: "R2" }] };
+
+    const report = renderReport(ledger);
+
+    assert.match(report, /^### Warning$/m);
+    assert.match(report, /\| R1 \| Edge cases \|/);
+    assert.match(report, /\| R2 \| Edge cases \(security\) \|/);
   });
 
   it("says there were no findings when a review found nothing", () => {
@@ -1077,7 +1252,7 @@ describe("renderReviewNotes", () => {
 
   it("counts accepted security findings without listing them, whichever lens raised them, since the notes become public", () => {
     const ledger = record([
-      finding({ status: "accepted", test: null, lens: "GitHub Actions", security: true, summary: "A fork reaches the token.", reason: "Later." }),
+      finding({ status: "accepted", test: null, lens: "GitHub Actions", severity: "warning", summary: "A fork reaches the token.", reason: "Later." }),
       finding({ id: "R2", status: "accepted", test: null, lens: "Edge/Security", summary: "The token reaches the log.", reason: "Later." }),
       finding({ id: "R3", status: "accepted", test: null, reason: "Spec." }),
     ]);
@@ -1089,16 +1264,75 @@ describe("renderReviewNotes", () => {
     assert.match(notes, /Accepted: Spec\./);
   });
 
-  it("counts a stored finding with no security mark as one, since nobody decided it isn't", () => {
-    const { security: _, ...unmarked } = finding({ status: "accepted", test: null, summary: "An unmarked finding.", reason: "Later." });
+  it("lists accepted Critical and Advisory findings and only counts Warnings", () => {
+    const ledger = record([
+      finding({ status: "accepted", test: null, summary: "A critical bug.", reason: "Spec." }),
+      finding({ id: "R2", severity: "advisory", status: "accepted", test: null, summary: "A stale comment.", reason: "Fine." }),
+      finding({ id: "R3", severity: "warning", status: "accepted", test: null, summary: "A weak permission.", reason: "Later." }),
+    ]);
+
+    const notes = renderReviewNotes(ledger);
+
+    assert.match(notes, /A critical bug\. Accepted: Spec\./);
+    assert.match(notes, /A stale comment\. Accepted: Fine\./);
+    assert.doesNotMatch(notes, /weak permission/);
+    assert.match(notes, /1 accepted security finding/);
+  });
+
+  it("leaves out an open Advisory finding, which goes to the follow-up issue instead", () => {
+    const ledger = record([finding({ severity: "advisory", status: "open", test: null, summary: "A stale comment." })]);
+
+    assert.equal(renderReviewNotes(ledger), "");
+  });
+
+  it("lists an accepted stored finding with no severity whose old mark said it isn't a security weakness", () => {
+    const { severity: _, fix: _fix, ...old } = finding({ status: "accepted", test: null, summary: "An old finding.", reason: "Spec." });
+    const ledger: Ledger = { ...record([]), findings: [{ ...old, security: false }] };
+
+    assert.match(renderReviewNotes(ledger), /An old finding\. Accepted: Spec\./);
+    assert.doesNotMatch(renderReviewNotes(ledger), /accepted security finding/);
+  });
+
+  it("counts a stored finding with neither a severity nor a security mark, since nobody decided it isn't one", () => {
+    const { severity: _, fix: _fix, security: _security, ...unmarked } = finding({ status: "accepted", test: null, summary: "An unmarked finding.", reason: "Later." });
     const ledger: Ledger = { ...record([]), findings: [unmarked] };
 
     assert.doesNotMatch(renderReviewNotes(ledger), /unmarked finding/);
     assert.match(renderReviewNotes(ledger), /1 accepted security finding/);
   });
 
+  it("counts an accepted Critical finding with no security decision, since nobody decided it isn't one", () => {
+    const { security: _, ...undecided } = finding({ lens: "GitHub Actions", status: "accepted", test: null, summary: "A fork reaches the token.", reason: "Later." });
+    const ledger: Ledger = { ...record([]), findings: [undecided] };
+
+    assert.doesNotMatch(renderReviewNotes(ledger), /reaches the token/);
+    assert.match(renderReviewNotes(ledger), /1 accepted security finding/);
+  });
+
+  // A ledger recorded before severity existed marks its security findings
+  // with security: true alone. record refuses a Critical one marked so, but a
+  // hand-edited ledger, or one an earlier build wrote, can hold one.
+  for (const severity of [undefined, "critical"] as const) {
+    it(`counts an accepted stored finding marked security with ${severity ?? "no"} severity, whatever its lens`, () => {
+      const { severity: _, ...base } = finding({ status: "accepted", test: null, summary: "A token reaches the log.", reason: "Later." });
+      const ledger: Ledger = { ...record([]), findings: [{ ...base, ...(severity === undefined ? {} : { severity }), security: true }] };
+
+      assert.doesNotMatch(renderReviewNotes(ledger), /reaches the log/);
+      assert.match(renderReviewNotes(ledger), /1 accepted security finding/);
+      assert.match(renderReport(ledger), /\| R1 \| Edge cases \(security\) \|/);
+    });
+  }
+
+  it("holds back and blocks on a stored open Advisory finding marked security", () => {
+    const ledger = record([finding({ severity: "advisory", status: "open", test: null, summary: "A token reaches the log." })]);
+    rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), (stored) => ({ ...stored, security: true }));
+
+    assert.equal(renderAdvisories(readLedger(repo, ledger.key) ?? ledger), "");
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+  });
+
   it("only counts them when every accepted finding is a security finding", () => {
-    const ledger = record([finding({ status: "accepted", test: null, security: true, summary: "The token reaches the log.", reason: "Later." })]);
+    const ledger = record([finding({ status: "accepted", test: null, severity: "warning", summary: "The token reaches the log.", reason: "Later." })]);
 
     const notes = renderReviewNotes(ledger);
 
@@ -1301,6 +1535,87 @@ describe("spliceReviewNotes", () => {
   }
 });
 
+describe("renderAdvisories", () => {
+  it("lists each open Advisory finding with where it is, what goes wrong and the suggested fix, ending with the session marker", () => {
+    const ledger = record([
+      finding({ id: "R2", severity: "advisory", status: "open", test: null, summary: "The comment is stale.", fix: "Reword it." }),
+      finding({ id: "R3", severity: "advisory", status: "open", test: null, summary: "A list misses a check.", fix: "Add it." }),
+    ]);
+
+    const body = renderAdvisories(ledger);
+
+    assert.match(body, /^- R2 app\.cs:3: The comment is stale\. Suggested fix: Reword it\.$/m);
+    assert.match(body, /^- R3 app\.cs:3: A list misses a check\. Suggested fix: Add it\.$/m);
+    assert.match(body, /<!-- claude-session -->\n$/);
+  });
+
+  it("opens with the branch it was reviewed on, the line step 9 keeps on a comment", () => {
+    const body = renderAdvisories(record([finding({ severity: "advisory", status: "open", test: null })]));
+
+    assert.equal(body.split("\n")[0], "Advisory findings from the local review of feature/1-thing, left for a follow-up:");
+  });
+
+  it("can't mention anyone or link an issue through a finding's path or the branch's name", () => {
+    const ledger: Ledger = {
+      ...record([finding({ path: "src/@someone/a#12.cs", severity: "advisory", status: "open", test: null })]),
+      branch: "feature/1-@someone-#12",
+    };
+
+    const body = renderAdvisories(ledger);
+
+    assert.match(body, /^- R1 /m);
+    assert.doesNotMatch(body.replace(/<!-- claude-session -->\n$/, ""), /@someone|#12|<!--/);
+  });
+
+  it("names HEAD for a ledger recorded on a detached HEAD", () => {
+    const ledger: Ledger = { ...record([finding({ severity: "advisory", status: "open", test: null })]), branch: "" };
+
+    assert.equal(renderAdvisories(ledger).split("\n")[0], "Advisory findings from the local review of HEAD, left for a follow-up:");
+  });
+
+  it("ends a stored finding with no suggested fix at its summary", () => {
+    const { fix: _, ...fixless } = finding({ severity: "advisory", status: "open", test: null, summary: "An old one." });
+    const ledger: Ledger = { ...record([]), findings: [fixless] };
+
+    assert.match(renderAdvisories(ledger), /^- R1 app\.cs:3: An old one\.$/m);
+  });
+
+  it("leaves out every finding that isn't an open Advisory one", () => {
+    const ledger = record([
+      finding({ summary: "A fixed bug." }),
+      finding({ id: "R2", severity: "warning", status: "open", test: null, summary: "A weak permission." }),
+      finding({ id: "R3", severity: "advisory", status: "dismissed", test: null, reason: "Wrong.", summary: "A dismissed one." }),
+      finding({ id: "R4", severity: "advisory", status: "accepted", test: null, reason: "Fine.", summary: "An accepted one." }),
+      finding({ id: "R5", severity: "critical", status: "open", test: null, summary: "Left for a person." }),
+    ]);
+
+    assert.equal(renderAdvisories(ledger), "");
+  });
+
+  it("leaves out a stored Advisory finding whose lens names security, though record no longer takes one", () => {
+    const ledger: Ledger = { ...record([]), findings: [{ ...finding({ severity: "advisory", status: "open", test: null, summary: "A token leaks." }), lens: "Security" }] };
+
+    assert.equal(renderAdvisories(ledger), "");
+  });
+
+  it("leaves out a stored Advisory finding with no security decision, whatever its lens", () => {
+    const { security: _, ...undecided } = finding({ lens: "GitHub Actions", severity: "advisory", status: "open", test: null, summary: "A fork reaches the token." });
+    const ledger: Ledger = { ...record([]), findings: [undecided] };
+
+    assert.equal(renderAdvisories(ledger), "");
+  });
+
+  it("can't mention anyone, link or close an issue, or hide text in a tag", () => {
+    const ledger = record([
+      finding({ severity: "advisory", status: "open", test: null, summary: "Uses <!-- sandcastle:x --> for @someone", fix: "fixes #12 on github.com" }),
+    ]);
+
+    const body = renderAdvisories(ledger);
+
+    assert.doesNotMatch(body.replace(/<!-- claude-session -->\n$/, ""), /<!--|@someone|#12|github\.com/);
+  });
+});
+
 describe("main", () => {
   it("check exits 1 with no review recorded, and 0 once a clean one is", () => {
     assert.equal(cli(["check"]).code, 1);
@@ -1335,6 +1650,161 @@ describe("main", () => {
     assert.equal(result.code, 0);
     assert.deepEqual(result.out.trim().split("\n"), [diffKey(repo, mergeBase(repo)), run(repo, "rev-parse", "HEAD")]);
     assert.match(readFileSync(join(dir, "diff.patch"), "utf8"), /^\+changed$/m);
+  });
+
+  it("prepare given the HEAD an earlier round read also writes the diff of the fixes since, beside the whole diff", () => {
+    const dir = join(root, "run");
+    const before = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    commit(repo, "other.cs", "fixed\n", "fix");
+
+    const result = cli(["prepare", dir, before]);
+
+    assert.equal(result.code, 0, result.err);
+    const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+    assert.match(fixes, /^\+fixed$/m);
+    assert.doesNotMatch(fixes, /^\+changed$/m);
+    assert.match(readFileSync(join(dir, "diff.patch"), "utf8"), /^\+changed$/m);
+    assert.deepEqual(result.out.trim().split("\n"), [diffKey(repo, mergeBase(repo)), run(repo, "rev-parse", "HEAD")]);
+  });
+
+  it("prepare refuses an earlier HEAD that isn't one of HEAD's commits, whose diff would hold more than the fixes", () => {
+    run(repo, "switch", "--quiet", "-c", "elsewhere", "origin/main");
+    commit(repo, "other.cs", "elsewhere\n", "elsewhere");
+    const elsewhere = run(repo, "rev-parse", "HEAD");
+    run(repo, "switch", "--quiet", "feature/1-thing");
+
+    const result = cli(["prepare", join(root, "run"), elsewhere]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /isn't one of HEAD's commits/);
+    assert.equal(existsSync(join(root, "run", "fixes.patch")), false);
+  });
+
+  // An amend or a rebase replaces the commit the round before printed, so no
+  // commit gives the fixes alone: the review starts again.
+  it("prepare tells a later round to start again at round 1 after the HEAD it printed was amended", () => {
+    const dir = join(root, "run");
+    const before = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    run(repo, "commit", "--amend", "--quiet", "--allow-empty", "-m", "amended");
+
+    const result = cli(["prepare", dir, before]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /After an amend or a rebase there's none: start again at round 1/);
+  });
+
+  it("prepare refuses the HEAD it just printed when nothing was committed since, whose fixes patch would be empty", () => {
+    const dir = join(root, "run");
+    const before = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+
+    const result = cli(["prepare", dir, before]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /no fixes since/);
+    assert.equal(existsSync(join(dir, "fixes.patch")), false);
+  });
+
+  it("prepare refuses a commit that isn't the HEAD the round before printed, so no fix goes unread", () => {
+    const dir = join(root, "run");
+    cli(["prepare", dir]);
+    commit(repo, "other.cs", "first fix\n", "first fix");
+    const afterFirst = run(repo, "rev-parse", "HEAD");
+    commit(repo, "other.cs", "second fix\n", "second fix");
+
+    const result = cli(["prepare", dir, afterFirst]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /later than the HEAD prepare printed in the round before/);
+    assert.equal(existsSync(join(dir, "fixes.patch")), false);
+  });
+
+  it("prepare takes the same since again when a round is prepared twice, and its fixes patch then holds every commit since", () => {
+    const dir = join(root, "run");
+    const first = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    commit(repo, "other.cs", "first fix\n", "first fix");
+    assert.equal(cli(["prepare", dir, first]).code, 0);
+    commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "second fix" : undefined)), "second fix");
+
+    const result = cli(["prepare", dir, first]);
+
+    assert.equal(result.code, 0, result.err);
+    const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+    assert.match(fixes, /^\+first fix$/m);
+    assert.match(fixes, /^\+second fix$/m);
+  });
+
+  it("prepare follows the rounds: a third round's fixes patch holds only the fixes since the second", () => {
+    const dir = join(root, "run");
+    const first = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    commit(repo, "other.cs", "first fix\n", "first fix");
+    const second = cli(["prepare", dir, first]).out.trim().split("\n")[1] ?? "";
+    commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "second fix" : undefined)), "second fix");
+
+    const result = cli(["prepare", dir, second]);
+
+    assert.equal(result.code, 0, result.err);
+    const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+    assert.match(fixes, /^\+second fix$/m);
+    assert.doesNotMatch(fixes, /first fix/);
+  });
+
+  it("prepare refuses a later round in a folder no round was prepared in", () => {
+    const since = run(repo, "rev-parse", "HEAD");
+    commit(repo, "other.cs", "fixed\n", "fix");
+    const dir = join(root, "run");
+
+    const result = cli(["prepare", dir, since]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /none in this folder/);
+    assert.equal(existsSync(join(dir, "fixes.patch")), false);
+  });
+
+  for (const [what, args] of [
+    ["without a since", (_since: string) => [] as string[]],
+    ["with a since it refuses", (since: string) => [`${since}x`]],
+  ] as const) {
+    it(`prepare ${what} leaves no earlier round's fixes patch behind for the reviewers to read`, () => {
+      const dir = join(root, "run");
+      const first = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+      commit(repo, "other.cs", "first fix\n", "first fix");
+      assert.equal(cli(["prepare", dir, first]).code, 0);
+      commit(repo, "other.cs", "second fix\n", "second fix");
+
+      cli(["prepare", dir, ...args(first)]);
+
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
+    });
+  }
+
+  it("prepare refuses a later round after main was merged in, whose fixes patch would hold main's changes", () => {
+    const dir = join(root, "run");
+    const before = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    commit(upstream, "other.cs", "main moves on\n", "main moves on");
+    mergeMain();
+
+    const result = cli(["prepare", dir, before]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /main was merged in/);
+    assert.equal(existsSync(join(dir, "fixes.patch")), false);
+  });
+
+  // Only a merge of main moves the branch's fork point: a fetch alone, while
+  // the review runs, leaves the later round's fixes patch as it was.
+  it("prepare takes a later round after a fetch moved origin/main without a merge, and its fixes patch holds only the fix", () => {
+    const dir = join(root, "run");
+    const before = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    commit(upstream, "main.cs", "main moves on\n", "main moves on");
+    run(repo, "fetch", "--quiet", "origin");
+    commit(repo, "fix.cs", "the fix\n", "the fix");
+
+    const result = cli(["prepare", dir, before]);
+
+    assert.equal(result.code, 0, result.err);
+    const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+    assert.match(fixes, /the fix/);
+    assert.doesNotMatch(fixes, /main moves on/);
   });
 
   for (const dir of ["", "relative/run"]) {
@@ -1392,6 +1862,15 @@ describe("main", () => {
     assert.match(cli(["notes"]).out, /^<!-- review-notes -->\n## Review notes/);
   });
 
+  it("advisory prints the follow-up issue's body, or says there's none", () => {
+    record([finding()]);
+    assert.match(cli(["advisory"]).out, /No open Advisory findings/);
+
+    record([finding({ id: "R2", severity: "advisory", status: "open", test: null })]);
+
+    assert.match(cli(["advisory"]).out, /^- R2 app\.cs:3:/m);
+  });
+
   it("latest prints the branch's earlier review after a fix commit", () => {
     record([finding({ status: "accepted", test: null, reason: "Kept." })]);
     commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "fix" : undefined)), "fix");
@@ -1408,9 +1887,12 @@ describe("main", () => {
     });
   }
 
-  it("report and notes exit 1 when no review is recorded", () => {
+  it("report, notes and advisory exit 1 when no review is recorded", () => {
     assert.equal(cli(["report"]).code, 1);
     assert.equal(cli(["notes"]).code, 1);
+    const advisory = cli(["advisory"]);
+    assert.equal(advisory.code, 1);
+    assert.doesNotMatch(advisory.out, /No open Advisory findings/);
   });
 
   it("record exits 1 with the schema's message on a review that doesn't parse", () => {

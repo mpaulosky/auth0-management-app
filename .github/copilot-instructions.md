@@ -63,7 +63,9 @@ together.
 
 Most review findings on this repo's PRs were about behaviour on a path the author didn't test, not style. Each lens below is
 one kind of finding that kept recurring. Look through every lens whose files the change touches. The `pre-push-review` skill
-gives each one to its own reviewer.
+gives each one to its own reviewer, and grades every finding with a suggested fix: Critical for a bug in code that runs
+(application code, tests, tooling and build and dependency configuration) or new or changed behaviour with no test,
+Warning for a security weakness in any file, and Advisory for docs, comments, prompts and conventions.
 
 | Lens | Applies to | Ask |
 | --- | --- | --- |
