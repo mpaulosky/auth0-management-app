@@ -89,6 +89,8 @@ Blue, the default, renders no attribute.
 
 [All releases →](https://github.com/mpaulosky/auth0-management-app/releases)
 
+How Releases are cut: see [Releases and blog posts](#releases-and-blog-posts).
+
 ## Getting started
 
 1. Clone the repository:
