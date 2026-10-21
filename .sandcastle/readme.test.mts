@@ -6,7 +6,9 @@ const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const lines = readme.split("\n");
 
 const ALL_RELEASES_LINK = "[All releases →](https://github.com/mpaulosky/auth0-management-app/releases)";
-const POINTER = "How Releases are cut: see [Releases and blog posts](#releases-and-blog-posts).";
+const ANCHOR = "releases-and-blog-posts";
+const POINTER = `How Releases are cut: see [Releases and blog posts](#${ANCHOR}).`;
+const pointerLine = lines.indexOf(POINTER);
 
 // GitHub's heading anchor: lowercase, punctuation dropped, spaces to hyphens.
 const slug = (heading: string) =>
@@ -19,7 +21,6 @@ const slug = (heading: string) =>
 describe("README.md Releases section", () => {
   it("puts the how-Releases-are-cut line after the All releases link", () => {
     const linkLine = lines.indexOf(ALL_RELEASES_LINK);
-    const pointerLine = lines.indexOf(POINTER);
 
     assert.notEqual(linkLine, -1, "README.md has no All releases link line");
     assert.notEqual(pointerLine, -1, "README.md has no how-Releases-are-cut line");
@@ -27,7 +28,6 @@ describe("README.md Releases section", () => {
   });
 
   it("keeps the line in the Releases section, before the next heading", () => {
-    const pointerLine = lines.indexOf(POINTER);
     const releasesHeading = lines.indexOf("## Releases");
     const nextHeading = lines.findIndex((line, i) => i > releasesHeading && line.startsWith("## "));
 
@@ -38,7 +38,6 @@ describe("README.md Releases section", () => {
   it("keeps the line outside the generated RELEASES block", () => {
     const start = lines.indexOf("<!-- RELEASES_START -->");
     const end = lines.indexOf("<!-- RELEASES_END -->");
-    const pointerLine = lines.indexOf(POINTER);
 
     assert.notEqual(pointerLine, -1, "README.md has no how-Releases-are-cut line");
     assert.ok(start !== -1 && end > start, "README.md lost its RELEASES_START/END markers");
@@ -46,11 +45,10 @@ describe("README.md Releases section", () => {
   });
 
   it("links to an anchor that resolves to the Releases and blog posts heading", () => {
-    const anchor = /\(#([^)]+)\)/.exec(POINTER)?.[1];
     const headingSlugs = lines.filter((line) => /^#{1,6} /.test(line)).map((line) => slug(line.replace(/^#+ /, "")));
 
-    assert.ok(lines.includes(POINTER), "README.md has no how-Releases-are-cut line");
+    assert.notEqual(pointerLine, -1, "README.md has no how-Releases-are-cut line");
     assert.ok(lines.includes("## Releases and blog posts"), "README.md has no Releases and blog posts heading");
-    assert.ok(headingSlugs.includes(anchor ?? ""), `no heading resolves to #${anchor}`);
+    assert.ok(headingSlugs.includes(ANCHOR), `no heading resolves to #${ANCHOR}`);
   });
 });
