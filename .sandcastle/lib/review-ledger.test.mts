@@ -1262,6 +1262,25 @@ describe("renderAdvisories", () => {
     assert.match(body, /<!-- claude-session -->\n$/);
   });
 
+  it("opens with the branch it was reviewed on, the line step 9 keeps on a comment", () => {
+    const body = renderAdvisories(record([finding({ severity: "advisory", status: "open", test: null })]));
+
+    assert.equal(body.split("\n")[0], "Advisory findings from the local review of feature/1-thing, left for a follow-up:");
+  });
+
+  it("names HEAD for a ledger recorded on a detached HEAD", () => {
+    const ledger: Ledger = { ...record([finding({ severity: "advisory", status: "open", test: null })]), branch: "" };
+
+    assert.equal(renderAdvisories(ledger).split("\n")[0], "Advisory findings from the local review of HEAD, left for a follow-up:");
+  });
+
+  it("ends a stored finding with no suggested fix at its summary", () => {
+    const { fix: _, ...fixless } = finding({ severity: "advisory", status: "open", test: null, summary: "An old one." });
+    const ledger: Ledger = { ...record([]), findings: [fixless] };
+
+    assert.match(renderAdvisories(ledger), /^- R1 app\.cs:3: An old one\.$/m);
+  });
+
   it("leaves out every finding that isn't an open Advisory one", () => {
     const ledger = record([
       finding({ summary: "A fixed bug." }),
@@ -1457,6 +1476,23 @@ describe("main", () => {
     assert.equal(result.code, 1);
     assert.match(result.err, /main was merged in/);
     assert.equal(existsSync(join(dir, "fixes.patch")), false);
+  });
+
+  // Only a merge of main moves the branch's fork point: a fetch alone, while
+  // the review runs, leaves the later round's fixes patch as it was.
+  it("prepare takes a later round after a fetch moved origin/main without a merge, and its fixes patch holds only the fix", () => {
+    const dir = join(root, "run");
+    const before = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    commit(upstream, "main.cs", "main moves on\n", "main moves on");
+    run(repo, "fetch", "--quiet", "origin");
+    commit(repo, "fix.cs", "the fix\n", "the fix");
+
+    const result = cli(["prepare", dir, before]);
+
+    assert.equal(result.code, 0, result.err);
+    const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+    assert.match(fixes, /the fix/);
+    assert.doesNotMatch(fixes, /main moves on/);
   });
 
   for (const dir of ["", "relative/run"]) {

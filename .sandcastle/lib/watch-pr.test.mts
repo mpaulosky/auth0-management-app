@@ -27,9 +27,18 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+// The script sleeps a minute between passes and waits up to 30 minutes, so a
+// change that stops it exiting on the stub's answer is killed and fails here
+// in seconds rather than holding up the gate.
 function watch(env: NodeJS.ProcessEnv) {
   const clean = Object.fromEntries(Object.entries(process.env).filter(([name]) => !["GH_REPO", "WATCH_PR_REPO"].includes(name)));
-  return spawnSync("bash", [watchPr, "3"], { cwd: dir, encoding: "utf8", env: { ...clean, PATH: `${join(dir, "bin")}:${process.env.PATH ?? ""}`, ...env } });
+  return spawnSync("bash", [watchPr, "3"], {
+    cwd: dir,
+    encoding: "utf8",
+    timeout: 20_000,
+    killSignal: "SIGKILL",
+    env: { ...clean, PATH: `${join(dir, "bin")}:${process.env.PATH ?? ""}`, WATCH_PR_IDLE_MINUTES: "1", ...env },
+  });
 }
 
 describe("scripts/watch-pr.sh's repository", () => {
