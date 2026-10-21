@@ -288,3 +288,15 @@ describe("the pre-push-review skill's later rules", () => {
     assert.ok(flat.includes("ask the person to accept it again with `scripts/review.sh accept`"));
   });
 });
+
+// The follow-up issue is public and the report doesn't show suggested fixes,
+// so the person reads the exact text before it's posted (#89's review).
+describe("the pre-push-review skill's follow-up issue text", () => {
+  it("shows the person the exact body or comment and posts only once they say to", () => {
+    const flat = skill.replace(/\s+/g, " ");
+
+    assert.ok(flat.includes("show the person the exact text that will be posted"));
+    assert.ok(flat.includes("post it only once they say to"));
+    assert.doesNotMatch(flat, /have the person look over the report's Advisory section/);
+  });
+});
