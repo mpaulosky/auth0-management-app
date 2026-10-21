@@ -74,6 +74,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.27](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.27) | 2026-10-21 | feat(review): Review every branch locally before it's pushed | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-82-feat-review-review-every-branch-locally-before-it-s-pushed.md) |
 | [v0.0.26](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.26) | 2026-10-20 | feat(sandcastle): Show why each Sandcastle PR is held | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-79-feat-sandcastle-show-why-each-sandcastle-pr-is-held.md) |
 | [v0.0.25](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.25) | 2026-10-20 | feat: Warn when the git hooks aren't enabled, so the pre-push gate isn't silently skipped | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-75-feat-warn-when-the-git-hooks-aren-t-enabled-so-the-pre-push-gate-isn-t-silently-skipped.md) |
 | [v0.0.24](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.24) | 2026-10-20 | chore: Re-apply the repo-ci-baseline Template | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-74-chore-re-apply-the-repo-ci-baseline-template.md) |
@@ -83,7 +84,6 @@ Blue, the default, renders no attribute.
 | [v0.0.20](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.20) | 2026-10-20 | feat(Users): List and search the Tenant's Users | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-59-feat-users-list-and-search-the-tenant-s-users.md) |
 | [v0.0.19](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.19) | 2026-10-20 | ci(sandcastle): Answer PR follow-ups without waiting behind a build | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-64-ci-sandcastle-answer-pr-follow-ups-without-waiting-behind-a-build.md) |
 | [v0.0.18](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.18) | 2026-10-20 | feat(ManagementApi): Cache Management API reads | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-56-feat-managementapi-cache-management-api-reads.md) |
-| [v0.0.17](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.17) | 2026-10-20 | ci(sandcastle): Add switched-off triggers for follow-up runs | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-60-ci-sandcastle-add-switched-off-triggers-for-follow-up-runs.md) |
 
 <!-- RELEASES_END -->
 

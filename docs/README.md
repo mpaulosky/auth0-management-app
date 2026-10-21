@@ -74,6 +74,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.27](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.27) | 2026-10-21 | feat(review): Review every branch locally before it's pushed | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-82-feat-review-review-every-branch-locally-before-it-s-pushed.md) |
 | [v0.0.26](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.26) | 2026-10-20 | feat(sandcastle): Show why each Sandcastle PR is held | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-79-feat-sandcastle-show-why-each-sandcastle-pr-is-held.md) |
 | [v0.0.25](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.25) | 2026-10-20 | feat: Warn when the git hooks aren't enabled, so the pre-push gate isn't silently skipped | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-75-feat-warn-when-the-git-hooks-aren-t-enabled-so-the-pre-push-gate-isn-t-silently-skipped.md) |
 | [v0.0.24](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.24) | 2026-10-20 | chore: Re-apply the repo-ci-baseline Template | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-74-chore-re-apply-the-repo-ci-baseline-template.md) |
@@ -83,7 +84,6 @@ Blue, the default, renders no attribute.
 | [v0.0.20](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.20) | 2026-10-20 | feat(Users): List and search the Tenant's Users | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-59-feat-users-list-and-search-the-tenant-s-users.md) |
 | [v0.0.19](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.19) | 2026-10-20 | ci(sandcastle): Answer PR follow-ups without waiting behind a build | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-64-ci-sandcastle-answer-pr-follow-ups-without-waiting-behind-a-build.md) |
 | [v0.0.18](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.18) | 2026-10-20 | feat(ManagementApi): Cache Management API reads | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-56-feat-managementapi-cache-management-api-reads.md) |
-| [v0.0.17](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.17) | 2026-10-20 | ci(sandcastle): Add switched-off triggers for follow-up runs | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-60-ci-sandcastle-add-switched-off-triggers-for-follow-up-runs.md) |
 
 <!-- RELEASES_END -->
 
@@ -103,6 +103,9 @@ Blue, the default, renders no attribute.
    - The .NET SDK `10.0.401`, as pinned in [global.json](https://github.com/mpaulosky/auth0-management-app/blob/main/global.json) (later 10.0 feature bands are accepted).
    - Node.js and pnpm (`corepack enable`), used by the Tailwind CSS build, the git hooks and the lint tools. The repo refuses `npm install`.
    - [yamllint](https://yamllint.readthedocs.io/), which the pre-push hook runs on changed YAML files.
+   - git 2.38 or later, which the local review's check needs.
+   - [Claude Code](https://claude.com/claude-code), which runs the local review (`/pre-push-review`) the pre-push hook
+     requires before every push.
 
 3. Set up Auth0 as described in [Auth0 setup](#auth0-setup). The app won't start without it.
 
@@ -140,7 +143,8 @@ Blue, the default, renders no attribute.
    In Development, the UI reports its health at `/health` and `/alive`.
    While editing markup, `pnpm --dir src/UI run watch:css` rebuilds the CSS as you save.
 
-6. Optionally enable the git hooks in `.github/hooks` (markdownlint on commit, and `scripts/gate.sh` on push):
+6. Enable the git hooks in `.github/hooks` (markdownlint on commit, and `scripts/gate.sh` on push). They're required
+   before you push anything, since the pre-push gate is where the local review is checked:
 
    ```bash
    git config core.hooksPath .github/hooks
@@ -148,6 +152,9 @@ Blue, the default, renders no attribute.
 
    `scripts/gate.sh` lints the files changed since the branch left `origin/main`, then builds and tests the solution in Release. Run it by hand to
    check a branch before pushing.
+   It also refuses a branch whose diff the local review hasn't passed: run `/pre-push-review` in Claude Code before every
+   push, and `GATE_SKIP_REVIEW=1 scripts/gate.sh` only while iterating. `scripts/review.sh report` shows the review's
+   findings.
 
 ## Auth0 setup
 
