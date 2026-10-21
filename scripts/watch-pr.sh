@@ -108,7 +108,7 @@ while true; do
 
 	# gh pr checks exits non-zero both when a check failed and when none has
 	# registered yet, so read its JSON rather than its exit code.
-	checks="$(gh pr checks "$pr" --json name,bucket 2>/dev/null || true)"
+	checks="$(gh pr checks "$pr" --repo "$repo" --json name,bucket 2>/dev/null || true)"
 	checks="${checks:-[]}"
 	pending="$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$checks")"
 	failed="$(jq -r '[.[] | select(.bucket == "fail") | .name] | join(", ")' <<<"$checks")"

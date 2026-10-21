@@ -31,3 +31,27 @@ describe("the pre-push-review skill's reviewers", () => {
     assert.match(skill, /never start them as another type/);
   });
 });
+
+// The severities decide what blocks and what's reviewed again (issue #83).
+// Claude Code reads the skill, so its text is what pins them.
+describe("the pre-push-review skill's severities", () => {
+  it("asks every reviewer for a severity and a suggested fix", () => {
+    assert.match(skill, /`\{ "lens", "path", "line", "severity", "summary", "fix", "needsPerson", "why" \}`/);
+    assert.match(agent, /`severity` \(`critical`, `warning` or `advisory`\) and a suggested `fix`/);
+  });
+
+  it("refuses a finding without a severity", () => {
+    assert.match(skill, /Refuse a finding whose `severity` is missing or isn't `critical`, `warning` or `advisory`/);
+  });
+
+  it("reviews again only after a round that fixed a Critical or Warning finding, and then only the fixes", () => {
+    assert.match(skill, /Only a round that fixed a Critical or Warning finding is followed by another/);
+    assert.match(skill, /A round that fixed only Advisory findings, or none, ends the review/);
+    assert.match(skill, /A later round reviews the fixes, not the whole branch again/);
+    assert.doesNotMatch(skill, /Every round\s+reviews the whole branch/);
+  });
+
+  it("files Advisory findings in one follow-up issue per branch", () => {
+    assert.match(skill, /File the open Advisory findings in one follow-up issue per branch/);
+  });
+});

@@ -49,6 +49,38 @@ else
   run_clean scripts/review.sh check "$base"
 fi
 
+# A gh issue or gh pr command without --repo (or -R), or a gh api call on
+# repos/{owner} or repos/:owner, reaches the clone's default repository, which
+# in a fork's clone is the fork. The skills and scripts must name the
+# repository. Shell comments are skipped, and a command continued with a
+# trailing backslash is read as one line. Cheap enough to run on every gate.
+echo -e "${CYAN}🐙 gh commands name their repository...${RESET}"
+gh_files=()
+while IFS= read -r -d '' file; do
+  gh_files+=("$file")
+done < <(git ls-files -z -- .claude/skills scripts)
+unnamed=""
+if ((${#gh_files[@]} > 0)); then
+  unnamed="$(awk '
+    FNR == 1 { held = "" }
+    /\\$/ { held = held substr($0, 1, length($0) - 1) " "; next }
+    {
+      line = held $0
+      held = ""
+      if (line ~ /^[ \t]*#/) next
+      if ((line ~ /(^|[^A-Za-z0-9_-])gh (issue|pr)[ \t]/ && line !~ /(--repo|-R)[ =]/) ||
+          line ~ /(^|[^A-Za-z0-9_-])gh api [^|;&]*repos\/(\{owner\}|:owner)/) {
+        print FILENAME ":" FNR ": " line
+      }
+    }' "${gh_files[@]}")"
+fi
+if [[ -n "$unnamed" ]]; then
+  echo "❌ These gh commands name no repository, so from a fork's clone they reach the fork. Add --repo mpaulosky/auth0-management-app:" >&2
+  echo "$unnamed" >&2
+  exit 1
+fi
+echo -e "${GREEN}✅ Every gh command names its repository.${RESET}"
+
 # .github/copilot-instructions.md is generated from the code-review skill, so
 # GitHub's Copilot review and Claude Code review against the same rules.
 if changed .claude/skills/code-review/SKILL.md .github/copilot-instructions.md scripts/sync-copilot-review.sh; then

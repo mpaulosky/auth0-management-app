@@ -104,3 +104,61 @@ describe("gate-checks.sh's local review check", () => {
     assert.equal(calls(), `check ${head()}\n`);
   });
 });
+
+// A gh command that names no repository reaches the clone's default one, which
+// in a fork's clone is the fork.
+describe("gate-checks.sh's gh repository check", () => {
+  // Commit `content` at `file`, then run the checks with the review skipped.
+  function gateWith(file: string, content: string) {
+    mkdirSync(join(repo, file, ".."), { recursive: true });
+    writeFileSync(join(repo, file), content);
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "add", "."], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "gh"], { cwd: repo });
+    return gate(head(), { GATE_SKIP_REVIEW: "1" });
+  }
+
+  for (const [file, line] of [
+    ["scripts/watch.sh", 'gh pr checks "$pr" --json name'],
+    ["scripts/watch.sh", "  data=$(gh issue view 3)"],
+    [".claude/skills/a/SKILL.md", "Read it with `gh issue view <n> --json comments`."],
+    [".claude/skills/a/SKILL.md", "Run `gh api repos/{owner}/{repo}/issues/3`."],
+    [".claude/skills/a/SKILL.md", "Run `gh api repos/:owner/:repo/pulls`."],
+  ]) {
+    it(`fails on a command that names no repository: ${line}`, () => {
+      const result = gateWith(file ?? "", `first\n${line}\n`);
+
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, new RegExp(`${(file ?? "").replace(/\./g, "\\.")}:2:`));
+      assert.match(result.stderr, /--repo/);
+    });
+  }
+
+  for (const [file, line] of [
+    ["scripts/watch.sh", 'gh pr checks "$pr" --repo "$repo" --json name'],
+    ["scripts/watch.sh", "gh issue view 3 -R mpaulosky/auth0-management-app"],
+    ["scripts/watch.sh", "gh pr view 3 --repo=mpaulosky/auth0-management-app"],
+    ["scripts/watch.sh", "# gh pr checks exits non-zero when a check failed"],
+    [".claude/skills/a/SKILL.md", "`gh api repos/mpaulosky/auth0-management-app/issues/3`"],
+    [".claude/skills/a/SKILL.md", "`gh api graphql -F owner=mpaulosky -F name=auth0-management-app`"],
+    ["docs/notes.md", "gh pr view 3"],
+  ]) {
+    it(`passes a command that names its repository, a comment, or a file outside the checked folders: ${line}`, () => {
+      const result = gateWith(file ?? "", `${line}\n`);
+
+      assert.equal(result.status, 0, result.stderr);
+    });
+  }
+
+  it("reads a command continued over lines as one", () => {
+    const result = gateWith("scripts/watch.sh", 'gh pr checks "$pr" \\\n  --repo "$repo"\n');
+
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  it("checks a file whose name holds a space", () => {
+    const result = gateWith(".claude/skills/a b/SKILL.md", "gh pr view 3\n");
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /a b\/SKILL\.md:1:/);
+  });
+});
