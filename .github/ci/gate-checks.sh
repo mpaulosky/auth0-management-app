@@ -49,15 +49,17 @@ else
   run_clean scripts/review.sh check "$base"
 fi
 
-# A gh issue or gh pr command without --repo (or -R), a gh repo view without
-# a repository argument, or a gh api call on repos/{owner} or repos/:owner,
-# reaches gh's default repository, which in a clone whose only remote is a
-# fork is the fork. The skills and scripts must name the repository. Each gh
-# issue, gh pr and gh repo view command is judged by its own arguments: up to
-# the next backtick, |, ;, &, ) or comment outside quotes, with quoted text
-# and $(...) set aside, so a flag in a string or in another command doesn't
-# count (a gh command inside $(...) is judged on its own). A bare gh issue or
-# gh pr names a command group, not a command, so it is left alone. Shell
+# A gh command that names no repository reaches gh's default repository,
+# which in a clone whose only remote is a fork is the fork, so the skills and
+# scripts must name it: --repo (or -R) on every command group that takes one
+# (issue, pr, run, workflow, release, label, secret, variable, cache, browse,
+# ruleset), a repository argument to gh repo view, and no {owner}, {repo} or
+# repos/:owner placeholder in a gh api call, in its path or its fields. Each
+# command is judged by its own arguments: up to the next backtick, |, ;, &, )
+# or comment outside quotes, with quoted text and $(...) set aside for the
+# flags (a gh command inside $(...) is judged on its own), but kept for gh
+# api's placeholders. A bare command group names no command, so it is left
+# alone. Shell
 # comments are skipped, trailing ones too outside Markdown (where # starts a
 # heading or a reference), and a command continued with a trailing backslash
 # is read as one line (a comment ending in one isn't continued, as in bash).
@@ -75,8 +77,9 @@ if ((${#gh_files[@]} > 0)); then
   unnamed="$(awk '
     # The arguments a command owns in `s`, the text after it: up to the first
     # terminator outside quotes and $(...), with each quoted string written Q
-    # and each $(...) written S. \047 is a single quote.
-    function own_args(s,   i, c, n, out, q, depth) {
+    # and each $(...) written S, or kept as they are when `keep` is set.
+    # \047 is a single quote.
+    function own_args(s, keep,   i, c, n, out, q, depth) {
       out = ""
       q = ""
       depth = 0
@@ -84,20 +87,23 @@ if ((${#gh_files[@]} > 0)); then
       for (i = 1; i <= n; i++) {
         c = substr(s, i, 1)
         if (depth > 0) {
+          if (keep) out = out c
           if (c == "(") depth++
-          else if (c == ")" && --depth == 0 && q == "") out = out "S"
+          else if (c == ")" && --depth == 0 && q == "" && !keep) out = out "S"
           continue
         }
         if (q == "\047") {
-          if (c == "\047") { q = ""; out = out "Q" }
+          if (keep) out = out c
+          if (c == "\047") { q = ""; if (!keep) out = out "Q" }
           continue
         }
-        if (c == "$" && substr(s, i + 1, 1) == "(") { depth = 1; i++; continue }
+        if (c == "$" && substr(s, i + 1, 1) == "(") { depth = 1; if (keep) out = out "$("; i++; continue }
         if (q == "\"") {
-          if (c == "\"") { q = ""; out = out "Q" }
+          if (keep) out = out c
+          if (c == "\"") { q = ""; if (!keep) out = out "Q" }
           continue
         }
-        if (c == "\047" || c == "\"") { q = c; continue }
+        if (c == "\047" || c == "\"") { q = c; if (keep) out = out c; continue }
         if (c ~ /[`|;&)]/) break
         if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t]/)) break
         out = out c
@@ -130,10 +136,14 @@ if ((${#gh_files[@]} > 0)); then
     # Whether one of the gh commands on `line` names no repository.
     function names_none(line,   rest, command, args, first) {
       rest = line
-      while (match(rest, /(^|[^A-Za-z0-9_-])gh (issue|pr|repo view)/)) {
+      while (match(rest, /(^|[^A-Za-z0-9_-])gh (issue|pr|run|workflow|release|label|secret|variable|cache|browse|ruleset|repo view|api)/)) {
         command = substr(rest, RSTART, RLENGTH)
         rest = substr(rest, RSTART + RLENGTH)
         if (substr(rest, 1, 1) ~ /[A-Za-z0-9_-]/) continue
+        if (command ~ /api$/) {
+          if (own_args(rest, 1) ~ /\{owner\}|\{repo\}|repos\/:owner/) return 1
+          continue
+        }
         args = own_args(rest)
         first = args
         sub(/^[ \t]+/, "", first)
@@ -153,13 +163,13 @@ if ((${#gh_files[@]} > 0)); then
       line = held $0
       held = ""
       if (FILENAME !~ /\.md$/) line = code_of(line)
-      if (names_none(line) || line ~ /(^|[^A-Za-z0-9_-])gh api [^|;&]*repos\/(\{owner\}|:owner)/) {
+      if (names_none(line)) {
         print FILENAME ":" FNR ": " line
       }
     }' "${gh_files[@]}")"
 fi
 if [[ -n "$unnamed" ]]; then
-  echo "❌ These gh commands name no repository, so from a fork's clone they can reach the fork. Add --repo mpaulosky/auth0-management-app to gh issue and gh pr; for gh repo view, give the repository as its first argument; for gh api, write it in the path: repos/mpaulosky/auth0-management-app/..." >&2
+  echo "❌ These gh commands name no repository, so from a fork's clone they can reach the fork. Add --repo mpaulosky/auth0-management-app to gh issue, pr, run, workflow, release, label, secret, variable, cache, browse and ruleset; for gh repo view, give the repository as its first argument; for gh api, write it in place of every {owner}, {repo} or :owner: repos/mpaulosky/auth0-management-app/..." >&2
   echo "$unnamed" >&2
   exit 1
 fi

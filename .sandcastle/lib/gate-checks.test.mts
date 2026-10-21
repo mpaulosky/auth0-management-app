@@ -162,6 +162,18 @@ describe("gate-checks.sh's gh repository check", () => {
     ["scripts/watch.sh", 'gh pr comment 3 --body "use --repo o/r"'],
     ["scripts/watch.sh", "gh issue create --title x --body '-R o/r'"],
     ["scripts/watch.sh", "gh pr checks 3  # the check needs gh pr view too"],
+    ["scripts/watch.sh", "gh run list --json status"],
+    ["scripts/watch.sh", "gh workflow run ci.yml"],
+    ["scripts/watch.sh", "gh release view v1.0.0"],
+    ["scripts/watch.sh", "gh label list"],
+    ["scripts/watch.sh", "gh secret list"],
+    ["scripts/watch.sh", "gh variable get NAME"],
+    ["scripts/watch.sh", "gh cache list"],
+    ["scripts/watch.sh", "gh browse 3"],
+    ["scripts/watch.sh", "gh ruleset list"],
+    ["scripts/watch.sh", "gh api graphql -F owner='{owner}' -F name='{repo}' -f query=x"],
+    ["scripts/watch.sh", 'gh api -X GET "repos/{owner}/{repo}/pulls"'],
+    ["scripts/watch.sh", "gh api graphql -F name={repo} -F owner=mpaulosky"],
   ]) {
     it(`fails on a command that names no repository: ${line}`, () => {
       const result = gateWith(file ?? "", `first\n${line}\n`);
@@ -188,6 +200,13 @@ describe("gate-checks.sh's gh repository check", () => {
     ["scripts/watch.sh", 'gh pr view "$(git branch --show-current)" --repo "$repo"'],
     ["scripts/watch.sh", "gh pr view $(git branch --show-current) --repo o/r"],
     ["scripts/watch.sh", 'gh repo view "$repo" --json name'],
+    ["scripts/watch.sh", "gh run list --repo o/r --json status"],
+    ["scripts/watch.sh", "gh workflow run ci.yml -R o/r"],
+    ["scripts/watch.sh", "gh release view v1.0.0 --repo=o/r"],
+    ["scripts/watch.sh", "gh api graphql -F owner=mpaulosky -F name=auth0-management-app -f query=x"],
+    ["scripts/watch.sh", "gh api repos/mpaulosky/auth0-management-app/pulls"],
+    ["scripts/watch.sh", "gh api user && echo '{owner}'"],
+    [".claude/skills/a/SKILL.md", "Use `gh run`, `gh workflow` and `gh release` only with `--repo`."],
     [".claude/skills/a/SKILL.md", "Search gh issues by label."],
     [".claude/skills/a/SKILL.md", "Walk through pr review first."],
     ["scripts/watch.sh", "retry=3  # gh pr checks exits 8 when pending"],
@@ -213,7 +232,7 @@ describe("gate-checks.sh's gh repository check", () => {
     const result = gateWith(".claude/skills/a/SKILL.md", "Run `gh api repos/{owner}/{repo}/issues/3`.\n");
 
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /for gh api, write it in the path: repos\/mpaulosky\/auth0-management-app\//);
+    assert.match(result.stderr, /for gh api, write it in place of every \{owner\}, \{repo\} or :owner: repos\/mpaulosky\/auth0-management-app\//);
   });
 
   it("cuts a Markdown line at no #, since there it starts a heading or a reference, not a comment", () => {
