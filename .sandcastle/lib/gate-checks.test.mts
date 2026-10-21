@@ -8,8 +8,9 @@ import { fileURLToPath } from "node:url";
 
 // .github/ci/gate-checks.sh's local review check, run for real in a scratch
 // repository whose scripts/review.sh is a stub that logs its arguments and
-// exits with REVIEW_EXIT, and whose hook test is a stub that passes. The hook tests in .github/hooks/tests (Owned by the
-// Baseline) replace this file with a stub, so nothing else runs it.
+// exits with REVIEW_EXIT, and whose scripts/tests/check-git-hooks.test.sh is
+// a stub that passes. The git hooks' tests in .github/hooks/tests (Owned by
+// the Baseline) replace gate-checks.sh with a stub, so nothing else runs it.
 // Only the config each test sets, not the machine's (see review-ledger.test.mts).
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_NOSYSTEM = "1";
