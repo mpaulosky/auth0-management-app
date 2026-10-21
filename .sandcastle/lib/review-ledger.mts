@@ -629,10 +629,30 @@ export function renderReviewNotes(ledger: Ledger): string {
   return ["## Review notes", "", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately, ""].join("\n");
 }
 
+// The patch of the fixes a later round reviews: `since`, the HEAD the round
+// before read, to `head`. The reasons it can't be, as a message: a commit that
+// isn't one of HEAD's, or isn't the HEAD the last prepare in `dir` printed
+// (a later one would leave fixes unread), a merge of main since (the patch
+// would hold main's changes), or no fixes at all.
+function fixesPatch(cwd: string, dir: string, since: string, base: string, head: string): Buffer | string {
+  if (!isAncestor(cwd, since, head)) return `${since} isn't one of HEAD's commits: give the HEAD prepare printed in the round before.`;
+  const headFile = join(dir, "head");
+  const before = existsSync(headFile) ? readFileSync(headFile, "utf8").trim() : undefined;
+  if (before === undefined || git(cwd, "rev-parse", "--verify", `${since}^{commit}`) !== before) {
+    return `${since} isn't the HEAD prepare printed in the round before (${before ?? "none in this folder"}): give that one, so no fix goes unread.`;
+  }
+  if (git(cwd, "merge-base", "origin/main", since) !== base) {
+    return "main was merged in since the round before, so the fixes can't be told from main's changes: start again at round 1.";
+  }
+  const fixes = reviewPatch(cwd, since, head);
+  if (fixes.length === 0) return `no fixes since ${since}: a later round follows a round that fixed something, after its fix commits.`;
+  return fixes;
+}
+
 const USAGE = `Usage: scripts/review.sh <command>
   prepare <absolute dir> [<since>]
                          write HEAD's diff to <dir>/diff.patch for the reviewers, and with <since> (the HEAD
-                         an earlier round read) the fixes since to <dir>/fixes.patch; print the key, then HEAD
+                         the round before printed) the fixes since to <dir>/fixes.patch; print the key, then HEAD
   key                    print the ledger key of HEAD's diff against origin/main
   check [<base>]         the gate's check: exit 1 unless HEAD's diff was reviewed clean
   record <file>          record a review from JSON ({ reviewedKey, reviewedHead, rounds, findings }); - reads stdin
@@ -663,17 +683,15 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         // One read of the patch gives both, so the key names exactly the text
         // the reviewers get.
         const head = headCommit(cwd);
-        const patch = reviewPatch(cwd, mergeBase(cwd), head);
-        // A later round reviews the fixes since the round before. A commit
-        // that isn't one of HEAD's would give a diff holding more than them.
-        const since = rest[1];
-        if (since !== undefined && !isAncestor(cwd, since, head)) {
-          return fail(`${since} isn't one of HEAD's commits: give the HEAD prepare printed in the round before.`);
-        }
-        const fixes = since === undefined ? undefined : reviewPatch(cwd, since, head);
+        const base = mergeBase(cwd);
+        const patch = reviewPatch(cwd, base, head);
+        const fixes = rest[1] === undefined ? undefined : fixesPatch(cwd, rest[0], rest[1], base, head);
+        if (typeof fixes === "string") return fail(fixes);
         mkdirSync(rest[0], { recursive: true });
         writeFileSync(join(rest[0], "diff.patch"), patch);
         if (fixes !== undefined) writeFileSync(join(rest[0], "fixes.patch"), fixes);
+        // The HEAD this round reads, for the next round's fixesPatch.
+        writeFileSync(join(rest[0], "head"), `${head}\n`);
         out(`${patchKey(patch)}\n${head}`);
         return 0;
       }

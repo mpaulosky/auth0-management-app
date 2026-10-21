@@ -1188,9 +1188,9 @@ describe("main", () => {
   });
 
   it("prepare given the HEAD an earlier round read also writes the diff of the fixes since, beside the whole diff", () => {
-    const before = run(repo, "rev-parse", "HEAD");
-    commit(repo, "other.cs", "fixed\n", "fix");
     const dir = join(root, "run");
+    const before = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    commit(repo, "other.cs", "fixed\n", "fix");
 
     const result = cli(["prepare", dir, before]);
 
@@ -1213,6 +1213,44 @@ describe("main", () => {
     assert.equal(result.code, 1);
     assert.match(result.err, /isn't one of HEAD's commits/);
     assert.equal(existsSync(join(root, "run", "fixes.patch")), false);
+  });
+
+  it("prepare refuses the HEAD it just printed when nothing was committed since, whose fixes patch would be empty", () => {
+    const dir = join(root, "run");
+    const before = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+
+    const result = cli(["prepare", dir, before]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /no fixes since/);
+    assert.equal(existsSync(join(dir, "fixes.patch")), false);
+  });
+
+  it("prepare refuses a commit that isn't the HEAD the round before printed, so no fix goes unread", () => {
+    const dir = join(root, "run");
+    cli(["prepare", dir]);
+    commit(repo, "other.cs", "first fix\n", "first fix");
+    const afterFirst = run(repo, "rev-parse", "HEAD");
+    commit(repo, "other.cs", "second fix\n", "second fix");
+
+    const result = cli(["prepare", dir, afterFirst]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /the HEAD prepare printed in the round before/);
+    assert.equal(existsSync(join(dir, "fixes.patch")), false);
+  });
+
+  it("prepare refuses a later round after main was merged in, whose fixes patch would hold main's changes", () => {
+    const dir = join(root, "run");
+    const before = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    commit(upstream, "other.cs", "main moves on\n", "main moves on");
+    mergeMain();
+
+    const result = cli(["prepare", dir, before]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /main was merged in/);
+    assert.equal(existsSync(join(dir, "fixes.patch")), false);
   });
 
   for (const dir of ["", "relative/run"]) {
