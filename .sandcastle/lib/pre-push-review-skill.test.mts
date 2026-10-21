@@ -99,6 +99,10 @@ describe("the pre-push-review skill's follow-up issue", () => {
     assert.doesNotMatch(flat, /with the same path/);
   });
 
+  it("posts nothing when the issue already lists every finding", () => {
+    assert.ok(flat.includes("When the issue already lists every finding, post nothing."));
+  });
+
   it("says the agent numbers findings, and record only refuses a reused id", () => {
     assert.ok(flat.includes("the agent numbers findings from `scripts/review.sh next`, and `record` refuses a reused one"));
     assert.doesNotMatch(flat, /`record` gives a re-raised finding a new id/);
