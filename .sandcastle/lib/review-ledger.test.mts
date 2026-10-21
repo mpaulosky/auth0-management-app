@@ -372,6 +372,8 @@ describe("diffKey", () => {
     ["no extension", "script", Buffer.from("echo hi\0\xff\n")],
     ["the name of a binary format and no dot", "png", Buffer.from("echo hi\0\xff\n")],
     ["an extension that only ends like a binary one", "n.cs.png.txt", Buffer.from("echo hi\0\xff\n")],
+    ["a name git quotes, with a non-ASCII letter", "n\u00f6te.cs", Buffer.from("class A { }\0\n")],
+    ["a name git quotes, with a backslash", "n\\te.cs", Buffer.from("class A { }\0\n")],
   ] as const) {
     it(`refuses a new ${name} holding ${scenario}`, () => {
       writeFileSync(join(repo, name), bytes);
@@ -381,6 +383,18 @@ describe("diffKey", () => {
       assert.throws(() => diffKey(repo, mergeBase(repo)), /NUL/);
     });
   }
+
+  it("reviews a branch that deletes a binary file whose extension isn't a binary format's", () => {
+    writeFileSync(join(upstream, "fixture.dat"), Buffer.from([0, 1, 2, 3, 0, 255]));
+    run(upstream, "add", "fixture.dat");
+    run(upstream, "commit", "--quiet", "-m", "a fixture");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "reset", "--quiet", "--hard", "origin/main");
+    run(repo, "rm", "--quiet", "fixture.dat");
+    run(repo, "commit", "--quiet", "-m", "delete the fixture");
+
+    assert.doesNotThrow(() => diffKey(repo, mergeBase(repo)));
+  });
 
   it("refuses a change that adds a stray NUL to a text file", () => {
     writeFileSync(join(repo, "app.cs"), "class A { }\0\n");
@@ -397,6 +411,8 @@ describe("diffKey", () => {
     ["an empty ZIP's bytes", "a.zip", Buffer.from("PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", "latin1")],
     ["an upper-case extension", "LOGO.PNG", Buffer.from([0, 1, 2, 3])],
     ["a name with a dot before the extension", "my.logo.v2.ico", Buffer.from([0, 0, 1, 0])],
+    ["a name git quotes, with a non-ASCII letter", "l\u00f6go.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0])],
+    ["a name git quotes, with a double quote", 'a"b.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0])],
   ] as const) {
     it(`still reviews a new binary file, ${name}, holding ${scenario}`, () => {
       writeFileSync(join(repo, name), bytes);
@@ -1714,6 +1730,9 @@ describe("spliceReviewNotes", () => {
     ["a Review notes heading in emphasis with a colon", "## Why\n\n## **Review notes:**\n\nOld.\n"],
     ["a setext Review notes heading", "## Why\n\nReview notes\n---\n\nOld.\n"],
     ["an HTML Review notes heading", "## Why\n\n<h2>Review notes</h2>\n\nOld.\n"],
+    ["an escaped tag-shaped Review notes heading", "## Why\n\n## \\<Review notes>\n\nOld.\n"],
+    ["a Review notes heading made of an image", '## Why\n\n<h2><img alt="Review notes" src="x"></h2>\n\nOld.\n'],
+    ["a Review notes heading after a comment that closes at once", "## Why\n\n<!--><h2>Review notes</h2><!-- -->\n\nOld.\n"],
     ["an HTML Review notes heading with an attribute", '## Why\n\n<h2 align="left">Review notes</h2>\n\nOld.\n'],
     ["an HTML Review notes heading with an id", '## Why\n\n<h2 id="notes">Review notes</h2>\n\nOld.\n'],
     ["a Review notes heading inside a span with a title", '## Why\n\n## <span title="x">Review notes</span>\n\nOld.\n'],

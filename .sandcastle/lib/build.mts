@@ -41,6 +41,20 @@ import { agentSandbox } from "./skills.mts";
 // assumed rather than checked on GitHub. The reviewer prompt names each.
 export const HIDDEN_ELEMENTS = ["script", "style", "noscript", "template", "textarea", "iframe", "svg", "math", "xmp", "plaintext", "noembed", "noframes"] as const;
 
+// The character references HTML decodes without their semicolon (the legacy
+// names in its spec), so `Review&nbspnotes` reads "Review notes" where HTML
+// is shown. Any other `&` and letters is printed as written (`&tabs=` in a
+// link's query string, `R&D`).
+const LEGACY_REFERENCES = [
+  "AElig", "AMP", "Aacute", "Acirc", "Agrave", "Aring", "Atilde", "Auml", "COPY", "Ccedil", "ETH", "Eacute", "Ecirc", "Egrave", "Euml", "GT", "Iacute",
+  "Icirc", "Igrave", "Iuml", "LT", "Ntilde", "Oacute", "Ocirc", "Ograve", "Oslash", "Otilde", "Ouml", "QUOT", "REG", "THORN", "Uacute", "Ucirc",
+  "Ugrave", "Uuml", "Yacute", "aacute", "acirc", "acute", "aelig", "agrave", "amp", "aring", "atilde", "auml", "brvbar", "ccedil", "cedil", "cent",
+  "copy", "curren", "deg", "divide", "eacute", "ecirc", "egrave", "eth", "euml", "frac12", "frac14", "frac34", "gt", "iacute", "icirc", "iexcl",
+  "igrave", "iquest", "iuml", "laquo", "lt", "macr", "micro", "middot", "nbsp", "not", "ntilde", "oacute", "ocirc", "ograve", "ordf", "ordm", "oslash",
+  "otilde", "ouml", "para", "plusmn", "pound", "quot", "raquo", "reg", "sect", "shy", "sup1", "sup2", "sup3", "szlig", "thorn", "times", "uacute",
+  "ucirc", "ugrave", "uml", "uuml", "yacute", "yen", "yuml",
+];
+
 // What in a reviewer's PR description a reader of the raw text (Claude Review,
 // the release post's summary) would see and the people reading the PR may
 // not: an HTML comment, declaration, CDATA or processing instruction (`<!`,
@@ -48,10 +62,16 @@ export const HIDDEN_ELEMENTS = ["script", "style", "noscript", "template", "text
 // a quote or list and escape a bracket (`]:`); an element in HIDDEN_ELEMENTS;
 // and a character reference, which GitHub does show but which can spell what
 // the other checks look for: one with its semicolon, a numeric one without
-// (`&#` and a digit or letter), and a named one without (`&` and two letters,
-// since HTML decodes the legacy names such as `&nbsp` either way, and where
-// a name ends can't be told). A lone ampersand (`R&D`, `AT&T`) is fine.
-const HIDDEN_TEXT = new RegExp(String.raw`<[!?]|\]:|&#?\w+;|&#[0-9a-z]|&[a-z]{2}|<\/?(?:${HIDDEN_ELEMENTS.join("|")})\b`, "i");
+// (`&#` and a digit or letter), and a legacy named one without (above).
+const HIDDEN_TEXT = new RegExp(
+  String.raw`<[!?]|\]:|&#?\w+;|&#[0-9a-z]|&(?:${LEGACY_REFERENCES.join("|")})|<\/?(?:${HIDDEN_ELEMENTS.join("|")})\b`,
+  "i",
+);
+
+// A letter outside the Latin script. A description of this repository's change
+// is plain English, and no table of look-alikes could cover the scripts that
+// spell "Review notes" whole (Lisu, Cherokee), so any other script is refused.
+const NON_LATIN_LETTER = /[^\P{L}\p{Script=Latin}]/u;
 
 // Re-exported for the callers and tests that already import it from here.
 export { UncountedStopError };
@@ -679,11 +699,11 @@ async function buildMarkedIssue(
   // The reviewer's PR description (#335): its Why, What changed and
   // Verification sections, for publish() to put under the marker and
   // `Closes #n`. Read inside the sandbox, as postDesignNote reads the design
-  // note, since an agent wrote it. It's published as written, apart from its
-  // mentions, issue references and github.com links (the squash commit, the Release's notes,
-  // the release blog), so anything it can't be trusted with as it is returns
-  // undefined, for publish()'s generic body,
-  // and the log says why: a missing description never blocks publishing.
+  // note, since an agent wrote it. It is published (the squash commit, the
+  // Release's notes, the release blog) as written, apart from its mentions,
+  // issue references and github.com links, so anything it can't be trusted
+  // with as it is returns undefined, for publish()'s generic body, and the log
+  // says why: a missing description never blocks publishing.
   async function reviewerPrBody(): Promise<string | undefined> {
     let read: { stdout: string; exitCode: number };
     try {
@@ -694,9 +714,9 @@ async function buildMarkedIssue(
     }
     const prBody = read.exitCode === 0 ? read.stdout.replace(/\r\n?/g, "\n").trim() : "";
     const missing = PR_BODY_HEADINGS.filter((heading) => !new RegExp(`^## ${heading}[ \t]*$`, "m").test(prBody));
-    // Published as written, apart from its mentions and issue references,
-    // which would otherwise notify people and close issues: each break adds a
-    // character, so the length is measured after it.
+    // Its mentions, issue references and github.com links are broken, which
+    // would otherwise notify people, close issues and link elsewhere: each
+    // break adds a character, so the length is measured after it.
     const published = breakReferences(prBody);
     let problem: string | undefined;
     if (prBody === "") {
@@ -705,7 +725,7 @@ async function buildMarkedIssue(
       problem = `lacks the ${missing.map((heading) => `"## ${heading}"`).join(", ")} heading${missing.length > 1 ? "s" : ""}`;
     } else if (published.length > PR_BODY_LIMIT) {
       problem = `is ${published.length} characters once its references are broken, more than the ${PR_BODY_LIMIT} a PR body can hold`;
-    } else if (HIDDEN_TEXT.test(prBody) || visibleLetters(prBody).includes("reviewnotes")) {
+    } else if (HIDDEN_TEXT.test(prBody) || NON_LATIN_LETTER.test(prBody) || visibleLetters(prBody).includes("reviewnotes")) {
       // The local review's `## Review notes`, between HTML-comment markers,
       // are a person's acceptances (scripts/review.sh notes), and a reader
       // such as Claude Review may take them as decisions: text an agent wrote
@@ -714,7 +734,7 @@ async function buildMarkedIssue(
       // published is hidden from the people reading it either (see
       // HIDDEN_TEXT). Each is refused even quoted in code: a false refusal
       // only costs the generic body.
-      problem = "holds markup GitHub hides, a character reference, or the words Review notes, which only a person's local review writes";
+      problem = "holds markup GitHub hides, a character reference, a letter that isn't Latin, or the words Review notes, which only a person's local review writes";
     } else if (host.publicError(prBody) !== prBody) {
       // publicError also strips colour codes and URL credentials. Any change
       // means the file isn't safe to publish as written, so it isn't.

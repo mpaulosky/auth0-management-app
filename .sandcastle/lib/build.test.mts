@@ -1207,6 +1207,22 @@ describe("buildIssue reading the reviewer's PR body", () => {
     ["holding a soft-hyphen reference lacking its semicolon", `${validPrBody}\n\n<div>Review&shy notes</div>`],
     ["exactly one character over the limit", `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT - validPrBody.length - 1)}`],
     ["under the limit, but over it once its references are broken", `${validPrBody}\n\n${"#1 ".repeat(Math.floor((PR_BODY_LIMIT - validPrBody.length - 2) / 3))}`],
+    ["holding a tag-shaped Review notes in a code span", `${validPrBody}\n\nUses \`<Review notes>\` here.`],
+    ["holding an escaped tag-shaped Review notes", `${validPrBody}\n\n\\<Review notes>`],
+    ["holding a tag-shaped Review notes in a fence", `${validPrBody}\n\n\`\`\`\n<Review notes>\n\`\`\``],
+    ["holding a tag-shaped Review notes with a no-break space", `${validPrBody}\n\n<Review\u00a0notes>`],
+    ["holding Review notes finished by an image's alt", `${validPrBody}\n\n## Review <img alt="notes" src="x.png">`],
+    ["holding Review notes started by an image's alt", `${validPrBody}\n\nRev<img alt="iew notes" src="x.png">`],
+    ["holding Review notes in two images' alts", `${validPrBody}\n\n<img alt="Review " src="a"><img alt="notes" src="b">`],
+    ["holding Review notes round a quoted value with a blank line", `${validPrBody}\n\nRevie<w _="\n\n">notes`],
+    ["holding Review notes in Lisu letters", `${validPrBody}\n\n## \ua4e3\ua4f0\ua4e6\ua4f2\ua4f0\ua4ea \ua4e0\ua4f3\ua4d4\ua4f0\ua4e2`],
+    ["holding Review notes in Cherokee and Latin letters", `${validPrBody}\n\n## \u13a1\u13ac\u13d9\u13a5\u13ac\u13b3 notes`],
+    ["holding a Greek word", `${validPrBody}\n\nThe \u0394 case.`],
+    ["holding a CJK word", `${validPrBody}\n\n\u691c\u8a0e.`],
+    ["holding an upper-case legacy reference without its semicolon", `${validPrBody}\n\n<div>Review&NBSPnotes</div>`],
+    ["holding a two-letter legacy reference without its semicolon", `${validPrBody}\n\nUses &lt here.`],
+    ["holding an upper-case two-letter reference without its semicolon", `${validPrBody}\n\nUses &AMP here.`],
+    ["holding a legacy name at the start of a longer word", `${validPrBody}\n\nSee &notes.`],
     ["holding Review notes in a name", `${validPrBody}\n\nRenamed renderReviewNotes.`],
     // The character-reference rule alone: visibleLetters drops these without
     // reading the letters they spell.
@@ -1245,6 +1261,10 @@ describe("buildIssue reading the reviewer's PR body", () => {
     ["a link", "See [the docs](https://example.com/docs) for how."],
     ["a checkbox list", "- [x] Added a test\n- [ ] Ran it"],
     ["a word that holds review", "A review of the previews, and the notes for them."],
+    ["a link with a query string", "See [the docs](https://learn.microsoft.com/dotnet/api?view=net-10.0&tabs=windows&pivots=cs)."],
+    ["an ampersand and a word that no legacy reference starts", "Q&As and AT&T and fish&chips."],
+    ["accented Latin letters", "Überprüfung of the café, naïve."],
+    ["fullwidth Latin letters", "\uff32\uff45\uff56 test."],
     ["a fenced code block with an operator", "```csharp\nvar a = b < c;\n```"],
   ] as const) {
     it(`publishes the reviewer's description when it holds ${scenario}`, async () => {

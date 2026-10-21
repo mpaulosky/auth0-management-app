@@ -6,7 +6,6 @@ describe("visibleLetters", () => {
   for (const [form, text] of [
     ["plain words", "Review notes"],
     ["emphasis and a heading mark", "## Re*view* **notes**"],
-    ["HTML tags", "<h2>Review <b>notes</b></h2>"],
     ["a decimal character reference", "Re&#118;iew&#32;notes"],
     ["a hexadecimal character reference", "Re&#x76;iew&#x20;notes"],
     ["a named character reference", "Review&nbsp;notes"],
@@ -58,9 +57,81 @@ describe("visibleLetters", () => {
     });
   }
 
-  it("puts the text before the attribute words, so a line that opens with the phrase starts with it", () => {
-    assert.ok(visibleLetters('<h2 id="notes" class="x">Review notes</h2>').startsWith("reviewnotes"));
+  it("reads HTML tags drawn as nothing, as GitHub draws them", () => {
+    assert.ok(visibleLetters("<h2>Review <b>notes</b></h2>").split(" ").includes("reviewnotes"));
   });
+
+  it("gives a reading that starts with the phrase for a heading whose tag has attributes", () => {
+    assert.ok(visibleLetters('<h2 id="notes" class="x">Review notes</h2>').split(" ").some((reading) => reading.startsWith("reviewnotes")));
+  });
+
+  // Round 3: the tag's own name and attributes are words a raw reader sees,
+  // and GitHub prints a `<` that isn't a tag, in code or escaped, as text.
+  for (const [form, text] of [
+    ["a tag-shaped phrase in a code span", "Uses `<Review notes>` here."],
+    ["an escaped <", "\\<Review notes>"],
+    ["an escaped < in a heading", "## \\<Review notes>"],
+    ["a tag-shaped phrase in a fence", "```\n<Review notes>\n```"],
+    ["a no-break space inside a tag-shaped phrase", "<Review\u00a0notes>"],
+    ["a no-break space after a stray <", "R<eview\u00a0notes> more"],
+    ["a closing-tag-shaped phrase", "Review </notes>"],
+    ["an image whose alt holds the second word", '## Review <img alt="notes" src="x.png">'],
+    ["an image whose alt holds the end of the phrase", 'Rev<img alt="iew notes" src="x.png">'],
+    ["two images whose alts hold a word each", '<img alt="Review " src="a"><img alt="notes" src="b">'],
+    ["a heading made of an image", '<h2><img alt="Review notes" src="x"></h2>'],
+    ["a quoted value that holds a blank line", 'Revie<w _="\n\n">notes'],
+    ["a comment that closes at once", "<!--><h2>Review notes</h2><!-- -->"],
+    ["a comment that closes at once, with a dash", "<!---><h2>Review notes</h2><!-- -->"],
+  ] as const) {
+    it(`reads ${form} as visible`, () => {
+      assert.ok(visibleLetters(text).includes("reviewnotes"), visibleLetters(text));
+    });
+  }
+
+  // Round 3: pins of the tag grammar, which decides the reading with tags
+  // drawn as nothing.
+  for (const [form, text] of [
+    ["a quoted value that holds a >", 'Re<a title="x>y">view notes</a>'],
+    ["a tag open across one line ending", 'Re<a\nhref="u">view notes</a>'],
+    ["a closing tag inside a word", "Rev</b>iew notes"],
+    ["a self-closing tag inside a word", "Rev<br/>iew notes"],
+  ] as const) {
+    it(`draws ${form} as nothing`, () => {
+      assert.ok(visibleLetters(text).split(" ").includes("reviewnotes"), visibleLetters(text));
+    });
+  }
+
+  for (const [form, text] of [
+    ["a blank line", 'Re<a\n\nhref="u">view'],
+    ["a blank line holding spaces", 'Re<a\n \t \nhref="u">view'],
+    ["a no-break space between a name and an attribute", 'Re<a\u00a0href="u">view'],
+  ] as const) {
+    it(`doesn't take a < and a > with ${form} between them for a tag`, () => {
+      assert.ok(!visibleLetters(text).split(" ").includes("review"), visibleLetters(text));
+    });
+  }
+
+  // The expected look-alikes, written out here rather than read from the
+  // tables, so a wrong letter or a mistyped code point fails.
+  const expectedLookAlikes: [string, string][] = [
+    ["\u0131", "i"], ["\u0435", "e"], ["\u043e", "o"], ["\u0456", "i"], ["\u0455", "s"], ["\u0433", "r"], ["\u0442", "t"],
+    ["\u03b5", "e"], ["\u03bf", "o"], ["\u03bd", "v"], ["\u03b9", "i"], ["\u03c4", "t"], ["\u03c9", "w"],
+    ["\u0475", "v"], ["\u051d", "w"], ["\u0578", "n"], ["\u057c", "n"], ["\u0585", "o"],
+    ["\u0280", "r"], ["\u1d07", "e"], ["\u1d20", "v"], ["\u026a", "i"], ["\u1d21", "w"], ["\u0274", "n"], ["\u1d0f", "o"], ["\u1d1b", "t"], ["\ua731", "s"],
+  ];
+  const expectedCapitals: [string, string][] = [
+    ["\u0395", "e"], ["\u039d", "n"], ["\u0399", "i"], ["\u039f", "o"], ["\u03a4", "t"],
+    ["\u0415", "e"], ["\u041e", "o"], ["\u0422", "t"], ["\u0406", "i"], ["\u0405", "s"], ["\u051c", "w"],
+  ];
+  it("holds exactly the look-alikes written out in this test", () => {
+    assert.deepEqual(Object.entries(LOOK_ALIKES).sort(), [...expectedLookAlikes].sort());
+    assert.deepEqual(Object.entries(CAPITAL_LOOK_ALIKES).sort(), [...expectedCapitals].sort());
+  });
+  for (const [letter, latin] of [...expectedLookAlikes, ...expectedCapitals]) {
+    it(`reads U+${letter.codePointAt(0)!.toString(16).padStart(4, "0")} as ${latin}, written out`, () => {
+      assert.equal(visibleLetters(letter), latin);
+    });
+  }
 
   // Round 2: every look-alike in the tables is read as its letter, capital or not.
   for (const [letter, latin] of Object.entries(LOOK_ALIKES)) {
@@ -144,7 +215,8 @@ describe("visibleLetters", () => {
 
   it("reads nothing as nothing, and markup alone as nothing", () => {
     assert.equal(visibleLetters(""), "");
-    assert.equal(visibleLetters("<br><hr/> ## ** &nbsp; &#33;"), "");
+    assert.equal(visibleLetters("## ** &nbsp; &#33;"), "");
+    assert.ok(visibleLetters("<br><hr/>").split(" ").includes(""), "a reading with the tags drawn as nothing is empty");
   });
 
   it("reads a character reference with leading zeros, and one for a lone surrogate or a NUL, without throwing", () => {

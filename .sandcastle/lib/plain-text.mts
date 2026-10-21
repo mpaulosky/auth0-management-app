@@ -60,42 +60,39 @@ export const CAPITAL_LOOK_ALIKES: Record<string, string> = {
 };
 const fold = (text: string, table: Record<string, string>) => [...text].map((letter) => table[letter] ?? letter).join("");
 
-// What GitHub's Markdown takes for raw HTML, which draws nothing itself: a
-// comment, declaration or processing instruction (the comment's own text may
-// span lines), and a tag (CommonMark's grammar: a name, attributes that are a
-// name and an optional value, quoted values holding anything, and no blank
-// line inside). Anything else that starts with `<`, a stray `<`, a generic
+// Raw HTML that draws nothing: a comment, declaration or processing
+// instruction (the comment's own text may span lines; `<!-->` and `<!--->`
+// close at once, as in HTML).
+const HIDDEN_MARKUP = /<!--(?:-?>|[\s\S]*?--!?>)|<[!?][^>]*>/g;
+
+// A tag as CommonMark reads it: a name, attributes that are a name and an
+// optional value (a quoted one may hold anything but a blank line), and no
+// blank line inside; whitespace is space, tab and a line ending, not a
+// no-break space. Anything else that starts with `<`, a stray `<`, a generic
 // type, an autolink, is text a reader sees.
-const HIDDEN_MARKUP = /<!--[\s\S]*?-->|<[!?][^>]*>/g;
-const WS = String.raw`(?:[^\S\n]|\n(?![^\S\n]*\n))`;
+const WS = String.raw`(?:[ \t]|\n(?![ \t]*\n))`;
+const QUOTED = (quote: string) => String.raw`${quote}(?:[^${quote}\n]|\n(?![ \t]*\n))*${quote}`;
 const TAG = new RegExp(
-  String.raw`<\/[a-z][a-z0-9-]*${WS}*>|<[a-z][a-z0-9-]*(?:${WS}+[a-z_:][\w.:-]*(?:${WS}*=${WS}*(?:[^\s"'=<>\x60]+|'[^']*'|"[^"]*"))?)*${WS}*\/?>`,
+  String.raw`<\/[a-z][a-z0-9-]*${WS}*>|<[a-z][a-z0-9-]*(?:${WS}+[a-z_:][\w.:-]*(?:${WS}*=${WS}*(?:[^\s"'=<>\x60]+|${QUOTED("'")}|${QUOTED('"')}))?)*${WS}*\/?>`,
   "gi",
 );
+// The values a reader can see: an image's alt text and a tooltip (title), not
+// a src or href, which would run into the words round them.
+const attributeValues = (tag: string) =>
+  [...tag.matchAll(/(?<![\w:.-])(?:alt|title|aria-label)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi)]
+    .map((match) => match[1] ?? match[2] ?? match[3])
+    .join(" ");
 
-// The letters a reader sees in Markdown `text`, lowercased and run together:
-// the text with HTML comments and tags dropped, then the words inside the
-// tags (names and values: a tooltip, an image's alt text, or what a raw
-// reader sees in an element GitHub drops), after it so a tag inside the
-// phrase doesn't split it. Numeric character references are decoded (with or
-// without the semicolon, as HTML does) and named ones dropped; compatibility
-// forms are folded (NFKC); characters that draw nothing (Hangul fillers and
-// other default-ignorable code points) are removed; look-alikes of the
-// phrase's letters are mapped to them; and everything that isn't a letter is
-// dropped (spaces, punctuation, emphasis and code marks, format and combining
-// characters). So `## Re*view*&#32;**notes**` reads "reviewnotes", as it
-// renders. A link's destination and title and an image's alt text stay in:
-// over-reading only refuses more. A named reference without its semicolon is
-// left alone: where its name ends can't be told, so build.mts refuses it.
-export function visibleLetters(text: string): string {
-  const inTags: string[] = [];
-  const shown = text.replace(HIDDEN_MARKUP, "").replace(TAG, (tag) => {
-    inTags.push(tag.replace(/^<\/?[a-z][a-z0-9-]*/i, " ").replace(/\/?>$/, " "));
-    return "";
-  });
+// The letters of `text` as one reader sees them: character references decoded
+// (with or without the semicolon, as HTML does) and named ones dropped,
+// compatibility forms folded (NFKC), characters that draw nothing (Hangul
+// fillers and other default-ignorable code points) removed, look-alikes of the
+// phrase's letters mapped to them, lowercased, and everything that isn't a
+// letter dropped (spaces, punctuation, emphasis and code marks, format and
+// combining characters).
+function letters(text: string): string {
   const folded = fold(
-    [shown, ...inTags]
-      .join(" ")
+    text
       .replace(/&#x([0-9a-f]+);?/gi, (_, hex: string) => character(Number.parseInt(hex, 16)))
       .replace(/&#(\d+);?/g, (_, decimal: string) => character(Number(decimal)))
       .replace(/&[a-z][a-z0-9]*;/gi, " ")
@@ -108,4 +105,22 @@ export function visibleLetters(text: string): string {
     .toLowerCase()
     .normalize("NFKC");
   return fold(folded, LOOK_ALIKES).replace(/[^\p{L}]+/gu, "");
+}
+
+// The letters a reader sees in Markdown `text`, run together, once for each
+// way a reader may see it, separated by spaces (one reading when they agree):
+// the raw text, where a tag's name and attributes are words a raw reader
+// sees (`<Review notes>`, which GitHub prints as text in a code span too);
+// with each tag drawn as nothing, so a tag inside the phrase doesn't split it;
+// and with each tag replaced by its alt text and title, which show as an
+// image's alt text or a tooltip. A hidden comment is dropped from all three.
+// So `## Re*view*&#32;**notes**` reads "reviewnotes", as it renders. A link's
+// destination and title stay in: over-reading only refuses more. A named
+// reference without its semicolon is left alone: where its name ends can't be
+// told, so build.mts refuses it. Test for a phrase with `includes` (or, for a
+// line's start, `startsWith` on each space-separated reading).
+export function visibleLetters(text: string): string {
+  const shown = text.replace(HIDDEN_MARKUP, "");
+  const readings = [shown, shown.replace(TAG, ""), shown.replace(TAG, (tag) => ` ${attributeValues(tag)} `)];
+  return [...new Set(readings.map(letters))].join(" ");
 }

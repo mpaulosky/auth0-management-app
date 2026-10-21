@@ -299,10 +299,12 @@ const pinnedDiff = [
   "--submodule=short", "--ignore-submodules=none", "-O/dev/null", "--src-prefix=a/", "--dst-prefix=b/",
 ];
 
-// The extensions of files that are binary by nature: only these may have a NUL
-// in their first 8000 bytes, so text with a stray NUL can't pass for one. The
-// list errs short: a binary file with another extension is refused, and the
-// person adds it here.
+// The extensions of files that are binary by nature: only files named as one
+// of these may have a NUL in their first 8000 bytes, so a source or text file
+// with a stray NUL is refused. A file named as a binary format is taken for
+// one whatever it holds, and the reviewers see only its name. The list errs
+// short: a binary file with another extension is refused, and the person adds
+// it here.
 export const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
   "png", "jpg", "jpeg", "gif", "ico", "webp", "avif", "bmp", "tif", "tiff", "woff", "woff2", "ttf", "otf", "eot",
   "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "jar", "nupkg", "snupkg",
@@ -735,7 +737,7 @@ function codeBlocks(lines: readonly string[]): { fenced: boolean[]; open: boolea
 // A line that reads "Review notes" first, in any form a reader sees those
 // words in: a heading of any kind, in a quote or a list, with emphasis, tags,
 // character references or invisible characters (see visibleLetters).
-const readsReviewNotes = (line: string) => visibleLetters(line).startsWith("reviewnotes");
+const readsReviewNotes = (line: string) => visibleLetters(line).split(" ").some((reading) => reading.startsWith("reviewnotes"));
 
 // A closing line (`Fixes #n`, `Closes #n` or `Resolves #n`), or the footer.
 const isClosingLine = (line: string) => /^(?:fixes|closes|resolves) #\d+/i.test(line);
