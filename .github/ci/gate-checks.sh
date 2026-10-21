@@ -59,10 +59,10 @@ fi
 # or comment outside quotes, with quoted text and $(...) set aside for the
 # flags (a gh command inside $(...) is judged on its own), but kept for gh
 # api's placeholders. A bare command group names no command, so it is left
-# alone. Shell
-# comments are skipped, trailing ones too outside Markdown (where # starts a
-# heading or a reference), and a command continued with a trailing backslash
-# is read as one line (a comment ending in one isn't continued, as in bash).
+# alone, unless it ends a Markdown line. Whole-line comments are skipped in
+# every file, and trailing ones are cut in shell files only (a .sh name or a
+# #! first line). A line whose code ends in a backslash is read with the next
+# one (a comment ending in one isn't continued, as in bash).
 # Only files the worktree has are read, and a listing that fails fails the
 # gate. Cheap enough to run on every gate.
 echo -e "${CYAN}🐙 gh commands name their repository...${RESET}"
@@ -123,11 +123,16 @@ if ((${#gh_files[@]} > 0)); then
           else if (c == ")") depth--
           continue
         }
-        if (q != "") {
+        # As in own_args: $(...) opens inside double quotes, not single.
+        if (q == "\047") {
           if (c == q) q = ""
           continue
         }
         if (c == "$" && substr(s, i + 1, 1) == "(") { depth = 1; i++; continue }
+        if (q == "\"") {
+          if (c == q) q = ""
+          continue
+        }
         if (c == "\047" || c == "\"") { q = c; continue }
         if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t]/)) return substr(s, 1, i - 1)
       }
@@ -149,20 +154,29 @@ if ((${#gh_files[@]} > 0)); then
         sub(/^[ \t]+/, "", first)
         if (command ~ /repo view$/) {
           # A redirect is no repository; a <placeholder> in a skill is one.
-          if (first == "" || first ~ /^-/ || first ~ /^([0-9]*>|&>|<([^A-Za-z]|$))/) return 1
-        } else if (first != "" && args !~ /(^|[ \t])(--repo|-R)([ =]|$)/) {
+          # own_args stops at &, so &> leaves no argument at all.
+          if (first == "" || first ~ /^-/ || first ~ /^([0-9]*>|<([^A-Za-z]|$))/) return 1
+        } else if (first == "") {
+          # A bare group, unless it ends a Markdown line, where a code span
+          # may go on to its command on the next line.
+          if (FILENAME ~ /\.md$/ && rest ~ /^[ \t]*$/) return 1
+        } else if (args !~ /(^|[ \t])(--repo|-R)([ =]|$)/) {
           return 1
         }
       }
       return 0
     }
-    FNR == 1 { held = "" }
+    # A shell file (a .sh name, or a #! first line) has trailing comments to
+    # cut; no other file is cut, so an unknown kind is read whole.
+    FNR == 1 { held = ""; shell = (FILENAME ~ /\.sh$/ || $0 ~ /^#!/) }
     held == "" && /^[ \t]*#/ { next }
-    /\\$/ { held = held substr($0, 1, length($0) - 1) " "; next }
     {
       line = held $0
+      if (shell) line = code_of(line)
+      # Continued only when its code ends in a backslash: a comment that ends
+      # in one is not continued, as in bash.
+      if (line ~ /\\$/) { held = substr(line, 1, length(line) - 1) " "; next }
       held = ""
-      if (FILENAME !~ /\.md$/) line = code_of(line)
       if (names_none(line)) {
         print FILENAME ":" FNR ": " line
       }

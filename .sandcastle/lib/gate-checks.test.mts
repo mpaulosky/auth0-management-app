@@ -174,6 +174,13 @@ describe("gate-checks.sh's gh repository check", () => {
     ["scripts/watch.sh", "gh api graphql -F owner='{owner}' -F name='{repo}' -f query=x"],
     ["scripts/watch.sh", 'gh api -X GET "repos/{owner}/{repo}/pulls"'],
     ["scripts/watch.sh", "gh api graphql -F name={repo} -F owner=mpaulosky"],
+    ["scripts/watch.sh", 'msg="$(printf "see #%s" "$n")"; gh pr view 3'],
+    ["scripts/watch.sh", "gh repo view </dev/null"],
+    ["scripts/watch.sh", "gh repo view < /dev/null"],
+    ["scripts/watch.sh", "echo 'a # b' && gh pr view 3"],
+    ["scripts/watch.sh", 'echo "a # b" && gh pr view 3'],
+    [".claude/skills/a/SKILL.md", "Read it with `gh issue"],
+    [".claude/skills/a/notes.txt", "See #12, then run gh pr view 3."],
   ]) {
     it(`fails on a command that names no repository: ${line}`, () => {
       const result = gateWith(file ?? "", `first\n${line}\n`);
@@ -210,7 +217,7 @@ describe("gate-checks.sh's gh repository check", () => {
     [".claude/skills/a/SKILL.md", "Search gh issues by label."],
     [".claude/skills/a/SKILL.md", "Walk through pr review first."],
     ["scripts/watch.sh", "retry=3  # gh pr checks exits 8 when pending"],
-    ["scripts/watch.sh", 'echo "# not a comment" && gh pr view 3 --repo o/r'],
+    ["scripts/watch.sh", 'gh pr comment "$pr" --body "$(printf "Closes #%s" "$n")" --repo "$repo"'],
     [".claude/skills/a/SKILL.md", "Run `gh repo view <owner>/<repo> --json name`."],
     [".claude/skills/a/SKILL.md", "Every `gh issue` and `gh pr` command names the repository with `--repo`."],
   ]) {
@@ -261,6 +268,19 @@ describe("gate-checks.sh's gh repository check", () => {
 
     assert.equal(result.status, 1);
     assert.match(result.stderr, /scripts\/watch\.sh:2:/);
+  });
+
+  it("doesn't continue a trailing shell comment that ends in a backslash, as bash doesn't", () => {
+    const result = gateWith("scripts/watch.sh", "retry=3  # a note \\\ngh pr view 3\n");
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /scripts\/watch\.sh:2:/);
+  });
+
+  it("cuts a trailing comment in a script with no .sh name that starts with #!", () => {
+    const result = gateWith("scripts/watch", "#!/usr/bin/env bash\nretry=3  # gh pr checks exits 8\n");
+
+    assert.equal(result.status, 0, result.stderr);
   });
 
   it("skips a tracked file deleted from the worktree, rather than stop the gate", () => {
