@@ -49,145 +49,54 @@ else
   run_clean scripts/review.sh check "$base"
 fi
 
-# A gh command that names no repository reaches gh's default repository,
-# which in a clone whose only remote is a fork is the fork, so the skills and
-# scripts must name it: --repo (or -R) on every command group that takes one
-# (issue, pr, run, workflow, release, label, secret, variable, cache, browse,
-# ruleset), a repository argument to gh repo view, and no {owner}, {repo} or
-# repos/:owner placeholder in a gh api call, in its path or its fields. Each
-# command is judged by its own arguments: up to the next backtick, |, ;, &, )
-# or comment outside quotes, with quoted text and $(...) set aside for the
-# flags (a gh command inside $(...) is judged on its own), but kept for gh
-# api's placeholders. A bare command group names no command, so it is left
-# alone, unless it ends a Markdown line. Whole-line comments are skipped in
-# every file, and trailing ones are cut in shell files only (a .sh name or a
-# #! first line). A line whose code ends in a backslash is read with the next
-# one (a comment ending in one isn't continued, as in bash).
-# Only files the worktree has are read, and a listing that fails fails the
-# gate. Cheap enough to run on every gate.
-echo -e "${CYAN}🐙 gh commands name their repository...${RESET}"
+# A gh command reaches gh's default repository unless it's told which one,
+# and in a clone whose only remote is a fork that's the fork. GH_REPO tells
+# every gh command, placeholders in gh api included, whatever their spelling,
+# so the skills and scripts run gh with it set: a shell file (a .sh name or a
+# #! first line) exports it before its first gh command, and a skill writes
+# GH_REPO=mpaulosky/auth0-management-app before each one. gh repo's
+# subcommands don't read it, so each takes the repository as its first
+# argument (or -R), except list, create and clone, which name their own.
+# Text that reads gh and a word counts as a command, so prose rewords it.
+# Whole-line comments are skipped. Only files the worktree has are read, and a
+# listing that fails fails the gate. Cheap enough to run on every gate.
+echo -e "${CYAN}🐙 gh commands are told their repository...${RESET}"
 # A process substitution's failure is lost, so list once where set -e sees it.
 git ls-files -z -- .claude/skills scripts > /dev/null
 gh_files=()
 while IFS= read -r -d '' file; do
   [[ -f "$file" ]] && gh_files+=("$file")
 done < <(git ls-files -z -- .claude/skills scripts)
-unnamed=""
+untold=""
 if ((${#gh_files[@]} > 0)); then
-  unnamed="$(awk '
-    # The arguments a command owns in `s`, the text after it: up to the first
-    # terminator outside quotes and $(...), with each quoted string written Q
-    # and each $(...) written S, or kept as they are when `keep` is set.
-    # \047 is a single quote.
-    function own_args(s, keep,   i, c, n, out, q, depth) {
-      out = ""
-      q = ""
-      depth = 0
-      n = length(s)
-      for (i = 1; i <= n; i++) {
-        c = substr(s, i, 1)
-        if (depth > 0) {
-          if (keep) out = out c
-          if (c == "(") depth++
-          else if (c == ")" && --depth == 0 && q == "" && !keep) out = out "S"
-          continue
-        }
-        if (q == "\047") {
-          if (keep) out = out c
-          if (c == "\047") { q = ""; if (!keep) out = out "Q" }
-          continue
-        }
-        if (c == "$" && substr(s, i + 1, 1) == "(") { depth = 1; if (keep) out = out "$("; i++; continue }
-        if (q == "\"") {
-          if (keep) out = out c
-          if (c == "\"") { q = ""; if (!keep) out = out "Q" }
-          continue
-        }
-        if (c == "\047" || c == "\"") { q = c; if (keep) out = out c; continue }
-        if (c ~ /[`|;&)]/) break
-        if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t]/)) break
-        out = out c
-      }
-      return out
-    }
-    # `s` up to its first comment: a # that starts a word outside quotes and
-    # $(...).
-    function code_of(s,   i, c, n, q, depth) {
-      q = ""
-      depth = 0
-      n = length(s)
-      for (i = 1; i <= n; i++) {
-        c = substr(s, i, 1)
-        if (depth > 0) {
-          if (c == "(") depth++
-          else if (c == ")") depth--
-          continue
-        }
-        # As in own_args: $(...) opens inside double quotes, not single.
-        if (q == "\047") {
-          if (c == q) q = ""
-          continue
-        }
-        if (c == "$" && substr(s, i + 1, 1) == "(") { depth = 1; i++; continue }
-        if (q == "\"") {
-          if (c == q) q = ""
-          continue
-        }
-        if (c == "\047" || c == "\"") { q = c; continue }
-        if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t]/)) return substr(s, 1, i - 1)
-      }
-      return s
-    }
-    # Whether one of the gh commands on `line` names no repository.
-    function names_none(line,   rest, command, args, first) {
-      rest = line
-      while (match(rest, /(^|[^A-Za-z0-9_-])gh (issue|pr|run|workflow|release|label|secret|variable|cache|browse|ruleset|repo view|api)/)) {
-        command = substr(rest, RSTART, RLENGTH)
-        rest = substr(rest, RSTART + RLENGTH)
-        if (substr(rest, 1, 1) ~ /[A-Za-z0-9_-]/) continue
-        if (command ~ /api$/) {
-          if (own_args(rest, 1) ~ /\{owner\}|\{repo\}|repos\/:owner/) return 1
-          continue
-        }
-        args = own_args(rest)
-        first = args
-        sub(/^[ \t]+/, "", first)
-        if (command ~ /repo view$/) {
-          # A redirect is no repository; a <placeholder> in a skill is one.
-          # own_args stops at &, so &> leaves no argument at all.
-          if (first == "" || first ~ /^-/ || first ~ /^([0-9]*>|<([^A-Za-z]|$))/) return 1
-        } else if (first == "") {
-          # A bare group, unless it ends a Markdown line, where a code span
-          # may go on to its command on the next line.
-          if (FILENAME ~ /\.md$/ && rest ~ /^[ \t]*$/) return 1
-        } else if (args !~ /(^|[ \t])(--repo|-R)([ =]|$)/) {
-          return 1
-        }
-      }
-      return 0
-    }
-    # A shell file (a .sh name, or a #! first line) has trailing comments to
-    # cut; no other file is cut, so an unknown kind is read whole.
-    FNR == 1 { held = ""; shell = (FILENAME ~ /\.sh$/ || $0 ~ /^#!/) }
-    held == "" && /^[ \t]*#/ { next }
+  untold="$(awk '
+    FNR == 1 { shell = (FILENAME ~ /\.sh$/ || $0 ~ /^#!/); exported = 0 }
+    /^[ \t]*#/ { next }
+    shell && /^[ \t]*export GH_REPO=[^ \t]/ { exported = 1 }
     {
-      line = held $0
-      if (shell) line = code_of(line)
-      # Continued only when its code ends in a backslash: a comment that ends
-      # in one is not continued, as in bash.
-      if (line ~ /\\$/) { held = substr(line, 1, length(line) - 1) " "; next }
-      held = ""
-      if (names_none(line)) {
-        print FILENAME ":" FNR ": " line
+      rest = $0
+      while (match(rest, /(^|[^A-Za-z0-9_.-])gh [a-z]/)) {
+        at = RSTART + RLENGTH - 4
+        before = substr(rest, 1, at - 1)
+        rest = substr(rest, at + 3)
+        if (rest ~ /^repo[ \t]+[a-z-]/) {
+          if (rest !~ /^repo[ \t]+(list|create|clone)/ && rest !~ /^repo[ \t]+[a-z-]+[ \t]+([^- \t<>`"$][^ \t`]*\/|<[A-Za-z]|"?\$|-R[ =]|--repo[ =])/) {
+            print FILENAME ":" FNR ": " $0
+            next
+          }
+        } else if (!(shell && exported) && before !~ /GH_REPO=[^ \t`]+[ \t]+$/) {
+          print FILENAME ":" FNR ": " $0
+          next
+        }
       }
     }' "${gh_files[@]}")"
 fi
-if [[ -n "$unnamed" ]]; then
-  echo "❌ These gh commands name no repository, so from a fork's clone they can reach the fork. Add --repo mpaulosky/auth0-management-app to gh issue, pr, run, workflow, release, label, secret, variable, cache, browse and ruleset; for gh repo view, give the repository as its first argument; for gh api, write it in place of every {owner}, {repo} or :owner: repos/mpaulosky/auth0-management-app/..." >&2
-  echo "$unnamed" >&2
+if [[ -n "$untold" ]]; then
+  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
+  echo "$untold" >&2
   exit 1
 fi
-echo -e "${GREEN}✅ Every gh command names its repository.${RESET}"
+echo -e "${GREEN}✅ Every gh command is told its repository.${RESET}"
 
 # .github/copilot-instructions.md is generated from the code-review skill, so
 # GitHub's Copilot review and Claude Code review against the same rules.

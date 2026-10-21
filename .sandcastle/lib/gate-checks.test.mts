@@ -124,8 +124,10 @@ describe("gate-checks.sh's local review check", () => {
   });
 });
 
-// A gh command that names no repository reaches the clone's default one, which
-// in a fork's clone is the fork.
+// A gh command reaches gh's default repository unless it's told which one,
+// and in a clone whose only remote is a fork that's the fork. GH_REPO tells
+// every gh command but gh repo's subcommands, which take the repository as
+// their argument.
 describe("gate-checks.sh's gh repository check", () => {
   // Commit `content` at `file`, then run the checks with the review skipped.
   function gateWith(file: string, content: string) {
@@ -136,151 +138,66 @@ describe("gate-checks.sh's gh repository check", () => {
     return gate(head(), { GATE_SKIP_REVIEW: "1" });
   }
 
-  for (const [file, line] of [
-    ["scripts/watch.sh", 'gh pr checks "$pr" --json name'],
-    ["scripts/watch.sh", "  data=$(gh issue view 3)"],
-    [".claude/skills/a/SKILL.md", "Read it with `gh issue view <n> --json comments`."],
-    [".claude/skills/a/SKILL.md", "Run `gh api repos/{owner}/{repo}/issues/3`."],
-    [".claude/skills/a/SKILL.md", "Run `gh api repos/:owner/:repo/pulls`."],
-    ["scripts/watch.sh", 'repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"'],
-    ["scripts/watch.sh", 'gh pr view "$pr" --repo "$repo" --json body; gh pr checks "$pr" --json bucket'],
-    [".claude/skills/a/SKILL.md", "Read it with `gh pr view <n> --repo o/r --json body` and edit it with `gh pr edit <n> --body-file x`."],
-    ["scripts/watch.sh", "cp -R a b && gh pr view 3"],
-    ["scripts/watch.sh", "gh pr checks 3 | grep -R x ."],
-    ["scripts/watch.sh", "gh pr checks 3  # add --repo later"],
-    [".claude/skills/a/SKILL.md", "Run `gh pr checks 3`, then `gh pr view 3 --repo o/r`."],
-    ["scripts/watch.sh", 'gh pr checks "$pr"; gh pr view "$pr" --repo "$repo"'],
-    ["scripts/watch.sh", "gh pr checks 3 && gh pr view 3 -R o/r"],
-    ["scripts/watch.sh", "a=$(gh pr checks 3) b=$(gh pr view 3 --repo o/r)"],
-    ["scripts/watch.sh", `gh pr view "$(gh pr list --repo o/r --head b --json number -q '.[0].number')" --json body`],
-    [".claude/skills/a/SKILL.md", "Run `gh repo view` first."],
-    ["scripts/watch.sh", 'name="$(gh repo view)"'],
-    ["scripts/watch.sh", "gh repo view | head"],
-    ["scripts/watch.sh", "gh repo view; echo"],
-    ["scripts/watch.sh", "if gh repo view >/dev/null 2>&1; then"],
-    ["scripts/watch.sh", "gh repo view 2>/dev/null"],
-    ["scripts/watch.sh", 'gh pr comment 3 --body "use --repo o/r"'],
-    ["scripts/watch.sh", "gh issue create --title x --body '-R o/r'"],
-    ["scripts/watch.sh", "gh pr checks 3  # the check needs gh pr view too"],
-    ["scripts/watch.sh", "gh run list --json status"],
-    ["scripts/watch.sh", "gh workflow run ci.yml"],
-    ["scripts/watch.sh", "gh release view v1.0.0"],
-    ["scripts/watch.sh", "gh label list"],
-    ["scripts/watch.sh", "gh secret list"],
-    ["scripts/watch.sh", "gh variable get NAME"],
-    ["scripts/watch.sh", "gh cache list"],
-    ["scripts/watch.sh", "gh browse 3"],
-    ["scripts/watch.sh", "gh ruleset list"],
-    ["scripts/watch.sh", "gh api graphql -F owner='{owner}' -F name='{repo}' -f query=x"],
-    ["scripts/watch.sh", 'gh api -X GET "repos/{owner}/{repo}/pulls"'],
-    ["scripts/watch.sh", "gh api graphql -F name={repo} -F owner=mpaulosky"],
-    ["scripts/watch.sh", 'msg="$(printf "see #%s" "$n")"; gh pr view 3'],
-    ["scripts/watch.sh", "gh repo view </dev/null"],
-    ["scripts/watch.sh", "gh repo view < /dev/null"],
-    ["scripts/watch.sh", "echo 'a # b' && gh pr view 3"],
-    ["scripts/watch.sh", 'echo "a # b" && gh pr view 3'],
-    [".claude/skills/a/SKILL.md", "Read it with `gh issue"],
-    [".claude/skills/a/notes.txt", "See #12, then run gh pr view 3."],
+  const skill = ".claude/skills/a/SKILL.md";
+  const script = "scripts/watch.sh";
+  const exported = 'export GH_REPO="${GH_REPO:-mpaulosky/auth0-management-app}"\n';
+
+  for (const [file, content] of [
+    [skill, "Read it with `gh issue view <n> --json comments`.\n"],
+    [skill, "Run `gh api repos/{owner}/{repo}/issues/3`.\n"],
+    [skill, "Every `gh issue` and `gh pr` command.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh pr view 3` and then `gh pr checks 3`.\n"],
+    [skill, "Run `GH_REPO= gh pr view 3`.\n"],
+    [`.claude/skills/a/notes.txt`, "then run gh run list\n"],
+    [script, "#!/usr/bin/env bash\ngh pr checks 3\n"],
+    [script, "#!/usr/bin/env bash\ngh pr checks 3\nexport GH_REPO=mpaulosky/auth0-management-app\n"],
+    [script, "#!/usr/bin/env bash\necho 'export GH_REPO=x'\ngh pr checks 3\n"],
+    [script, `#!/usr/bin/env bash\n${exported}gh repo view --json name\n`],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo edit --description x`.\n"],
   ]) {
-    it(`fails on a command that names no repository: ${line}`, () => {
-      const result = gateWith(file ?? "", `first\n${line}\n`);
+    it(`fails on a gh command not told its repository: ${JSON.stringify(content)} in ${file}`, () => {
+      const result = gateWith(file, content);
 
       assert.equal(result.status, 1);
-      assert.match(result.stderr, new RegExp(`${(file ?? "").replace(/\./g, "\\.")}:2:`));
-      assert.match(result.stderr, /--repo/);
+      assert.match(result.stderr, /GH_REPO=mpaulosky\/auth0-management-app/);
     });
   }
 
-  for (const [file, line] of [
-    ["scripts/watch.sh", 'gh pr checks "$pr" --repo "$repo" --json name'],
-    ["scripts/watch.sh", "gh issue view 3 -R mpaulosky/auth0-management-app"],
-    ["scripts/watch.sh", "gh pr view 3 --repo=mpaulosky/auth0-management-app"],
-    ["scripts/watch.sh", "# gh pr checks exits non-zero when a check failed"],
-    [".claude/skills/a/SKILL.md", "`gh api repos/mpaulosky/auth0-management-app/issues/3`"],
-    [".claude/skills/a/SKILL.md", "`gh api graphql -F owner=mpaulosky -F name=auth0-management-app`"],
-    ["docs/notes.md", "gh pr view 3"],
-    ["scripts/watch.sh", 'repo="$(gh repo view mpaulosky/auth0-management-app --json nameWithOwner)"'],
-    ["scripts/watch.sh", 'gh pr view "$pr" --repo "$repo" --json body; gh pr checks "$pr" -R "$repo"'],
-    ["scripts/watch.sh", `gh pr list --jq '.[] | .number' --repo o/r`],
-    ["scripts/watch.sh", 'gh pr comment 3 --body "see #12; it (works) & more" --repo o/r'],
-    ["scripts/watch.sh", 'gh issue create --title "fix(review): x" --repo o/r'],
-    ["scripts/watch.sh", 'gh pr view "$(git branch --show-current)" --repo "$repo"'],
-    ["scripts/watch.sh", "gh pr view $(git branch --show-current) --repo o/r"],
-    ["scripts/watch.sh", 'gh repo view "$repo" --json name'],
-    ["scripts/watch.sh", "gh run list --repo o/r --json status"],
-    ["scripts/watch.sh", "gh workflow run ci.yml -R o/r"],
-    ["scripts/watch.sh", "gh release view v1.0.0 --repo=o/r"],
-    ["scripts/watch.sh", "gh api graphql -F owner=mpaulosky -F name=auth0-management-app -f query=x"],
-    ["scripts/watch.sh", "gh api repos/mpaulosky/auth0-management-app/pulls"],
-    ["scripts/watch.sh", "gh api user && echo '{owner}'"],
-    [".claude/skills/a/SKILL.md", "Use `gh run`, `gh workflow` and `gh release` only with `--repo`."],
-    [".claude/skills/a/SKILL.md", "Search gh issues by label."],
-    [".claude/skills/a/SKILL.md", "Walk through pr review first."],
-    ["scripts/watch.sh", "retry=3  # gh pr checks exits 8 when pending"],
-    ["scripts/watch.sh", 'gh pr comment "$pr" --body "$(printf "Closes #%s" "$n")" --repo "$repo"'],
-    [".claude/skills/a/SKILL.md", "Run `gh repo view <owner>/<repo> --json name`."],
-    [".claude/skills/a/SKILL.md", "Every `gh issue` and `gh pr` command names the repository with `--repo`."],
+  for (const [file, content] of [
+    [skill, "Read it with `GH_REPO=mpaulosky/auth0-management-app gh issue view <n> --json comments`.\n"],
+    [skill, "`GH_REPO=mpaulosky/auth0-management-app gh api repos/{owner}/:repo/pulls`\n"],
+    [skill, "Run `env GH_REPO=mpaulosky/auth0-management-app gh run list`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view mpaulosky/auth0-management-app --json name`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view <owner>/<repo>`.\n"],
+    [skill, 'Run `GH_REPO=mpaulosky/auth0-management-app gh repo view "$repo"`.\n'],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo rename -R o/r new`.\n"],
+    [skill, "Run `gh repo list mpaulosky` or `gh repo clone o/r`.\n"],
+    [skill, "The `gh` CLI, and a high gh.\n"],
+    [skill, "# A heading about gh pr view\n"],
+    [script, `#!/usr/bin/env bash\n${exported}gh pr checks "$pr" --json bucket\ngh api "repos/\${repo}/pulls"\n`],
+    [script, `#!/usr/bin/env bash\n# gh pr checks is used below\n${exported}gh pr checks 3\n`],
+    [script, "#!/usr/bin/env bash\necho done\n"],
+    ["docs/notes.md", "gh pr view 3\n"],
   ]) {
-    it(`passes a command that names its repository, a comment, or a file outside the checked folders: ${line}`, () => {
-      const result = gateWith(file ?? "", `${line}\n`);
+    it(`passes a gh command told its repository, or text that runs none: ${JSON.stringify(content)} in ${file}`, () => {
+      const result = gateWith(file, content);
 
       assert.equal(result.status, 0, result.stderr);
     });
   }
 
-  it("tells how to name the repository for gh repo view, which has no --repo flag", () => {
-    const result = gateWith("scripts/watch.sh", "gh repo view --json name\n");
+  it("names the file and line of each command it refuses", () => {
+    const result = gateWith(".claude/skills/a b/SKILL.md", "first\nRun `gh pr view 3`.\n");
 
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /for gh repo view, give the repository as its first argument/);
+    assert.match(result.stderr, /a b\/SKILL\.md:2:/);
   });
 
-  it("tells how to name the repository in a gh api path, since gh api has no --repo flag", () => {
-    const result = gateWith(".claude/skills/a/SKILL.md", "Run `gh api repos/{owner}/{repo}/issues/3`.\n");
+  it("tells how to name the repository for gh repo's subcommands, which don't read GH_REPO", () => {
+    const result = gateWith(skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view`.\n");
 
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /for gh api, write it in place of every \{owner\}, \{repo\} or :owner: repos\/mpaulosky\/auth0-management-app\//);
-  });
-
-  it("cuts a Markdown line at no #, since there it starts a heading or a reference, not a comment", () => {
-    const result = gateWith(".claude/skills/a/SKILL.md", "See #12, then run gh pr view 3.\n");
-
-    assert.equal(result.status, 1);
-  });
-
-  it("fails the gate when the files to check can't be listed, rather than pass having checked none", () => {
-    writeFileSync(join(repo, ".git/index"), "not an index");
-
-    const result = gate(head(), { GATE_SKIP_REVIEW: "1" });
-
-    assert.notEqual(result.status, 0);
-    assert.doesNotMatch(result.stdout, /Every gh command names its repository/);
-  });
-
-  it("reads a command continued over lines as one", () => {
-    const result = gateWith("scripts/watch.sh", 'gh pr checks "$pr" \\\n  --repo "$repo"\n');
-
-    assert.equal(result.status, 0, result.stderr);
-  });
-
-  it("doesn't join a shell comment that ends in a backslash with the next line, as bash doesn't", () => {
-    const result = gateWith("scripts/watch.sh", "# a note \\\ngh pr view 3\n");
-
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /scripts\/watch\.sh:2:/);
-  });
-
-  it("doesn't continue a trailing shell comment that ends in a backslash, as bash doesn't", () => {
-    const result = gateWith("scripts/watch.sh", "retry=3  # a note \\\ngh pr view 3\n");
-
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /scripts\/watch\.sh:2:/);
-  });
-
-  it("cuts a trailing comment in a script with no .sh name that starts with #!", () => {
-    const result = gateWith("scripts/watch", "#!/usr/bin/env bash\nretry=3  # gh pr checks exits 8\n");
-
-    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /gh repo's subcommands don't read GH_REPO: give the repository as the first argument/);
   });
 
   it("skips a tracked file deleted from the worktree, rather than stop the gate", () => {
@@ -290,13 +207,15 @@ describe("gate-checks.sh's gh repository check", () => {
     const result = gate(head(), { GATE_SKIP_REVIEW: "1" });
 
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Every gh command names its repository/);
+    assert.match(result.stdout, /Every gh command is told its repository/);
   });
 
-  it("checks a file whose name holds a space", () => {
-    const result = gateWith(".claude/skills/a b/SKILL.md", "gh pr view 3\n");
+  it("fails the gate when the files to check can't be listed, rather than pass having checked none", () => {
+    writeFileSync(join(repo, ".git/index"), "not an index");
 
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /a b\/SKILL\.md:1:/);
+    const result = gate(head(), { GATE_SKIP_REVIEW: "1" });
+
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stdout, /Every gh command is told its repository/);
   });
 });

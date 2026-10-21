@@ -99,3 +99,9 @@ describe("the pre-push-review skill's Warnings", () => {
     assert.match(skill, /from `latest` or from this run's earlier\s+rounds, by its id, lens and path only/);
   });
 });
+
+describe("the pre-push-review skill's misgraded Warnings", () => {
+  it("records a real non-security problem again at its own grade when its Warning is dismissed", () => {
+    assert.match(skill, /also record the problem as a new finding with\s+its own id, graded from the table/);
+  });
+});

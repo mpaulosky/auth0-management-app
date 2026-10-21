@@ -38,6 +38,8 @@ idle_limit="${WATCH_PR_IDLE_MINUTES:-30}"
 # Named, not gh's default repository: in a clone whose only remote is a fork,
 # that's the fork, which doesn't have the PR.
 repo="${WATCH_PR_REPO:-mpaulosky/auth0-management-app}"
+# Every gh command below reads it (see .github/ci/gate-checks.sh).
+export GH_REPO="$repo"
 owner="${repo%%/*}"
 name="${repo##*/}"
 seen_file="$(git rev-parse --git-common-dir)/watch-pr-${pr}.seen"
@@ -112,7 +114,7 @@ while true; do
 
 	# gh pr checks exits non-zero both when a check failed and when none has
 	# registered yet, so read its JSON rather than its exit code.
-	checks="$(gh pr checks "$pr" --repo "$repo" --json name,bucket 2>/dev/null || true)"
+	checks="$(gh pr checks "$pr" --json name,bucket 2>/dev/null || true)"
 	checks="${checks:-[]}"
 	pending="$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$checks")"
 	failed="$(jq -r '[.[] | select(.bucket == "fail") | .name] | join(", ")' <<<"$checks")"
