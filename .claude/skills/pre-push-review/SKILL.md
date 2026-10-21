@@ -202,8 +202,8 @@ the follow-up issue).
 ### 8. Record
 
 Record the outcome with the key and HEAD `prepare` printed when the last round started. Every finding has exactly these fields, with `test`,
-`reason` and `fix` always present and `null` when unused. `fix` is the reviewer's suggested fix, kept for an open
-Warning or Advisory finding (the person deciding a Warning, and `scripts/review.sh advisory`, read it). The reviewers'
+`reason` and `fix` always present and `null` when unused. `fix` is the reviewer's suggested fix, and `record`
+refuses an open finding without one (`scripts/review.sh advisory` reads it, and step 9 gives it to the person deciding). The reviewers'
 `needsPerson` and `why` stay out:
 
 ```bash

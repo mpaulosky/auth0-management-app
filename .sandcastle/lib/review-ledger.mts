@@ -133,11 +133,16 @@ function checkOutcome(finding: z.infer<typeof findingFields>, context: z.Refinem
 // A finding a review records: triage must grade every one. A finding whose
 // lens names security is never Advisory: it would pass the check without a
 // person deciding it, and go to the public follow-up issue.
+// Its `fix` is always given, null when unused, and given for every open
+// finding: the person deciding it, or the follow-up issue, needs it.
 export const findingSchema = findingFields
-  .extend({ severity: z.enum(SEVERITIES) })
+  .extend({ severity: z.enum(SEVERITIES), fix: z.string().trim().min(1).nullable() })
   .strict()
   .superRefine(checkOutcome)
   .superRefine((finding, context) => {
+    if (finding.status === "open" && finding.fix === null) {
+      context.addIssue({ code: "custom", message: `${finding.id} is open without a suggested fix` });
+    }
     if (finding.severity === "advisory" && /security/i.test(finding.lens)) {
       context.addIssue({ code: "custom", message: `${finding.id}'s lens names security, so it's a security weakness: grade it warning, not advisory` });
     }
@@ -644,15 +649,16 @@ export function renderReviewNotes(ledger: Ledger): string {
 
 // The patch of the fixes a later round reviews: `since`, the HEAD the round
 // before read, to `head`. The reasons it can't be, as a message: a commit that
-// isn't one of HEAD's, or isn't the HEAD the last prepare in `dir` printed
-// (a later one would leave fixes unread), a merge of main since (the patch
-// would hold main's changes), or no fixes at all.
+// isn't one of HEAD's, no round prepared in `dir`, a commit later than the
+// HEAD the last prepare in `dir` printed (it would leave fixes unread; an
+// earlier one only rereads more, as when a round is prepared twice), a merge
+// of main since (the patch would hold main's changes), or no fixes at all.
 function fixesPatch(cwd: string, dir: string, since: string, base: string, head: string): Buffer | string {
   if (!isAncestor(cwd, since, head)) return `${since} isn't one of HEAD's commits: give the HEAD prepare printed in the round before.`;
   const headFile = join(dir, "head");
   const before = existsSync(headFile) ? readFileSync(headFile, "utf8").trim() : undefined;
-  if (before === undefined || git(cwd, "rev-parse", "--verify", `${since}^{commit}`) !== before) {
-    return `${since} isn't the HEAD prepare printed in the round before (${before ?? "none in this folder"}): give that one, so no fix goes unread.`;
+  if (before === undefined || !isAncestor(cwd, since, before)) {
+    return `${since} is later than the HEAD prepare printed in the round before (${before ?? "none in this folder"}): give that one, so no fix goes unread.`;
   }
   if (git(cwd, "merge-base", "origin/main", since) !== base) {
     return "main was merged in since the round before, so the fixes can't be told from main's changes: start again at round 1.";
@@ -712,6 +718,9 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         if (rest[0] === undefined || !isAbsolute(rest[0])) return fail(USAGE);
         // One read of the patch gives both, so the key names exactly the text
         // the reviewers get.
+        // A fixes patch is only ever this prepare's: an earlier round's would
+        // have the reviewers read old fixes.
+        rmSync(join(rest[0], "fixes.patch"), { force: true });
         const head = headCommit(cwd);
         const base = mergeBase(cwd);
         const patch = reviewPatch(cwd, base, head);

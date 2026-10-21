@@ -76,6 +76,7 @@ const finding = (overrides: Partial<Finding> = {}): Finding => ({
   status: "fixed",
   test: "tests/AppTests.cs::Guard_WhitespaceEmail_Fails",
   reason: null,
+  fix: "Trim the email before the guard.",
   ...overrides,
 });
 
@@ -803,6 +804,18 @@ describe("recordReview", () => {
     });
   }
 
+  it("refuses a finding without the fix field, which is null when unused", () => {
+    const { fix: _, ...fixless } = finding();
+
+    assert.throws(() => record([fixless as Finding]), /fix/);
+  });
+
+  for (const severity of ["critical", "warning", "advisory"] as const) {
+    it(`refuses an open ${severity} finding with no suggested fix, which the person or the follow-up issue needs`, () => {
+      assert.throws(() => record([finding({ severity, status: "open", test: null, fix: null })]), /R1 is open without a suggested fix/);
+    });
+  }
+
   it("keeps a finding's suggested fix", () => {
     const ledger = record([finding({ severity: "advisory", status: "open", test: null, fix: "Reword the comment." })]);
 
@@ -1181,13 +1194,13 @@ describe("renderAdvisories", () => {
   it("lists each open Advisory finding with where it is, what goes wrong and the suggested fix, ending with the session marker", () => {
     const ledger = record([
       finding({ id: "R2", severity: "advisory", status: "open", test: null, summary: "The comment is stale.", fix: "Reword it." }),
-      finding({ id: "R3", severity: "advisory", status: "open", test: null, summary: "A list misses a check.", fix: null }),
+      finding({ id: "R3", severity: "advisory", status: "open", test: null, summary: "A list misses a check.", fix: "Add it." }),
     ]);
 
     const body = renderAdvisories(ledger);
 
     assert.match(body, /^- R2 app\.cs:3: The comment is stale\. Suggested fix: Reword it\.$/m);
-    assert.match(body, /^- R3 app\.cs:3: A list misses a check\.$/m);
+    assert.match(body, /^- R3 app\.cs:3: A list misses a check\. Suggested fix: Add it\.$/m);
     assert.match(body, /<!-- claude-session -->\n$/);
   });
 
@@ -1197,6 +1210,7 @@ describe("renderAdvisories", () => {
       finding({ id: "R2", severity: "warning", status: "open", test: null, summary: "A weak permission." }),
       finding({ id: "R3", severity: "advisory", status: "dismissed", test: null, reason: "Wrong.", summary: "A dismissed one." }),
       finding({ id: "R4", severity: "advisory", status: "accepted", test: null, reason: "Fine.", summary: "An accepted one." }),
+      finding({ id: "R5", severity: "critical", status: "open", test: null, summary: "Left for a person." }),
     ]);
 
     assert.equal(renderAdvisories(ledger), "");
@@ -1304,9 +1318,68 @@ describe("main", () => {
     const result = cli(["prepare", dir, afterFirst]);
 
     assert.equal(result.code, 1);
-    assert.match(result.err, /the HEAD prepare printed in the round before/);
+    assert.match(result.err, /later than the HEAD prepare printed in the round before/);
     assert.equal(existsSync(join(dir, "fixes.patch")), false);
   });
+
+  it("prepare takes the same since again when a round is prepared twice, and its fixes patch then holds every commit since", () => {
+    const dir = join(root, "run");
+    const first = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    commit(repo, "other.cs", "first fix\n", "first fix");
+    assert.equal(cli(["prepare", dir, first]).code, 0);
+    commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "second fix" : undefined)), "second fix");
+
+    const result = cli(["prepare", dir, first]);
+
+    assert.equal(result.code, 0, result.err);
+    const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+    assert.match(fixes, /^\+first fix$/m);
+    assert.match(fixes, /^\+second fix$/m);
+  });
+
+  it("prepare follows the rounds: a third round's fixes patch holds only the fixes since the second", () => {
+    const dir = join(root, "run");
+    const first = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    commit(repo, "other.cs", "first fix\n", "first fix");
+    const second = cli(["prepare", dir, first]).out.trim().split("\n")[1] ?? "";
+    commit(repo, "app.cs", lines(50, (index) => (index === 2 ? "second fix" : undefined)), "second fix");
+
+    const result = cli(["prepare", dir, second]);
+
+    assert.equal(result.code, 0, result.err);
+    const fixes = readFileSync(join(dir, "fixes.patch"), "utf8");
+    assert.match(fixes, /^\+second fix$/m);
+    assert.doesNotMatch(fixes, /first fix/);
+  });
+
+  it("prepare refuses a later round in a folder no round was prepared in", () => {
+    const since = run(repo, "rev-parse", "HEAD");
+    commit(repo, "other.cs", "fixed\n", "fix");
+    const dir = join(root, "run");
+
+    const result = cli(["prepare", dir, since]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /none in this folder/);
+    assert.equal(existsSync(join(dir, "fixes.patch")), false);
+  });
+
+  for (const [what, args] of [
+    ["without a since", (_since: string) => [] as string[]],
+    ["with a since it refuses", (since: string) => [`${since}x`]],
+  ] as const) {
+    it(`prepare ${what} leaves no earlier round's fixes patch behind for the reviewers to read`, () => {
+      const dir = join(root, "run");
+      const first = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+      commit(repo, "other.cs", "first fix\n", "first fix");
+      assert.equal(cli(["prepare", dir, first]).code, 0);
+      commit(repo, "other.cs", "second fix\n", "second fix");
+
+      cli(["prepare", dir, ...args(first)]);
+
+      assert.equal(existsSync(join(dir, "fixes.patch")), false);
+    });
+  }
 
   it("prepare refuses a later round after main was merged in, whose fixes patch would hold main's changes", () => {
     const dir = join(root, "run");
