@@ -56,11 +56,16 @@ fi
 # issue, gh pr and gh repo view command is judged by its own arguments: up to
 # the next backtick, |, ;, &, ) or comment outside quotes, with quoted text
 # and $(...) set aside, so a flag in a string or in another command doesn't
-# count (a gh command inside $(...) is judged on its own). Shell comments are
-# skipped, and a command continued with a trailing backslash is read as one
-# line (a comment ending in one isn't continued, as in bash). Only files the
-# worktree has are read. Cheap enough to run on every gate.
+# count (a gh command inside $(...) is judged on its own). A bare gh issue or
+# gh pr names a command group, not a command, so it is left alone. Shell
+# comments are skipped, trailing ones too outside Markdown (where # starts a
+# heading or a reference), and a command continued with a trailing backslash
+# is read as one line (a comment ending in one isn't continued, as in bash).
+# Only files the worktree has are read, and a listing that fails fails the
+# gate. Cheap enough to run on every gate.
 echo -e "${CYAN}🐙 gh commands name their repository...${RESET}"
+# A process substitution's failure is lost, so list once where set -e sees it.
+git ls-files -z -- .claude/skills scripts > /dev/null
 gh_files=()
 while IFS= read -r -d '' file; do
   [[ -f "$file" ]] && gh_files+=("$file")
@@ -99,6 +104,29 @@ if ((${#gh_files[@]} > 0)); then
       }
       return out
     }
+    # `s` up to its first comment: a # that starts a word outside quotes and
+    # $(...).
+    function code_of(s,   i, c, n, q, depth) {
+      q = ""
+      depth = 0
+      n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (depth > 0) {
+          if (c == "(") depth++
+          else if (c == ")") depth--
+          continue
+        }
+        if (q != "") {
+          if (c == q) q = ""
+          continue
+        }
+        if (c == "$" && substr(s, i + 1, 1) == "(") { depth = 1; i++; continue }
+        if (c == "\047" || c == "\"") { q = c; continue }
+        if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t]/)) return substr(s, 1, i - 1)
+      }
+      return s
+    }
     # Whether one of the gh commands on `line` names no repository.
     function names_none(line,   rest, command, args, first) {
       rest = line
@@ -107,11 +135,12 @@ if ((${#gh_files[@]} > 0)); then
         rest = substr(rest, RSTART + RLENGTH)
         if (substr(rest, 1, 1) ~ /[A-Za-z0-9_-]/) continue
         args = own_args(rest)
+        first = args
+        sub(/^[ \t]+/, "", first)
         if (command ~ /repo view$/) {
-          first = args
-          sub(/^[ \t]+/, "", first)
-          if (first == "" || first ~ /^-/ || first ~ /^[0-9]*[<>]/) return 1
-        } else if (args !~ /(^|[ \t])(--repo|-R)([ =]|$)/) {
+          # A redirect is no repository; a <placeholder> in a skill is one.
+          if (first == "" || first ~ /^-/ || first ~ /^([0-9]*>|&>|<([^A-Za-z]|$))/) return 1
+        } else if (first != "" && args !~ /(^|[ \t])(--repo|-R)([ =]|$)/) {
           return 1
         }
       }
@@ -123,13 +152,14 @@ if ((${#gh_files[@]} > 0)); then
     {
       line = held $0
       held = ""
+      if (FILENAME !~ /\.md$/) line = code_of(line)
       if (names_none(line) || line ~ /(^|[^A-Za-z0-9_-])gh api [^|;&]*repos\/(\{owner\}|:owner)/) {
         print FILENAME ":" FNR ": " line
       }
     }' "${gh_files[@]}")"
 fi
 if [[ -n "$unnamed" ]]; then
-  echo "❌ These gh commands name no repository, so from a fork's clone they can reach the fork. Add --repo mpaulosky/auth0-management-app (for gh repo view, give the repository as its argument):" >&2
+  echo "❌ These gh commands name no repository, so from a fork's clone they can reach the fork. Add --repo mpaulosky/auth0-management-app to gh issue and gh pr; for gh repo view, give the repository as its first argument; for gh api, write it in the path: repos/mpaulosky/auth0-management-app/..." >&2
   echo "$unnamed" >&2
   exit 1
 fi

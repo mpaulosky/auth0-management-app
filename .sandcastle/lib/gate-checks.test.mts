@@ -159,6 +159,9 @@ describe("gate-checks.sh's gh repository check", () => {
     ["scripts/watch.sh", "gh repo view; echo"],
     ["scripts/watch.sh", "if gh repo view >/dev/null 2>&1; then"],
     ["scripts/watch.sh", "gh repo view 2>/dev/null"],
+    ["scripts/watch.sh", 'gh pr comment 3 --body "use --repo o/r"'],
+    ["scripts/watch.sh", "gh issue create --title x --body '-R o/r'"],
+    ["scripts/watch.sh", "gh pr checks 3  # the check needs gh pr view too"],
   ]) {
     it(`fails on a command that names no repository: ${line}`, () => {
       const result = gateWith(file ?? "", `first\n${line}\n`);
@@ -185,6 +188,12 @@ describe("gate-checks.sh's gh repository check", () => {
     ["scripts/watch.sh", 'gh pr view "$(git branch --show-current)" --repo "$repo"'],
     ["scripts/watch.sh", "gh pr view $(git branch --show-current) --repo o/r"],
     ["scripts/watch.sh", 'gh repo view "$repo" --json name'],
+    [".claude/skills/a/SKILL.md", "Search gh issues by label."],
+    [".claude/skills/a/SKILL.md", "Walk through pr review first."],
+    ["scripts/watch.sh", "retry=3  # gh pr checks exits 8 when pending"],
+    ["scripts/watch.sh", 'echo "# not a comment" && gh pr view 3 --repo o/r'],
+    [".claude/skills/a/SKILL.md", "Run `gh repo view <owner>/<repo> --json name`."],
+    [".claude/skills/a/SKILL.md", "Every `gh issue` and `gh pr` command names the repository with `--repo`."],
   ]) {
     it(`passes a command that names its repository, a comment, or a file outside the checked folders: ${line}`, () => {
       const result = gateWith(file ?? "", `${line}\n`);
@@ -197,7 +206,29 @@ describe("gate-checks.sh's gh repository check", () => {
     const result = gateWith("scripts/watch.sh", "gh repo view --json name\n");
 
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /gh repo view, give the repository as its argument/);
+    assert.match(result.stderr, /for gh repo view, give the repository as its first argument/);
+  });
+
+  it("tells how to name the repository in a gh api path, since gh api has no --repo flag", () => {
+    const result = gateWith(".claude/skills/a/SKILL.md", "Run `gh api repos/{owner}/{repo}/issues/3`.\n");
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /for gh api, write it in the path: repos\/mpaulosky\/auth0-management-app\//);
+  });
+
+  it("cuts a Markdown line at no #, since there it starts a heading or a reference, not a comment", () => {
+    const result = gateWith(".claude/skills/a/SKILL.md", "See #12, then run gh pr view 3.\n");
+
+    assert.equal(result.status, 1);
+  });
+
+  it("fails the gate when the files to check can't be listed, rather than pass having checked none", () => {
+    writeFileSync(join(repo, ".git/index"), "not an index");
+
+    const result = gate(head(), { GATE_SKIP_REVIEW: "1" });
+
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stdout, /Every gh command names its repository/);
   });
 
   it("reads a command continued over lines as one", () => {
