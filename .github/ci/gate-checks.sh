@@ -99,13 +99,17 @@ if ((${#gh_files[@]} > 0)); then
       named = "^repo[ \t]+[a-z-]+[ \t]+([\"" q "]?[^- \t<>`\"" q "$&|;(][^ \t`<>&|;\"" q "]*/|<[A-Za-z]|\"?[$]|-R[ =]|--repo[ =])"
     }
     # The text of one gh command, up to the next command or gh, with each
-    # quoted argument a bare Q (an empty one dropped), so the words of a flag
-    # inside one, as in --body "use -R x", are not the flag.
+    # quoted argument a bare Q, so the words of a flag inside one, as in
+    # --body "use -R x (y)", are not the flag. Quotes are read first, so a
+    # separator inside one is no cut, and never across a backtick, so an
+    # apostrophe in prose pairs with nothing. An empty one is <>, which no
+    # value matches, and a quote left unpaired ends the command there.
     function own(text) {
+      gsub("\"\"|" q q, "<>", text)
+      gsub("\"[^\"`]*\"|" q "[^" q "`]*" q, "Q", text)
+      if (match(text, "[\"" q "]")) text = substr(text, 1, RSTART - 1)
       if (match(text, /[`;&|()]/)) text = substr(text, 1, RSTART - 1)
       if (match(text, /[^A-Za-z0-9_.-]gh[ \t]/)) text = substr(text, 1, RSTART)
-      gsub("\"\"|" q q, "", text)
-      gsub("\"[^\"]*\"|" q "[^" q "]*" q, "Q", text)
       return text
     }
     FNR == 1 { shell = (FILENAME ~ /\.sh$/ || $0 ~ /^#!/); exported = 0 }

@@ -245,6 +245,13 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, 'Run `gh pr comment 3 --body "use -R foo now"`.\n'],
     [skill, "Run `gh issue create --title 'fix --repo handling now'`.\n"],
     [skill, "Run `gh pr view 3 --repo ''`.\n"],
+    // ...however the quoted argument ends, and an empty one is no value.
+    [skill, 'Run `gh pr comment 3 --body "use -R foo (see docs)"`.\n'],
+    [skill, 'Run `gh issue create --title "use --repo x; fine"`.\n'],
+    [skill, 'Run `gh pr comment 3 --body "a -R b | c"`.\n'],
+    [skill, 'Run `gh pr comment 3 --body "use -R foo`.\n'],
+    [skill, "Run `gh pr view 3 --repo '' --json state`.\n"],
+    [skill, 'Run `gh pr view 3 -R "" --json state`.\n'],
   ]) {
     it(`fails on a gh command not told its repository: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
@@ -301,6 +308,8 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, "Run `gh pr -R mpaulosky/auth0-management-app view 3`.\n"],
     [skill, "Run `gh run --repo o/r list`.\n"],
     [skill, 'Run `gh pr comment 3 --body "a -R b" --repo o/r`.\n'],
+    [skill, "Run `gh pr view 3 --jq '.a[] | .b' --repo o/r`.\n"],
+    [skill, "Run `gh pr view 3 --repo o/r`, but don't run it twice.\n"],
   ]) {
     it(`passes a gh command told its repository, or text that runs none: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
