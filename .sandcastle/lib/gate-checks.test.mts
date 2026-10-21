@@ -148,6 +148,17 @@ describe("gate-checks.sh's gh repository check", () => {
     ["scripts/watch.sh", "cp -R a b && gh pr view 3"],
     ["scripts/watch.sh", "gh pr checks 3 | grep -R x ."],
     ["scripts/watch.sh", "gh pr checks 3  # add --repo later"],
+    [".claude/skills/a/SKILL.md", "Run `gh pr checks 3`, then `gh pr view 3 --repo o/r`."],
+    ["scripts/watch.sh", 'gh pr checks "$pr"; gh pr view "$pr" --repo "$repo"'],
+    ["scripts/watch.sh", "gh pr checks 3 && gh pr view 3 -R o/r"],
+    ["scripts/watch.sh", "a=$(gh pr checks 3) b=$(gh pr view 3 --repo o/r)"],
+    ["scripts/watch.sh", `gh pr view "$(gh pr list --repo o/r --head b --json number -q '.[0].number')" --json body`],
+    [".claude/skills/a/SKILL.md", "Run `gh repo view` first."],
+    ["scripts/watch.sh", 'name="$(gh repo view)"'],
+    ["scripts/watch.sh", "gh repo view | head"],
+    ["scripts/watch.sh", "gh repo view; echo"],
+    ["scripts/watch.sh", "if gh repo view >/dev/null 2>&1; then"],
+    ["scripts/watch.sh", "gh repo view 2>/dev/null"],
   ]) {
     it(`fails on a command that names no repository: ${line}`, () => {
       const result = gateWith(file ?? "", `first\n${line}\n`);
@@ -168,6 +179,12 @@ describe("gate-checks.sh's gh repository check", () => {
     ["docs/notes.md", "gh pr view 3"],
     ["scripts/watch.sh", 'repo="$(gh repo view mpaulosky/auth0-management-app --json nameWithOwner)"'],
     ["scripts/watch.sh", 'gh pr view "$pr" --repo "$repo" --json body; gh pr checks "$pr" -R "$repo"'],
+    ["scripts/watch.sh", `gh pr list --jq '.[] | .number' --repo o/r`],
+    ["scripts/watch.sh", 'gh pr comment 3 --body "see #12; it (works) & more" --repo o/r'],
+    ["scripts/watch.sh", 'gh issue create --title "fix(review): x" --repo o/r'],
+    ["scripts/watch.sh", 'gh pr view "$(git branch --show-current)" --repo "$repo"'],
+    ["scripts/watch.sh", "gh pr view $(git branch --show-current) --repo o/r"],
+    ["scripts/watch.sh", 'gh repo view "$repo" --json name'],
   ]) {
     it(`passes a command that names its repository, a comment, or a file outside the checked folders: ${line}`, () => {
       const result = gateWith(file ?? "", `${line}\n`);
@@ -175,6 +192,13 @@ describe("gate-checks.sh's gh repository check", () => {
       assert.equal(result.status, 0, result.stderr);
     });
   }
+
+  it("tells how to name the repository for gh repo view, which has no --repo flag", () => {
+    const result = gateWith("scripts/watch.sh", "gh repo view --json name\n");
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /gh repo view, give the repository as its argument/);
+  });
 
   it("reads a command continued over lines as one", () => {
     const result = gateWith("scripts/watch.sh", 'gh pr checks "$pr" \\\n  --repo "$repo"\n');

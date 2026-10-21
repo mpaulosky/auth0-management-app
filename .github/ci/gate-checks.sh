@@ -52,9 +52,11 @@ fi
 # A gh issue or gh pr command without --repo (or -R), a gh repo view without
 # a repository argument, or a gh api call on repos/{owner} or repos/:owner,
 # reaches gh's default repository, which in a clone whose only remote is a
-# fork is the fork. The skills and scripts must name the repository. Each
-# command is checked on its own, up to the next backtick, |, ;, &, ) or
-# comment, so a flag elsewhere on the line doesn't count. Shell comments are
+# fork is the fork. The skills and scripts must name the repository. Each gh
+# issue, gh pr and gh repo view command is judged by its own arguments: up to
+# the next backtick, |, ;, &, ) or comment outside quotes, with quoted text
+# and $(...) set aside, so a flag in a string or in another command doesn't
+# count (a gh command inside $(...) is judged on its own). Shell comments are
 # skipped, and a command continued with a trailing backslash is read as one
 # line (a comment ending in one isn't continued, as in bash). Only files the
 # worktree has are read. Cheap enough to run on every gate.
@@ -66,16 +68,49 @@ done < <(git ls-files -z -- .claude/skills scripts)
 unnamed=""
 if ((${#gh_files[@]} > 0)); then
   unnamed="$(awk '
+    # The arguments a command owns in `s`, the text after it: up to the first
+    # terminator outside quotes and $(...), with each quoted string written Q
+    # and each $(...) written S. \047 is a single quote.
+    function own_args(s,   i, c, n, out, q, depth) {
+      out = ""
+      q = ""
+      depth = 0
+      n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (depth > 0) {
+          if (c == "(") depth++
+          else if (c == ")" && --depth == 0 && q == "") out = out "S"
+          continue
+        }
+        if (q == "\047") {
+          if (c == "\047") { q = ""; out = out "Q" }
+          continue
+        }
+        if (c == "$" && substr(s, i + 1, 1) == "(") { depth = 1; i++; continue }
+        if (q == "\"") {
+          if (c == "\"") { q = ""; out = out "Q" }
+          continue
+        }
+        if (c == "\047" || c == "\"") { q = c; continue }
+        if (c ~ /[`|;&)]/) break
+        if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t]/)) break
+        out = out c
+      }
+      return out
+    }
     # Whether one of the gh commands on `line` names no repository.
-    function names_none(line,   rest, command, args) {
+    function names_none(line,   rest, command, args, first) {
       rest = line
-      while (match(rest, /(^|[^A-Za-z0-9_-])gh (issue|pr|repo view)([ \t]|$)/)) {
+      while (match(rest, /(^|[^A-Za-z0-9_-])gh (issue|pr|repo view)/)) {
         command = substr(rest, RSTART, RLENGTH)
         rest = substr(rest, RSTART + RLENGTH)
-        args = rest
-        if (match(args, /[`|;&)]|[ \t]#/)) args = substr(args, 1, RSTART - 1)
-        if (command ~ /repo view/) {
-          if (args !~ /^[ \t]*[^- \t]/) return 1
+        if (substr(rest, 1, 1) ~ /[A-Za-z0-9_-]/) continue
+        args = own_args(rest)
+        if (command ~ /repo view$/) {
+          first = args
+          sub(/^[ \t]+/, "", first)
+          if (first == "" || first ~ /^-/ || first ~ /^[0-9]*[<>]/) return 1
         } else if (args !~ /(^|[ \t])(--repo|-R)([ =]|$)/) {
           return 1
         }
@@ -94,7 +129,7 @@ if ((${#gh_files[@]} > 0)); then
     }' "${gh_files[@]}")"
 fi
 if [[ -n "$unnamed" ]]; then
-  echo "❌ These gh commands name no repository, so from a fork's clone they reach the fork. Add --repo mpaulosky/auth0-management-app:" >&2
+  echo "❌ These gh commands name no repository, so from a fork's clone they can reach the fork. Add --repo mpaulosky/auth0-management-app (for gh repo view, give the repository as its argument):" >&2
   echo "$unnamed" >&2
   exit 1
 fi
