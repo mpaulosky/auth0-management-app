@@ -26,6 +26,13 @@ describe("the pre-push-review skill's reviewers", () => {
     assert.ok(settings.permissions?.deny?.includes("Read(//**/.git/review/**)"));
   });
 
+  // Sonnet, for what the reviews cost in tokens; the agent's own model and
+  // the skill's Agent call say the same.
+  it("run on Sonnet", () => {
+    assert.match(agent, /^model: sonnet$/m);
+    assert.match(skill, /`model: "sonnet"`/);
+  });
+
   it("are started as that agent, and never as another type", () => {
     assert.match(skill, /`subagent_type: "pre-push-reviewer"`/);
     assert.match(skill, /never start them as another type/);

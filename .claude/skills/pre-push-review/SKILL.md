@@ -36,7 +36,7 @@ the review: they go to the branch's follow-up issue (step 9).
 - Never push from this skill. Never push with `--no-verify` or with `GATE_SKIP_REVIEW` set: the variable is only for
   gate runs before the push (this review's own, and while iterating), never for the push itself.
 - Never accept a finding on a person's behalf, and never weaken, skip or delete a test to get past a finding or the gate.
-- Run reviewers with the Agent tool, `subagent_type: "pre-push-reviewer"`, `model: "opus"` and `effort: "xhigh"`. This
+- Run reviewers with the Agent tool, `subagent_type: "pre-push-reviewer"`, `model: "sonnet"` and `effort: "xhigh"`. This
   skill asks for that effort explicitly. That agent (`.claude/agents/pre-push-reviewer.md`) has only Read, Grep and
   Glob: reviewers read text people without write access wrote, so they get no shell, network or GitHub token. If the
   Agent tool doesn't offer `pre-push-reviewer` (Claude Code loads agents when a session starts, from the checkout it
