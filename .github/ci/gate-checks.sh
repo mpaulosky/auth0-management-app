@@ -57,10 +57,13 @@ fi
 # GH_REPO=mpaulosky/auth0-management-app before each one. gh repo's
 # subcommands don't read it, so each takes the repository as its first
 # argument (or -R), except list, create and clone, which name their own.
-# GH_REPO counts only as a prefix of the gh command itself, with a value
-# that isn't empty. Text that reads gh and a word or flag counts as a command,
-# so prose rewords it, and a gh command is kept on one line: a line that ends
-# in gh, or continues it with a backslash, fails.
+# GH_REPO counts only as a prefix of the gh command itself, or an export
+# alone on its line, with a value that isn't empty. Text that reads gh and a
+# word or flag counts as a command, so prose rewords it, and a gh command is
+# kept on one line: a line that continues gh with a backslash fails, and so
+# does one that ends in gh, unless it's a shell file that has exported
+# GH_REPO (command -v gh). gh repo keeps its subcommand and repository on
+# its line.
 # Whole-line comments are skipped. Only files the worktree has are read, and a
 # listing that fails fails the gate. Cheap enough to run on every gate.
 echo -e "${CYAN}🐙 gh commands are told their repository...${RESET}"
@@ -78,7 +81,7 @@ if ((${#gh_files[@]} > 0)); then
       # A value gh receives: quoted and not empty, or bare up to the next blank.
       value = "(\"[^\" \t]+\"|" q "[^" q " \t]+" q "|[^ \t`\"" q ";&|,()<>]+)"
       told = "(^|[^A-Za-z0-9_])GH_REPO=" value "[ \t]+$"
-      exports = "^[ \t]*export GH_REPO=" value
+      exports = "^[ \t]*export GH_REPO=" value "([ \t]*;)?[ \t]*$"
       # gh repo <subcommand>, then its repository: o/r (bare or quoted, not a
       # redirect), <owner>/<repo>, a variable, or -R and --repo.
       named = "^repo[ \t]+[a-z-]+[ \t]+([\"" q "]?[^- \t<>`\"" q "$&|;(][^ \t`<>&|;\"" q "]*/|<[A-Za-z]|\"?[$]|-R[ =]|--repo[ =])"
@@ -89,7 +92,7 @@ if ((${#gh_files[@]} > 0)); then
     # A line that ends in gh, or continues gh onto the next one, leaves its
     # command out of sight. Where GH_REPO is exported, only gh repo needs
     # its words, so a bare gh there (command -v gh) is no command.
-    /(^|[^A-Za-z0-9_.-])gh[ \t]+\\$/ || (!(shell && exported) && /(^|[^A-Za-z0-9_.-])gh[ \t]*$/) {
+    /(^|[^A-Za-z0-9_.-])gh[ \t]*\\$/ || (!(shell && exported) && /(^|[^A-Za-z0-9_.-])gh[ \t]*$/) {
       print FILENAME ":" FNR ": " $0
       next
     }
@@ -100,7 +103,8 @@ if ((${#gh_files[@]} > 0)); then
         before = substr(rest, 1, at - 1)
         rest = substr(rest, at + 2)
         sub(/^[ \t]+/, "", rest)
-        if (rest ~ /^repo[ \t]+[a-z-]/) {
+        # gh repo with no subcommand and repository on its line has none.
+        if (rest ~ /^repo([^A-Za-z0-9_.-]|$)/) {
           if (rest !~ /^repo[ \t]+(list|create|clone)/ && rest !~ named) {
             print FILENAME ":" FNR ": " $0
             next

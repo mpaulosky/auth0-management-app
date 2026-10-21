@@ -190,6 +190,21 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view 2>/dev/null`.\n"],
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view &>/dev/null`.\n"],
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view >/tmp/out`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo \\\n  view --json name`.\n"],
+    [skill, 'Run `GH_REPO=mpaulosky/auth0-management-app gh repo "$sub" o/r`.\n'],
+    [script, `#!/usr/bin/env bash\n${exported}gh repo\n`],
+    [script, `#!/usr/bin/env bash\n${exported}gh repo \\\n  view --json name\n`],
+    [script, `#!/usr/bin/env bash\n${exported}gh \\\n  repo view\n`],
+    [skill, "Read it with `gh\\\n  pr view 3`.\n"],
+    [script, `#!/usr/bin/env bash\n${exported}gh\\\n  repo view\n`],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh  repo view --json name`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh\trepo view --json name`.\n"],
+    [script, `#!/usr/bin/env bash\n${exported}gh\trepo view --json name\n`],
+    ...["`", "&", "|", "(", ")", "<", ">", '"', "'"].flatMap((c) => [
+      [skill, `Run \`GH_REPO=mpaulosky/auth0-management-app${c} gh pr view 3\`.\n`],
+      [script, `#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app${c}\ngh pr checks 3\n`],
+    ]),
   ]) {
     it(`fails on a gh command not told its repository: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
@@ -225,6 +240,10 @@ describe("gate-checks.sh's gh repository check", () => {
     ["scripts/watch", `#!/usr/bin/env bash\n${exported}gh pr checks 3\n`],
     [script, "#!/usr/bin/env bash\nexport GH_REPO='mpaulosky/auth0-management-app'\ngh pr checks 3\n"],
     [script, `#!/usr/bin/env bash\n${exported}command -v gh\nif ! command -v gh; then exit 1; fi\n`],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh  repo view o/r`.\n"],
+    [skill, "GH_REPO=mpaulosky/auth0-management-app gh pr view 3\n"],
+    [skill, "\tGH_REPO=mpaulosky/auth0-management-app gh pr view 3\n"],
+    [script, "#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app;\ngh pr checks 3\n"],
   ]) {
     it(`passes a gh command told its repository, or text that runs none: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
