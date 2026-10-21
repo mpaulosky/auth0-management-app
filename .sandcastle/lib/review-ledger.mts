@@ -28,11 +28,11 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { plainText } from "./plain-text.mts";
+import { plainText, visibleLetters } from "./plain-text.mts";
 
 // The variable that skips the review check, for the gate runs that come
 // before or during the review: the skill's own (each round's), and every gate
@@ -243,7 +243,9 @@ const hookGitVariables = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PRE
 // dropped. Replace refs are off, so the review reads and keys commits as they
 // are, not as a replace ref shows them.
 function gitBytes(cwd: string, args: readonly string[]): Buffer {
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
+  // GIT_ATTR_NOSYSTEM: not the machine's system-wide gitattributes file
+  // either, which could mark text files binary for one person's review only.
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_ATTR_NOSYSTEM: "1" };
   for (const name of hookGitVariables) {
     delete env[name];
   }
@@ -281,11 +283,14 @@ export const headCommit = (cwd: string) => git(cwd, "rev-parse", "--verify", "HE
 // depends on the two trees and not on whose config made it (the explicit
 // prefixes also override diff.noprefix and diff.mnemonicPrefix). A binary file is
 // keyed by its blob ids, not its compressed bytes, so zlib's settings don't
-// matter either. Submodules are never ignored: a pointer bump is a change to
-// review. A different git version could still print a patch differently;
-// that fails closed, with a new review.
+// matter either. core.bigFileThreshold is git's default, since a file above it
+// is printed as binary and reviewPatch would refuse a text file the person's
+// config made look like one. Submodules are never ignored: a pointer bump is
+// a change to review. A different git version could still print a patch
+// differently; that fails closed, with a new review.
 const pinnedDiff = [
   "-c", "core.quotePath=true",
+  "-c", "core.bigFileThreshold=512m",
   "-c", "core.attributesFile=/dev/null",
   "-c", "diff.relative=false",
   "-c", "diff.suppressBlankEmpty=false",
@@ -294,20 +299,57 @@ const pinnedDiff = [
   "--submodule=short", "--ignore-submodules=none", "-O/dev/null", "--src-prefix=a/", "--dst-prefix=b/",
 ];
 
+// The extensions of files that are binary by nature: only files named as one
+// of these may have a NUL in their first 8000 bytes, and git then shows the
+// reviewers only their names, so a source or text file with a stray NUL is
+// refused. (A byte order mark, and a binary file turned into text, are refused
+// whatever the name.) The list errs short: a binary file with another
+// extension is refused, and the person adds it here.
+export const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
+  "png", "jpg", "jpeg", "gif", "ico", "webp", "avif", "bmp", "tif", "tiff", "woff", "woff2", "ttf", "otf", "eot",
+  "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "jar", "nupkg", "snupkg",
+  "wasm", "dll", "exe", "pdb", "so", "dylib", "bin", "db", "sqlite", "mp3", "mp4", "webm", "ogg", "wav", "mov",
+]);
+
 // The pinned patch of `head` against `base`: what the reviewers read. Throws
-// when it shows a text file only as "Binary files differ": a diff attribute
-// (in .gitattributes or the clone's info/attributes) would otherwise hide that
-// change from the reviewers. A real binary file has a NUL byte, as git's own
-// test for one does.
+// when it shows text only as "Binary files differ", since the reviewers
+// couldn't read it: a text file a diff attribute (in .gitattributes or the
+// clone's info/attributes) marks binary, a binary file the branch turns into
+// text, which git prints whole as binary because one side is, or UTF-16 or
+// UTF-32 text (known by its byte order mark), whose NULs make it look binary,
+// or a file with a NUL that isn't a binary format by its extension. A real
+// binary file has a NUL byte in its first 8000 bytes, as git's own test for
+// one does: a NUL past them doesn't make git print a text file as binary.
 export function reviewPatch(cwd: string, base: string, head: string = headCommit(cwd)): Buffer {
   const patch = gitBytes(cwd, [...pinnedDiff, base, head]);
   const text = patch.toString("latin1");
+  const absent = (blob: string | undefined) => blob === undefined || /^0+$/.test(blob);
+  const binary = (blob: string | undefined) => !absent(blob) && gitBytes(cwd, ["cat-file", "blob", blob as string]).subarray(0, 8000).includes(0);
   for (const section of text.split(/^(?=diff --git )/m)) {
     if (!/^Binary files .* differ$/m.test(section)) continue;
-    const blobs = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(section)?.slice(1) ?? [];
-    const binary = blobs.some((blob) => !/^0+$/.test(blob) && gitBytes(cwd, ["cat-file", "blob", blob]).includes(0));
-    if (!binary) {
-      const file = /^diff --git (.*)$/m.exec(section)?.[1] ?? "a file";
+    const [before, after] = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(section)?.slice(1) ?? [];
+    const file = /^diff --git (.*)$/m.exec(section)?.[1] ?? "a file";
+    const start = absent(after) ? Buffer.alloc(0) : gitBytes(cwd, ["cat-file", "blob", after as string]).subarray(0, 4);
+    if ([[0xff, 0xfe], [0xfe, 0xff], [0, 0, 0xfe, 0xff]].some((bom) => Buffer.from(bom).equals(start.subarray(0, bom.length)))) {
+      // Rewriting a file main already holds this way would look like binary
+      // turned into text (below), so that file needs a new path.
+      const where = absent(before) ? "" : " at a new path, and delete this one";
+      throw new Error(`${file}: this text is UTF-16 or UTF-32, which git shows only as "Binary files differ", so the reviewers couldn't read it. Re-encode it as UTF-8${where}.`);
+    }
+    // A file git prints as binary that isn't a binary format may be text
+    // with a stray NUL (R42): the bytes can't tell them apart, since one
+    // invalid UTF-8 byte makes text look like a real binary file, so the
+    // extension does.
+    const extension = /\.([a-z0-9]+)"?$/i.exec(file)?.[1]?.toLowerCase() ?? "";
+    if (!absent(after) && binary(after) && !BINARY_EXTENSIONS.has(extension)) {
+      throw new Error(`${file}: this file holds a NUL byte, so git shows it only as "Binary files differ" and the reviewers couldn't read it, and its extension isn't a binary format's. Remove the NUL; or, for a real binary file, give it its format's extension (see BINARY_EXTENSIONS in review-ledger.mts).`);
+    }
+    // An emptied file has no text to read, so there's nothing hidden to refuse.
+    const emptied = !absent(after) && gitBytes(cwd, ["cat-file", "blob", after as string]).length === 0;
+    if (binary(before) && !absent(after) && !binary(after) && !emptied) {
+      throw new Error(`${file}: the branch turns a binary file (or UTF-16 or UTF-32 text) into text, which git shows only as "Binary files differ", so the reviewers couldn't read the text. Add the text at a new path instead.`);
+    }
+    if (!binary(before) && !binary(after)) {
       throw new Error(`${file}: a diff attribute marks this text file binary, so the reviewers couldn't read its change. Remove the attribute.`);
     }
   }
@@ -633,7 +675,15 @@ export function renderReport(ledger: Ledger): string {
   return [header, ...sections, ""].join("\n");
 }
 
-// The PR description's `## Review notes`: the Critical and Advisory findings a
+// The markers around the PR description's `## Review notes`, so the section
+// can be replaced without touching what follows it (`Fixes #`, the footer).
+// They're the pair PR #82's own description used: its request to the
+// Template's Claude Review names the first, and #81's PR names both. The
+// release blog drops HTML comments.
+export const REVIEW_NOTES_START = "<!-- review-notes -->";
+export const REVIEW_NOTES_END = "<!-- /review-notes -->";
+
+// The PR description's `## Review notes`, between its markers: the Critical and Advisory findings a
 // person accepted, for people reading the PR. Security findings (see
 // isSecurity: graded Warning, a lens naming security, or unmarked) are only
 // counted, so the maintainer knows to wait for the
@@ -655,11 +705,119 @@ export function renderReviewNotes(ledger: Ledger): string {
     security.length === 0
       ? []
       : ["", `${security.length} accepted security finding(s) are left out here and reported privately, as docs/SECURITY.md describes.`];
-  if (listed.length === 0) return ["## Review notes", ...privately, ""].join("\n");
+  const section = (...body: string[]) => [REVIEW_NOTES_START, "## Review notes", ...body, REVIEW_NOTES_END, ""].join("\n");
+  if (listed.length === 0) return section(...privately);
   const lines = listed.map(
     (finding) => `- ${plainText(`${finding.path}:${finding.line}`)}: ${plainText(finding.summary)} Accepted: ${plainText(finding.reason ?? "")}`,
   );
-  return ["## Review notes", "", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately, ""].join("\n");
+  return section("", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately);
+}
+
+// Which lines of a Markdown text are inside a fenced code block (the fence
+// lines included), and whether one is still open at the end. A fence opens
+// with ``` or ~~~, up to 3 spaces in or after a list item's marker, but not a
+// ``` whose line has another backtick (that's a code span); it closes with a
+// line of only the same character, at least as many.
+function codeBlocks(lines: readonly string[]): { fenced: boolean[]; open: boolean } {
+  let fence: string | undefined;
+  const fenced = lines.map((line) => {
+    if (fence === undefined) {
+      const [, mark, rest] = /^ {0,3}(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)*(`{3,}|~{3,})(.*)$/.exec(line) ?? [];
+      if (mark === undefined || (mark[0] === "`" && (rest ?? "").includes("`"))) return false;
+      fence = mark;
+      return true;
+    }
+    const close = /^[ \t]*(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
+    if (close !== undefined && close[0] === fence[0] && close.length >= fence.length) fence = undefined;
+    return true;
+  });
+  return { fenced, open: fence !== undefined };
+}
+
+// A line that reads "Review notes" first, in any form a reader sees those
+// words in: a heading of any kind, in a quote or a list, with emphasis, tags,
+// character references or invisible characters (see visibleLetters).
+const readsReviewNotes = (line: string) => visibleLetters(line).split(" ").some((reading) => reading.startsWith("reviewnotes"));
+
+// A closing line (`Fixes #n`, `Closes #n` or `Resolves #n`), or the footer.
+const isClosingLine = (line: string) => /^(?:fixes|closes|resolves) #\d+/i.test(line);
+const isFooter = (line: string) => line.startsWith("🤖 Generated with");
+
+// `body` with its Review notes section replaced by `notes` (renderReviewNotes'
+// output; empty removes the section). A marker counts only as a line of its
+// own, unindented and outside a code block, so one quoted in the text or shown
+// in an example isn't taken for it. A body with no section gets one above its
+// closing line (the last `Fixes`, `Closes` or `Resolves #n` that starts a
+// paragraph), else above the footer, else at the end. Throws, rather than
+// guess, on an empty body (a `gh pr view` that failed, which would publish
+// the notes alone) or one that removing the section leaves empty, on a code
+// block that never closes, on markers that don't make one pair, on a closing
+// line or the footer inside the section (replacing it would delete them), and
+// on any other line outside it that reads "Review notes", such as an unmarked
+// section, which would otherwise stay beside the new one. CRLF, as GitHub may
+// store a description, comes back as LF, and the result ends in one newline.
+export function spliceReviewNotes(body: string, notes: string): string {
+  const ask = (problem: string) =>
+    new Error(`the PR description ${problem}, so its Review notes can't be replaced safely: show it to the person and ask the person what to keep`);
+  if (body.trim() === "") throw ask("is empty");
+  const lines = body.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
+  const { fenced, open } = codeBlocks(lines);
+  if (open) throw ask("has a code block that never closes");
+  const outside = (test: (line: string, index: number) => boolean) =>
+    lines.flatMap((line, index) => (!fenced[index] && test(line, index) ? [index] : []));
+  const starts = outside((line) => line.trimEnd() === REVIEW_NOTES_START);
+  const ends = outside((line) => line.trimEnd() === REVIEW_NOTES_END);
+  if (starts.length > 1 || ends.length > 1) throw ask("has more than one Review notes section");
+  if (starts.length !== ends.length || (starts[0] ?? 0) > (ends[0] ?? 0)) throw ask("has Review notes markers that don't make one pair");
+  const [first, last] = [starts[0] ?? lines.length, ends[0] ?? -1];
+  const unmarked = (index: number) => !fenced[index] && (index < first || index > last);
+  if (outside((line, index) => unmarked(index) && readsReviewNotes(line)).length > 0) throw ask("has a Review notes section without markers");
+  // A heading can span lines (setext text, an <h2> broken across two), so each
+  // paragraph is read as one text as well, its line endings kept (a tag or a
+  // blockquote's marker depends on them).
+  let paragraph: string[] = [];
+  for (const [index, line] of [...lines, ""].entries()) {
+    if (index < lines.length && line.trim() !== "" && unmarked(index)) {
+      paragraph.push(line);
+      continue;
+    }
+    if (paragraph.length > 1 && readsReviewNotes(paragraph.join("\n"))) throw ask("has a Review notes section without markers");
+    paragraph = [];
+  }
+  if (lines.slice(first, last + 1).some((line) => isClosingLine(line) || isFooter(line))) throw ask("has its closing line or footer inside the Review notes markers");
+  const added = notes === "" ? [] : notes.replace(/\n+$/, "").split("\n");
+  let start: number;
+  let removed: number;
+  if (starts.length === 1) {
+    start = starts[0] as number;
+    removed = (ends[0] as number) - start + 1;
+    if (added.length === 0) {
+      // Take one blank line with it, so no gap is left where it was.
+      if (lines[start + removed] === "") {
+        removed += 1;
+      } else if (start > 0 && lines[start - 1] === "") {
+        start -= 1;
+        removed += 1;
+      }
+    }
+  } else {
+    if (added.length === 0) return `${lines.join("\n")}\n`;
+    const closing = outside((line, index) => isClosingLine(line) && (index === 0 || lines[index - 1] === "")).at(-1);
+    const footer = outside(isFooter).at(-1);
+    start = closing ?? footer ?? lines.length;
+    removed = 0;
+    // A blank line between it and what it's added above, or after the text
+    // it's added below.
+    if (start === lines.length) {
+      added.unshift("");
+    } else {
+      added.push("");
+    }
+  }
+  lines.splice(start, removed, ...added);
+  // The section was all the body held and nothing is accepted any more.
+  if (lines.every((line) => line.trim() === "")) throw ask("would be empty without its Review notes");
+  return `${lines.join("\n")}\n`;
 }
 
 // The patch of the fixes a later round reviews: `since`, the HEAD the round
@@ -701,6 +859,26 @@ export function renderAdvisories(ledger: Ledger): string {
   return [`Advisory findings from the local review of ${branch}, left for a follow-up:`, "", ...lines, "", "<!-- claude-session -->", ""].join("\n");
 }
 
+const lstatOrUndefined = (path: string) => {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined;
+  }
+};
+
+// Whether `a` and `b` are one file, by path, symlink or hard link: `body`
+// removes its output first, which would delete an input it names.
+function sameFile(cwd: string, a: string, b: string): boolean {
+  if (resolve(cwd, a) === resolve(cwd, b)) return true;
+  try {
+    const [first, second] = [statSync(resolve(cwd, a)), statSync(resolve(cwd, b))];
+    return first.dev === second.dev && first.ino === second.ino;
+  } catch {
+    return false;
+  }
+}
+
 const USAGE = `Usage: scripts/review.sh <command>
   prepare <absolute dir> [<since>]
                          write HEAD's diff to <dir>/diff.patch for the reviewers, and with <since> (the HEAD
@@ -712,6 +890,8 @@ const USAGE = `Usage: scripts/review.sh <command>
   report                 print HEAD's review report
   notes                  print the "## Review notes" section for the PR description
   advisory               print the follow-up issue's list of open Advisory findings
+  body <in> <out>        write to <out> the PR description in <in> (- reads stdin) with its Review notes replaced;
+                         <out> is removed first and written only on success
   latest                 print the nearest earlier review of this branch's work as JSON ({} when none)
   next                   print the first finding id this run may use`;
 
@@ -777,6 +957,22 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         if (command === "report") out(renderReport(ledger));
         else if (command === "notes") out(renderReviewNotes(ledger) || "No accepted findings.");
         else out(renderAdvisories(ledger) || "No open Advisory findings.");
+        return 0;
+      }
+      case "body": {
+        const [input, output] = rest;
+        if (input === undefined || output === undefined || output === "-") return fail(USAGE);
+        if (input !== "-" && sameFile(cwd, input, output)) return fail(`${output} is the input file: give the new description its own file.`);
+        const existing = lstatOrUndefined(resolve(cwd, output));
+        if (existing !== undefined && !existing.isFile() && !existing.isSymbolicLink()) return fail(`${output} exists and isn't a regular file.`);
+        // Removed first, so a refusal leaves no file for `gh pr edit
+        // --body-file` to publish, neither empty nor an earlier run's.
+        rmSync(output, { force: true });
+        const ledger = readLedger(cwd, diffKey(cwd, mergeBase(cwd)));
+        if (ledger === undefined) return fail("No review is recorded for this diff.");
+        const body = spliceReviewNotes(readFileSync(input === "-" ? 0 : input, "utf8"), renderReviewNotes(ledger));
+        writeFileSync(output, body);
+        out(`Wrote the PR description with its Review notes to ${output}.`);
         return 0;
       }
       case "latest": {

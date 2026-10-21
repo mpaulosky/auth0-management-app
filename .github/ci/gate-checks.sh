@@ -200,11 +200,14 @@ fi
 # gate.sh pins, review-ledger.test.mts and gate-checks.test.mts check the
 # local review's ledger (and its Owned list against .claude/rules/baseline.md)
 # and this file, and pre-push-review-skill.test.mts checks that the review's
-# reviewers are read-only, its severities, and the rules they change where
-# CLAUDE.md and this file restate them, readme.test.mts checks README.md's
-# Releases section, config.test.mts and watch-pr.test.mts check scripts/watch-pr.sh
-# (and config.test.mts the Sandcastle workflow's name), and status.test.mts
-# checks the Sandcastle plan, so a change to any of them reruns them.
+# reviewers are read-only, that .claude/settings.json keeps them out of the
+# ledgers, its severities, the rules they change where CLAUDE.md and this file
+# restate them, and that the skill's step 9 splices the Review notes with
+# scripts/review.sh body between the markers review-ledger.mts writes,
+# readme.test.mts checks README.md's Releases section, config.test.mts and
+# watch-pr.test.mts check scripts/watch-pr.sh (and config.test.mts the
+# Sandcastle workflow's name), and status.test.mts checks the Sandcastle plan,
+# so a change to any of them reruns them.
 if changed .sandcastle README.md package.json ':(glob)pnpm-*.yaml' scripts/check-branch-name.sh .claude/skills/code-review scripts/gate.sh \
   scripts/review.sh .github/ci/gate-checks.sh .claude/rules/baseline.md .claude/agents .claude/skills/pre-push-review \
   .claude/settings.json scripts/watch-pr.sh CLAUDE.md docs/plans/sandcastle-workflow.md .github/workflows/sandcastle.yml; then

@@ -24,7 +24,10 @@ import {
   renderAdvisories,
   renderReport,
   renderReviewNotes,
+  REVIEW_NOTES_END,
+  REVIEW_NOTES_START,
   reviewPatch,
+  spliceReviewNotes,
   type Ledger,
   type ReviewInput,
 } from "./review-ledger.mts";
@@ -286,6 +289,218 @@ describe("diffKey", () => {
     assert.notEqual(diffKey(repo, mergeBase(repo)), before);
   });
 
+  it("keys a text file as text whatever core.bigFileThreshold says, rather than refuse it as binary", () => {
+    const before = diffKey(repo, mergeBase(repo));
+
+    run(repo, "config", "core.bigFileThreshold", "1");
+
+    assert.equal(diffKey(repo, mergeBase(repo)), before);
+  });
+
+  for (const [change, after] of [
+    ["deletes", undefined],
+    ["turns into text", "now text\n"],
+  ] as const) {
+    it(`${after === undefined ? "reviews" : "refuses"} a branch that ${change} a binary file`, () => {
+      writeFileSync(join(upstream, "logo.png"), Buffer.from([0, 1, 2, 3, 0, 255]));
+      run(upstream, "add", "logo.png");
+      run(upstream, "commit", "--quiet", "-m", "image");
+      run(repo, "fetch", "--quiet", "origin");
+      run(repo, "reset", "--quiet", "--hard", "origin/main");
+      if (after === undefined) {
+        run(repo, "rm", "--quiet", "logo.png");
+        run(repo, "commit", "--quiet", "-m", "delete the image");
+      } else {
+        commit(repo, "logo.png", after, "replace the image with text");
+      }
+
+      if (after === undefined) {
+        assert.notEqual(diffKey(repo, mergeBase(repo)), EMPTY_DIFF_KEY);
+        assert.match(reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1"), /^Binary files .*logo\.png.* differ$/m);
+      } else {
+        // git prints the whole change as "Binary files differ", so the
+        // reviewers would never read the new text.
+        assert.throws(() => diffKey(repo, mergeBase(repo)), /logo\.png.*into text/);
+      }
+    });
+  }
+
+  it("reviews a branch that empties a binary file, which has no text to read", () => {
+    writeFileSync(join(upstream, "logo.png"), Buffer.from([0, 1, 2, 3, 0, 255]));
+    run(upstream, "add", "logo.png");
+    run(upstream, "commit", "--quiet", "-m", "image");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "reset", "--quiet", "--hard", "origin/main");
+    writeFileSync(join(repo, "logo.png"), "");
+    run(repo, "commit", "--quiet", "-am", "empty the image");
+
+    assert.notEqual(diffKey(repo, mergeBase(repo)), EMPTY_DIFF_KEY);
+  });
+
+  // git calls a file binary when a NUL is among its first 8000 bytes: the byte
+  // at index 7999 is the last it looks at. A text file git takes for binary is
+  // refused, and git taking it for text is no concern.
+  for (const [index, binary] of [
+    [7999, true],
+    [8000, false],
+  ] as const) {
+    it(`takes a NUL at byte ${index} of a new file ${binary ? "for" : "not for"} binary, as git does`, () => {
+      const bytes = Buffer.alloc(8100, "a");
+      bytes[index] = 0;
+      writeFileSync(join(repo, "n.cs"), bytes);
+      run(repo, "add", "n.cs");
+      run(repo, "commit", "--quiet", "-m", "a file with a NUL");
+
+      if (binary) {
+        assert.throws(() => diffKey(repo, mergeBase(repo)), /n\.cs.*NUL/);
+      } else {
+        assert.doesNotMatch(reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1"), /^Binary files/m);
+      }
+    });
+  }
+
+  // R74 (R42): git prints a text file with a stray NUL as "Binary files
+  // differ", so the reviewers would never read it. Only a file with a binary
+  // format's extension may be binary: whatever its bytes, since one 0xff
+  // byte would otherwise make it look like a real binary file.
+  for (const [scenario, name, bytes] of [
+    ["a stray NUL", "n.cs", Buffer.from("class A { }\0\n")],
+    ["a NUL and multi-byte text", "n.md", Buffer.from("// \u00fc \u691c\0\nclass A { }\n")],
+    ["a NUL at the very start", "n.sh", Buffer.from("\0echo hi\n")],
+    ["a NUL and an 0xff byte, which isn't UTF-8", "n.mts", Buffer.from("// \0\xff\nexport {};\n")],
+    ["a NUL and a Latin-1 letter", "n.cs", Buffer.from("// \0\xe9\nclass A { }\n")],
+    ["no extension", "script", Buffer.from("echo hi\0\xff\n")],
+    ["the name of a binary format and no dot", "png", Buffer.from("echo hi\0\xff\n")],
+    ["an extension that only ends like a binary one", "n.cs.png.txt", Buffer.from("echo hi\0\xff\n")],
+    ["a name git quotes, with a non-ASCII letter", "n\u00f6te.cs", Buffer.from("class A { }\0\n")],
+    ["a name git quotes, with a backslash", "n\\te.cs", Buffer.from("class A { }\0\n")],
+  ] as const) {
+    it(`refuses a new ${name} holding ${scenario}`, () => {
+      writeFileSync(join(repo, name), bytes);
+      run(repo, "add", name);
+      run(repo, "commit", "--quiet", "-m", "a text file with a NUL");
+
+      assert.throws(() => diffKey(repo, mergeBase(repo)), /NUL/);
+    });
+  }
+
+  it("reviews a branch that deletes a binary file whose extension isn't a binary format's", () => {
+    writeFileSync(join(upstream, "fixture.dat"), Buffer.from([0, 1, 2, 3, 0, 255]));
+    run(upstream, "add", "fixture.dat");
+    run(upstream, "commit", "--quiet", "-m", "a fixture");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "reset", "--quiet", "--hard", "origin/main");
+    run(repo, "rm", "--quiet", "fixture.dat");
+    run(repo, "commit", "--quiet", "-m", "delete the fixture");
+
+    assert.doesNotThrow(() => diffKey(repo, mergeBase(repo)));
+  });
+
+  it("refuses a change that adds a stray NUL to a text file", () => {
+    writeFileSync(join(repo, "app.cs"), "class A { }\0\n");
+    run(repo, "commit", "--quiet", "-am", "add a NUL");
+
+    assert.throws(() => diffKey(repo, mergeBase(repo)), /app\.cs.*NUL/);
+  });
+
+  for (const [scenario, name, bytes] of [
+    ["a PNG header", "logo.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d])],
+    ["bytes that aren't UTF-8", "logo.png", Buffer.from([0, 1, 2, 3, 0, 255])],
+    ["only NUL bytes", "logo.png", Buffer.alloc(16)],
+    ["bytes all below 0x80, as an empty WebAssembly module is", "m.wasm", Buffer.from("\0asm\x01\0\0\0", "latin1")],
+    ["an empty ZIP's bytes", "a.zip", Buffer.from("PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", "latin1")],
+    ["an upper-case extension", "LOGO.PNG", Buffer.from([0, 1, 2, 3])],
+    ["a name with a dot before the extension", "my.logo.v2.ico", Buffer.from([0, 0, 1, 0])],
+    ["a name git quotes, with a non-ASCII letter", "l\u00f6go.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0])],
+    ["a name git quotes, with a double quote", 'a"b.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0])],
+  ] as const) {
+    it(`still reviews a new binary file, ${name}, holding ${scenario}`, () => {
+      writeFileSync(join(repo, name), bytes);
+      run(repo, "add", name);
+      run(repo, "commit", "--quiet", "-m", "a binary file");
+
+      assert.match(reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1"), /^Binary files .* differ$/m);
+    });
+  }
+
+  it("reviews a text file emptied or deleted, and an empty file added", () => {
+    run(repo, "rm", "--quiet", "other.cs");
+    writeFileSync(join(repo, "empty.txt"), "");
+    run(repo, "add", "empty.txt");
+    run(repo, "commit", "--quiet", "-m", "delete one, add an empty one");
+    writeFileSync(join(repo, "app.cs"), "");
+    run(repo, "commit", "--quiet", "-am", "empty app.cs");
+
+    assert.doesNotThrow(() => diffKey(repo, mergeBase(repo)));
+  });
+
+  it("refuses a binary file turned into text with a NUL past git's first 8000 bytes, which git still prints as text", () => {
+    writeFileSync(join(upstream, "logo.png"), Buffer.from([0, 1, 2, 3, 0, 255]));
+    run(upstream, "add", "logo.png");
+    run(upstream, "commit", "--quiet", "-m", "image");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "reset", "--quiet", "--hard", "origin/main");
+    writeFileSync(join(repo, "logo.png"), Buffer.concat([Buffer.from("text\n".repeat(1800)), Buffer.from([0]), Buffer.from("\n")]));
+    run(repo, "commit", "--quiet", "-am", "replace the image with text");
+
+    assert.throws(() => diffKey(repo, mergeBase(repo)), /logo\.png.*into text/);
+  });
+
+  // "class A { }\n" as code units of 2 or 4 bytes, in either byte order.
+  const units = (width: 2 | 4, littleEndian: boolean) =>
+    Buffer.concat(
+      [..."class A { }\n"].map((character) => {
+        const unit = Buffer.alloc(width);
+        if (width === 2) unit.writeUInt16LE(character.charCodeAt(0));
+        else unit.writeUInt32LE(character.charCodeAt(0));
+        return littleEndian ? unit : Buffer.from(unit).reverse();
+      }),
+    );
+  for (const [encoding, bom, body] of [
+    ["UTF-16LE", Buffer.from([0xff, 0xfe]), units(2, true)],
+    ["UTF-16BE", Buffer.from([0xfe, 0xff]), units(2, false)],
+    ["UTF-32LE", Buffer.from([0xff, 0xfe, 0, 0]), units(4, true)],
+    ["UTF-32BE", Buffer.from([0, 0, 0xfe, 0xff]), units(4, false)],
+  ] as const) {
+    it(`refuses a ${encoding} text file, which git shows only as binary`, () => {
+      writeFileSync(join(repo, "a.cs"), Buffer.concat([bom, body]));
+      run(repo, "add", "a.cs");
+      run(repo, "commit", "--quiet", "-m", "a UTF-16 file");
+
+      assert.throws(() => diffKey(repo, mergeBase(repo)), /a\.cs.*UTF-8/);
+    });
+  }
+
+  it("tells a UTF-16 file main already holds to be re-encoded at a new path, since the old blob makes the rewrite look like binary to text", () => {
+    writeFileSync(join(upstream, "a.cs"), Buffer.concat([Buffer.from([0xff, 0xfe]), units(2, true)]));
+    run(upstream, "add", "a.cs");
+    run(upstream, "commit", "--quiet", "-m", "a UTF-16 file");
+    run(repo, "fetch", "--quiet", "origin");
+    run(repo, "reset", "--quiet", "--hard", "origin/main");
+    writeFileSync(join(repo, "a.cs"), Buffer.concat([Buffer.from([0xff, 0xfe]), units(2, true), Buffer.from("x\0", "utf16le")]));
+    run(repo, "commit", "--quiet", "-am", "edit it, still UTF-16");
+
+    assert.throws(() => diffKey(repo, mergeBase(repo)), /a\.cs.*UTF-8 at a new path/);
+  });
+
+  it("reads git's attributes without the system-wide file, which whoever's machine this is may have set", () => {
+    const bin = mkdtempSync(join(tmpdir(), "attr-git-"));
+    const real = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    // Stands in for a system gitattributes that marks every file binary: git
+    // has no way to point at another one, so the stub asks for the variable
+    // that turns the file off.
+    writeFileSync(join(bin, "git"), `#!/bin/sh\n[ "$GIT_ATTR_NOSYSTEM" = 1 ] || { echo "system attributes read" >&2; exit 3; }\nexec '${real}' "$@"\n`);
+    chmodSync(join(bin, "git"), 0o755);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path ?? ""}`;
+    try {
+      assert.doesNotThrow(() => diffKey(repo, mergeBase(repo)));
+    } finally {
+      process.env.PATH = path;
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
   it("sees a submodule pointer bump even when git is told to ignore submodules", () => {
     const sub = join(root, "sub");
     run(root, "init", "--quiet", "-b", "main", sub);
@@ -488,10 +703,8 @@ describe("checkReview", () => {
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
   });
 
-  it("names a git too old to check the review across a merge of main, rather than say there's none", () => {
-    record([]);
-    commit(upstream, "other.cs", "y\n", "main moves on");
-    mergeMain();
+  // Run `check` with a git 2.34 on the PATH, which has no merge-tree --write-tree.
+  function checkWithOldGit(): ReturnType<typeof checkReview> {
     const bin = mkdtempSync(join(tmpdir(), "old-git-"));
     const real = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ "$1" = version ]; then echo "git version 2.34.1"; exit 0; fi\nfor a in "$@"; do [ "$a" = --write-tree ] && { echo "error: unknown option" >&2; exit 129; }; done\nexec '${real}' "$@"\n`);
@@ -499,14 +712,31 @@ describe("checkReview", () => {
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path ?? ""}`;
     try {
-      const result = checkReview(repo, mergeBase(repo), {});
-
-      assert.equal(result.ok, false);
-      assert.match(result.message, /git 2\.38 or later/);
+      return checkReview(repo, mergeBase(repo), {});
     } finally {
       process.env.PATH = path;
       rmSync(bin, { recursive: true, force: true });
     }
+  }
+
+  it("names a git too old to check the review across a merge of main, and its version, rather than say there's none", () => {
+    record([]);
+    commit(upstream, "other.cs", "y\n", "main moves on");
+    mergeMain();
+
+    const result = checkWithOldGit();
+
+    assert.equal(result.ok, false);
+    assert.match(result.message, /git 2\.38 or later/);
+    assert.match(result.message, /^git version 2\.34\.1 can't check/);
+  });
+
+  it("passes the reviewed commit itself on a git too old to check across a merge, which it doesn't need", () => {
+    record([]);
+
+    const result = checkWithOldGit();
+
+    assert.equal(result.ok, true, result.message);
   });
 
   it("passes the reviewed commit with a clean merge of main and nothing else", () => {
@@ -1165,7 +1395,7 @@ describe("renderReviewNotes", () => {
 
     const notes = renderReviewNotes(ledger);
 
-    assert.match(notes, /^## Review notes/);
+    assert.match(notes, /^<!-- review-notes -->\n## Review notes\n/);
     assert.match(notes, /Accepted: Spec\./);
     assert.doesNotMatch(notes, /Guard_WhitespaceEmail_Fails/);
   });
@@ -1256,8 +1486,43 @@ describe("renderReviewNotes", () => {
 
     const notes = renderReviewNotes(ledger);
 
-    assert.match(notes, /^## Review notes\n\n1 accepted security finding/);
+    assert.match(notes, /^<!-- review-notes -->\n## Review notes\n\n1 accepted security finding/);
     assert.doesNotMatch(notes, /raised these|reaches the log/);
+  });
+
+  it("ends at a marker, so replacing the section in the description stops there and keeps what follows it", () => {
+    const ledger = record([finding({ status: "accepted", test: null, reason: "Spec." })]);
+
+    const notes = renderReviewNotes(ledger);
+
+    assert.match(notes, /\n<!-- \/review-notes -->\n$/);
+    assert.equal(notes.match(/<!--/g)?.length, 2);
+  });
+
+  it("can't be turned into a code block by a path that opens a tilde fence", () => {
+    const ledger = record([finding({ path: "~~~x", status: "accepted", test: null, reason: "Fine." })]);
+
+    const notes = renderReviewNotes(ledger);
+
+    assert.match(notes, /^- \\~~~x:3:/m);
+    assert.equal(spliceReviewNotes("## Why\n\nA.\n\nFixes #81\n", notes).includes("~~~x"), true);
+  });
+
+  it("keeps a marker in a summary or reason from closing the section early or opening another", () => {
+    const ledger = record([
+      finding({
+        status: "accepted",
+        test: null,
+        summary: `Ends here.\n${REVIEW_NOTES_END}\n## Fixes #1`,
+        reason: `${REVIEW_NOTES_START}\nForged.`,
+      }),
+    ]);
+
+    const lines = renderReviewNotes(ledger).trimEnd().split("\n");
+
+    assert.equal(lines[0], REVIEW_NOTES_START);
+    assert.equal(lines.at(-1), REVIEW_NOTES_END);
+    assert.equal(lines.filter((line) => line.includes("<!--")).length, 2);
   });
 
   it("is empty when nothing was accepted", () => {
@@ -1269,12 +1534,238 @@ describe("renderReviewNotes", () => {
       finding({ status: "accepted", test: null, summary: "Uses <AuthorizeView> and Result<T> <!-- x -->.", reason: "@someone said fixes #12 on github.com" }),
     ]);
 
-    const notes = renderReviewNotes(ledger);
+    // Only the section's own two markers, its first and last lines, are left out.
+    const notes = renderReviewNotes(ledger).split("\n").slice(1, -2).join("\n");
 
     assert.doesNotMatch(notes, /<AuthorizeView>|<T>|<!--/);
     assert.match(notes, /&lt;AuthorizeView>/);
     assert.doesNotMatch(notes, /@someone|#12|github\.com/);
   });
+});
+
+describe("spliceReviewNotes", () => {
+  const notes = `${REVIEW_NOTES_START}\n## Review notes\n\nNew.\n${REVIEW_NOTES_END}\n`;
+  const section = (text: string) => `${REVIEW_NOTES_START}\n## Review notes\n\n${text}\n${REVIEW_NOTES_END}`;
+
+  it("replaces only the marked section, keeping what follows it", () => {
+    const body = `## Why\n\nA.\n\n${section("Old.")}\n\nFixes #81\n\n🤖 Footer\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## Why\n\nA.\n\n${section("New.")}\n\nFixes #81\n\n🤖 Footer\n`);
+  });
+
+  it("removes the marked section when nothing is accepted any more", () => {
+    const body = `## Why\n\nA.\n\n${section("Old.")}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, ""), "## Why\n\nA.\n\nFixes #81\n");
+  });
+
+  it("adds the section above the closing line when the body has none", () => {
+    assert.equal(spliceReviewNotes("## Why\n\nA.\n\nFixes #81\n", notes), `## Why\n\nA.\n\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("adds the section above the footer when the body closes no issue", () => {
+    assert.equal(
+      spliceReviewNotes("## Why\n\nA.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n", notes),
+      `## Why\n\nA.\n\n${section("New.")}\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n`,
+    );
+  });
+
+  it("adds the section at the end of a body with neither", () => {
+    assert.equal(spliceReviewNotes("## Why\n\nA.\n", notes), `## Why\n\nA.\n\n${section("New.")}\n`);
+  });
+
+  it("leaves a body with no section and no notes as it is", () => {
+    assert.equal(spliceReviewNotes("## Why\n\nA.\n", ""), "## Why\n\nA.\n");
+  });
+
+  it("takes a marker only as a line of its own, not one quoted in the text", () => {
+    const body = `## What changed\n\nWraps it in \`${REVIEW_NOTES_START}\` and \`${REVIEW_NOTES_END}\`.\n\n${section("Old.")}\n\nFixes #81\n`;
+
+    assert.equal(
+      spliceReviewNotes(body, notes),
+      `## What changed\n\nWraps it in \`${REVIEW_NOTES_START}\` and \`${REVIEW_NOTES_END}\`.\n\n${section("New.")}\n\nFixes #81\n`,
+    );
+  });
+
+  it("finds the markers in a body GitHub stored with CRLF line endings", () => {
+    const body = `## Why\r\n\r\nA.\r\n\r\n${section("Old.").replaceAll("\n", "\r\n")}\r\n\r\nFixes #81\r\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## Why\n\nA.\n\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("removes a section at the end of the body with the blank line before it", () => {
+    assert.equal(spliceReviewNotes(`## Why\n\nA.\n\n${section("Old.")}\n`, ""), "## Why\n\nA.\n");
+  });
+
+  it("gives back the body it added a section to once the section is removed", () => {
+    for (const body of ["## Why\n\nA.\n", "## Why\n\nA.\n\nFixes #81\n", "## Why\n\nA.\n\n🤖 Generated with x\n"]) {
+      assert.equal(spliceReviewNotes(spliceReviewNotes(body, notes), ""), body);
+    }
+  });
+
+  it("adds the section above the closing line, not the footer below it", () => {
+    assert.equal(
+      spliceReviewNotes("## Why\n\nA.\n\nFixes #81\n\n🤖 Generated with x\n", notes),
+      `## Why\n\nA.\n\n${section("New.")}\n\nFixes #81\n\n🤖 Generated with x\n`,
+    );
+  });
+
+  for (const closing of ["Closes #4", "resolves #4"]) {
+    it(`takes "${closing}" as the closing line too`, () => {
+      assert.equal(spliceReviewNotes(`## Why\n\nA.\n\n${closing}\n`, notes), `## Why\n\nA.\n\n${section("New.")}\n\n${closing}\n`);
+    });
+  }
+
+  it("takes the last closing line that starts a paragraph, not one quoted earlier or wrapped into a sentence", () => {
+    const body = "## Why\n\nFixes #12 was\nresolves #40 too.\n\nFixes #12\nalso.\n\nFixes #81\n";
+
+    assert.equal(spliceReviewNotes(body, notes), `## Why\n\nFixes #12 was\nresolves #40 too.\n\nFixes #12\nalso.\n\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("ignores markers, a heading and a closing line shown in a code block", () => {
+    const example = `\`\`\`markdown\n${section("Example.")}\n## Review notes\nFixes #1\n\`\`\``;
+    const body = `## What changed\n\n${example}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## What changed\n\n${example}\n\n${section("New.")}\n\nFixes #81\n`);
+    assert.equal(spliceReviewNotes(`${body.replace("Fixes #81\n", "")}${section("Old.")}\n\nFixes #81\n`, ""), body);
+  });
+
+  it("takes a line that opens with a code span of three backticks for text, not a code block", () => {
+    const body = `## Verification\n\n\`\`\`pnpm test\`\`\` passes.\n\n${section("Old.")}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), body.replace(section("Old."), section("New.")));
+  });
+
+  it("sees a code block that opens on a list item's line close, rather than take its closing fence for an opening one", () => {
+    const body = `## Verification\n\n1. \`\`\`bash\n   scripts/gate.sh\n   \`\`\`\n\n${section("Old.")}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), body.replace(section("Old."), section("New.")));
+  });
+
+  it("takes a marker with trailing spaces, as an editor may leave it, for the marker", () => {
+    const body = `## Why\n\nA.\n\n${section("Old.").replace(REVIEW_NOTES_END, `${REVIEW_NOTES_END}  `)}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## Why\n\nA.\n\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("doesn't take an indented marker, which shows as code, for the marker", () => {
+    const body = `## What changed\n\n    ${REVIEW_NOTES_START}\n    ${REVIEW_NOTES_END}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), body.replace("Fixes #81", `${section("New.")}\n\nFixes #81`));
+  });
+
+  it("adds the section above a closing line that is the body's first line", () => {
+    assert.equal(spliceReviewNotes("Fixes #81\n", notes), `${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("ignores a marked example in a ~~~ block, which a ``` line inside it doesn't close", () => {
+    const example = `~~~markdown\n\`\`\`\n${section("Example.")}\n~~~`;
+    const body = `## What changed\n\n${example}\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## What changed\n\n${example}\n\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("closes a longer fence only with one at least as long", () => {
+    const example = `\`\`\`\`markdown\n\`\`\`\n${section("Example.")}\n\`\`\`\`\n`;
+    const body = `## What changed\n\n${example}\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## What changed\n\n${example}\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("refuses to publish an empty description when the section was all the body held", () => {
+    assert.throws(() => spliceReviewNotes(`${section("Old.")}\n`, ""), /empty/);
+  });
+
+  it("removes a section at the very start of the body without leaving a gap", () => {
+    assert.equal(spliceReviewNotes(`${section("Old.")}\n\n## Why\n\nA.\n`, ""), "## Why\n\nA.\n");
+  });
+
+  it("removes a section whose neighbours are text on the next line, with no blank line either side", () => {
+    assert.equal(spliceReviewNotes(`## Why\nA.\n${section("Old.")}\nFixes #81\n`, ""), "## Why\nA.\nFixes #81\n");
+  });
+
+  it("reads a body whose line endings are lone carriage returns", () => {
+    const body = `## Why\r\rA.\r\r${section("Old.").replaceAll("\n", "\r")}\r\rFixes #81\r`;
+
+    assert.equal(spliceReviewNotes(body, notes), `## Why\n\nA.\n\n${section("New.")}\n\nFixes #81\n`);
+  });
+
+  it("takes notes with no trailing newline the same as notes with one", () => {
+    assert.equal(spliceReviewNotes("## Why\n\nA.\n", notes.trimEnd()), spliceReviewNotes("## Why\n\nA.\n", notes));
+  });
+
+  it("takes a body with no trailing newline the same as one with it", () => {
+    assert.equal(spliceReviewNotes("## Why\n\nA.", notes), spliceReviewNotes("## Why\n\nA.\n", notes));
+  });
+
+  it("closes a fence with a longer one, and doesn't close it with one followed by text", () => {
+    const closed = `\`\`\`markdown\n${section("Example.")}\n\`\`\`\`\`\n\nFixes #81\n`;
+
+    assert.equal(spliceReviewNotes(closed, notes), closed.replace("Fixes #81", `${section("New.")}\n\nFixes #81`));
+    assert.throws(() => spliceReviewNotes(`\`\`\`markdown\n\`\`\` not a closer\n${section("Old.")}\n`, notes), /never closes/);
+  });
+
+  it("lets a line that mentions review notes in the middle of a sentence stand", () => {
+    const body = "## Why\n\nSee the review notes below.\nThey were agreed.\n\nFixes #81\n";
+
+    assert.equal(spliceReviewNotes(body, notes), body.replace("Fixes #81", `${section("New.")}\n\nFixes #81`));
+  });
+
+  it("lets a heading about something else, with similar words, stand", () => {
+    const body = "## Reviewing the notes\n\nA.\n\n## Preview\n\nB.\n\nFixes #81\n";
+
+    assert.equal(spliceReviewNotes(body, notes), body.replace("Fixes #81", `${section("New.")}\n\nFixes #81`));
+  });
+
+  it("ends the result in one newline, however many the body ended in", () => {
+    const once = spliceReviewNotes("## Why\n\nA.\n", notes);
+
+    assert.equal(spliceReviewNotes(`${once}\n\n`, notes), once);
+  });
+
+  for (const [shape, body] of [
+    ["an empty body", ""],
+    ["a body of only whitespace", " \n\n"],
+    ["a Review notes heading indented and closed with hashes", "## Why\n\n   ## Review notes ##\n\nOld.\n"],
+    ["a Review notes heading in emphasis with a colon", "## Why\n\n## **Review notes:**\n\nOld.\n"],
+    ["a setext Review notes heading", "## Why\n\nReview notes\n---\n\nOld.\n"],
+    ["an HTML Review notes heading", "## Why\n\n<h2>Review notes</h2>\n\nOld.\n"],
+    ["an escaped tag-shaped Review notes heading", "## Why\n\n## \\<Review notes>\n\nOld.\n"],
+    ["a Review notes heading made of an image", '## Why\n\n<h2><img alt="Review notes" src="x"></h2>\n\nOld.\n'],
+    ["a Review notes heading after a comment that closes at once", "## Why\n\n<!--><h2>Review notes</h2><!-- -->\n\nOld.\n"],
+    ["a Review notes heading in the form of a declaration", "## Why\n\n## <! Review notes>\n\nOld.\n"],
+    ["a Review notes heading in the form of a processing instruction", "## Why\n\n## <? Review notes >\n\nOld.\n"],
+    ["a Review notes heading in an unclosed comment", "## Why\n\n## <!-- Review notes >\n\nOld.\n"],
+    ["a Review notes heading after a comment closed by --!>", "## Why\n\n<!-- x --!><h2>Review notes</h2><!-- -->\n\nOld.\n"],
+    ["a Review notes heading made of a tag only a browser reads", "## Why\n\n<h2><x_>Review notes</h2>\n\nOld.\n"],
+    ["a Review notes heading across a blockquote's line", "## Why\n\n> <h2 class=x\n> id=y>Review notes</h2>\n\nOld.\n"],
+    ["an HTML Review notes heading with an attribute", '## Why\n\n<h2 align="left">Review notes</h2>\n\nOld.\n'],
+    ["an HTML Review notes heading with an id", '## Why\n\n<h2 id="notes">Review notes</h2>\n\nOld.\n'],
+    ["a Review notes heading inside a span with a title", '## Why\n\n## <span title="x">Review notes</span>\n\nOld.\n'],
+    ["a setext Review notes heading underlined with =", "## Why\n\nReview notes\n===\n\nOld.\n"],
+    ["a Review notes heading in a quote", "## Why\n\n> ## Review notes\n\nOld.\n"],
+    ["a Review notes heading in a list item", "## Why\n\n- ## Review notes\n\nOld.\n"],
+    ["emphasis on one word of a Review notes heading", "## Why\n\n## **Review** notes\n\nOld.\n"],
+    ["a Review notes heading with more words after it", "## Why\n\n## Review notes (round 2)\n\nOld.\n"],
+    ["a character reference in a Review notes heading", "## Why\n\n## Re&#118;iew&#32;notes\n\nOld.\n"],
+    ["an invisible character in a Review notes heading", "## Why\n\n## Review\u200e\u034f notes\n\nOld.\n"],
+    ["an unmarked Review notes heading beside a marked section", `## Review notes\n\nOld.\n\n${section("Old.")}\n`],
+    ["an unmarked Review notes heading after a marked section", `${section("Old.")}\n\n## Review notes\n\nOld.\n`],
+    ["a setext Review notes heading split over two lines", "## Why\n\nReview\nnotes\n---\n\nOld.\n"],
+    ["an HTML Review notes heading split over two lines", "## Why\n\n<h2>Review\nnotes</h2>\n\nOld.\n"],
+    ["a closing line inside the marked section", `${section("Old.\n\nFixes #81")}\n`],
+    ["the footer inside the marked section", `${section("Old.\n\n🤖 Generated with x")}\n`],
+    ["a code block that never closes", `## Why\n\n\`\`\`\n${section("Old.")}\n`],
+    ["an end marker with no start", `## Why\n\n${REVIEW_NOTES_END}\n`],
+    ["two marked sections", `${section("A.")}\n\n${section("B.")}\n`],
+    ["a start marker with no end", `${REVIEW_NOTES_START}\n## Review notes\n\nFixes #81\n`],
+    ["an end marker before the start", `${REVIEW_NOTES_END}\n\n${REVIEW_NOTES_START}\n`],
+    ["a Review notes section written before the markers", "## Why\n\nA.\n\n## Review notes\n\nOld.\n\nFixes #81\n"],
+  ] as const) {
+    it(`refuses a body with ${shape}, rather than guess where the section ends`, () => {
+      assert.throws(() => spliceReviewNotes(body, notes), /ask the person/);
+    });
+  }
 });
 
 describe("renderAdvisories", () => {
@@ -1563,11 +2054,101 @@ describe("main", () => {
     assert.equal(readLedger(repo, diffKey(repo, mergeBase(repo)))?.findings[0]?.reason, "two words");
   });
 
+  it("body refuses an output that is its input under another name, and leaves the input as it was", () => {
+    record([]);
+    const input = join(root, "old-body.md");
+    writeFileSync(input, "## Why\n\nA.\n");
+    symlinkSync(input, join(root, "link.md"));
+
+    for (const output of [join(root, "./old-body.md"), join(root, "link.md"), join(root, "sub", "..", "old-body.md")]) {
+      const result = cli(["body", input, output]);
+
+      assert.equal(result.code, 1, output);
+      assert.equal(readFileSync(input, "utf8"), "## Why\n\nA.\n");
+    }
+  });
+
+  it("body fails, and leaves nothing, when the output's folder doesn't exist", () => {
+    record([]);
+    const input = join(root, "old-body.md");
+    writeFileSync(input, "## Why\n\nA.\n");
+    const output = join(root, "missing", "body.md");
+
+    const result = cli(["body", input, output]);
+
+    assert.equal(result.code, 1);
+    assert.equal(existsSync(output), false);
+  });
+
+  it("body fails when the input file doesn't exist, and leaves no output", () => {
+    record([]);
+    const output = join(root, "body.md");
+    writeFileSync(output, "an earlier run's description\n");
+
+    const result = cli(["body", join(root, "nope.md"), output]);
+
+    assert.equal(result.code, 1);
+    assert.equal(existsSync(output), false);
+  });
+
+  it("body names the input when the output has the same name", () => {
+    const result = cli(["body", "in.md", "in.md"]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /is the input file/);
+  });
+
+  it("body refuses an output that exists and isn't a regular file", () => {
+    record([]);
+    const input = join(root, "old-body.md");
+    writeFileSync(input, "## Why\n\nA.\n");
+    mkdirSync(join(root, "out-dir"));
+
+    const result = cli(["body", input, join(root, "out-dir")]);
+
+    assert.equal(result.code, 1);
+    assert.equal(existsSync(join(root, "out-dir")), true);
+  });
+
+  it("body writes the PR description from a file with its Review notes section replaced", () => {
+    record([finding({ status: "accepted", test: null, reason: "Spec." })]);
+    const input = join(root, "old-body.md");
+    const output = join(root, "body.md");
+    writeFileSync(input, "## Why\n\nA.\n\nFixes #81\n");
+
+    const result = cli(["body", input, output]);
+
+    assert.equal(result.code, 0, result.err);
+    assert.match(readFileSync(output, "utf8"), /^## Why\n\nA\.\n\n<!-- review-notes -->\n## Review notes\n[\s\S]*Accepted: Spec\.\n<!-- \/review-notes -->\n\nFixes #81\n$/);
+  });
+
+  // Each leaves no file behind, not even an earlier run's, so a `gh pr edit
+  // --body-file` after it fails rather than publish a wrong description.
+  for (const [failure, body, recorded] of [
+    ["a body it can't splice", "## Review notes\n\nOld.\n", true],
+    ["an empty body, as a failed gh pr view leaves", "", true],
+    ["no review recorded for the diff", "## Why\n\nA.\n", false],
+  ] as const) {
+    it(`body fails, and leaves no output file, on ${failure}`, () => {
+      if (recorded) record([]);
+      const input = join(root, "old-body.md");
+      const output = join(root, "body.md");
+      writeFileSync(input, body);
+      writeFileSync(output, "an earlier run's description\n");
+
+      const result = cli(["body", input, output]);
+
+      assert.equal(result.code, 1);
+      assert.equal(existsSync(output), false);
+      assert.match(result.err, recorded ? /ask the person/ : /No review is recorded/);
+    });
+  }
+
   it("report prints the table and notes prints the Review notes", () => {
     record([finding(), finding({ id: "R2", status: "accepted", test: null, reason: "Spec." })]);
 
     assert.match(cli(["report"]).out, /\| Id \| Lens \|/);
-    assert.match(cli(["notes"]).out, /^## Review notes/);
+    assert.match(cli(["notes"]).out, /^<!-- review-notes -->\n## Review notes/);
   });
 
   it("advisory prints the follow-up issue's body, or says there's none", () => {
@@ -1586,7 +2167,7 @@ describe("main", () => {
     assert.match(cli(["latest"]).out, /"Kept\."/);
   });
 
-  for (const args of [["bogus"], [], ["record"], ["accept", "R1"]]) {
+  for (const args of [["bogus"], [], ["record"], ["accept", "R1"], ["body"], ["body", "in.md"], ["body", "in.md", "-"]]) {
     it(`exits 1 with the usage for ${JSON.stringify(args)}`, () => {
       const result = cli(args);
 
@@ -1652,6 +2233,16 @@ describe("scripts/review.sh", () => {
 
     assert.equal(result.status, 0, result.stderr);
     assert.ok(readLedger(repo, diffKey(repo, mergeBase(repo))));
+  });
+
+  it("splices a PR description read from stdin, as gh pr view can pipe it", () => {
+    record([]);
+    const output = join(root, "body.md");
+
+    const result = spawnSync("bash", [reviewScript, "body", "-", output], { cwd: repo, encoding: "utf8", env, input: "## Why\n\nA.\n" });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(output, "utf8"), "## Why\n\nA.\n");
   });
 
   it("works when the caller's shell sets CDPATH", () => {

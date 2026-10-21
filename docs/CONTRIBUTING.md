@@ -213,6 +213,17 @@ Every PR is reviewed by Copilot on each push, and merges once its required check
 resolved: a same-repo PR merges on its own, and the maintainer merges a fork's. The details are in
 [PROCESS.md](PROCESS.md#checks-review-and-merging).
 
+This repository answers review threads differently from PROCESS.md's "reply with why not", which comes from the shared
+Baseline and can't be changed here. Fix a thread you agree with, push the fix, and only then reply saying what changed:
+resolve it if Copilot or Claude Review opened it, and leave a person's thread for them to resolve. Resolving the last
+thread before the push lets the PR merge without the fix (PR Auto-Merge merges a same-repo PR then, and the maintainer may
+merge a fork's). On every other thread (one you decline, one
+raising a finding you accepted, one waiting on a decision), reply only "Left for the owner." and leave it unresolved for
+the maintainer. The reply is the same on all of them, so none points at an accepted security finding. An accepted
+finding's reason is in your PR's `## Review notes` unless it's a security one. Tell the maintainer any other reason
+privately: by [email](mailto:matthew.paulosky@outlook.com), or for a security one in the private report
+[SECURITY.md](SECURITY.md#how-to-report) describes. Never put it in an issue or a public comment.
+
 ### Write code
 
 All code should have an assigned issue that matches it. This way we can prevent contributors from working on the same

@@ -17,19 +17,21 @@ The repository itself is protected as follows:
 
 - **Secrets stay out of source control.** `.env` files are git-ignored at any depth. Local secrets belong in user
   secrets or `.env`.
-- **Keep Claude Code out of `.env` files.** The repo ships no Claude Code settings, since permissions are set per user
-  (the repo-ci-baseline Template doesn't ship them either). Add these rules to your own `~/.claude/settings.json`, so
-  Claude Code's file tools can't read or edit a `.env` under the project a session runs in, `.sandcastle/.env`
-  included:
+- **Keep Claude Code out of `.env` files.** The repo's `.claude/settings.json` denies only reading the local review's
+  ledgers (`.git/review/`) and registers the SessionStart hook. It leaves `.env` files to each person's own settings
+  (the repo-ci-baseline Template doesn't ship such rules either). Add these rules to your own `~/.claude/settings.json`,
+  so Claude Code's file tools can't read or edit a `.env` anywhere on your machine, `.sandcastle/.env` included:
 
   ```json
   {
     "permissions": {
-      "deny": ["Read(**/.env)", "Read(**/.env.*)", "Edit(**/.env)", "Edit(**/.env.*)"]
+      "deny": ["Read(//**/.env)", "Read(//**/.env.*)", "Edit(//**/.env)", "Edit(//**/.env.*)"]
     }
   }
   ```
 
+  The `//` roots each rule at the filesystem. A rule without it (`Read(**/.env)`) is relative to the folder the session
+  started in, so a session started in a worktree could still read the main checkout's `.sandcastle/.env`.
   The `.env.*` rules also hide committed `.env.example` files, such as `.sandcastle/.env.example`; edit those by hand.
   The rules don't stop shell commands such as `cat .env`: deny those too, or turn on Claude Code's sandbox, if you
   need that. They cover sessions on your machine only. A Sandcastle sandbox starts with its own Claude Code settings,
@@ -38,9 +40,10 @@ The repository itself is protected as follows:
 - **Workflow hardening.** Actions are pinned to commit SHAs, and `zizmor` and `actionlint` check every workflow change.
 - **Dependabot** proposes dependency updates after a seven-day cooldown, so a compromised release is usually caught
   upstream first.
-- **Reviewed merges.** A pull request merges only after its checks pass, Copilot has reviewed its head, and its review
-  threads are resolved. One exception: once Copilot has reviewed three of a PR's commits, its own unresolved threads no
-  longer hold the merge, so a PR can't chase new Copilot findings forever. Threads anyone else opens always do.
+- **Reviewed merges.** A pull request merges only after its checks pass, a reviewer (Copilot, or Claude Review as its
+  backup) has reviewed its head, and its review threads are resolved. Once the two together have reviewed three of a
+  PR's commits (merges from `main` don't count), the merge stops waiting for a review of the head, so a PR can't chase
+  reviews forever, but every unresolved thread still holds it, Copilot's and Claude's included.
 
 ## Reporting a Vulnerability
 

@@ -92,7 +92,7 @@ review thread. Neither carries into this review: the reviewers raise the problem
 person accepts it again (step 5). Sessions and Sandcastle post with the owner's token, so a thread
 reply under the owner's login counts only when its body doesn't contain `<!-- claude-session -->` and doesn't open with
 `<!-- sandcastle:`. Nothing else decides: not a bot's thread (a finding to check), not the PR description's
-`## Review notes` (a copy for readers, which an agent wrote on a Sandcastle PR), and not an issue comment, since many of
+`## Review notes` (a copy for readers, which anyone who can edit the PR can change), and not an issue comment, since many of
 Sandcastle's issue comments carry no marker.
 
 The person the review runs for is the repository owner, or a contributor on their own branch. A contributor's
@@ -294,15 +294,33 @@ with its first line and marker, and run
 `GH_REPO=mpaulosky/auth0-management-app gh issue comment <n> --body-file <run>/advisory.md`.
 
 Keep the PR description's `## Review notes` section in step with the ledger, for people reading the PR: when findings
-were accepted it holds the output of `scripts/review.sh notes`, and when none were it has no such section, since an
-earlier review's acceptances no longer hold. Write it in the body when the PR is opened. After that, once
-`scripts/review.sh check` passes (the person's last accept made, before the push), read the body
-(`GH_REPO=mpaulosky/auth0-management-app gh pr view <n> --json body -q .body`), replace its `## Review notes` section, add
-one or remove it, write the whole result to `<run>/body.md` and run
-`GH_REPO=mpaulosky/auth0-management-app gh pr edit <n> --body-file <run>/body.md`. `--body-file` replaces the whole
-description, so never pass it the notes alone. GitHub's reviewers aren't known to read the description, so they may
-raise an accepted finding again: its thread gets the reply every thread left for the owner gets (CLAUDE.md), only
-"Left for the owner." and the `<!-- claude-session -->` marker.
+were accepted it holds the output of `scripts/review.sh notes`, between the lines `<!-- review-notes -->` and
+`<!-- /review-notes -->`, and when none were it has no such section, since an earlier review's acceptances no longer
+hold. Never splice it in by hand: `scripts/review.sh body` does it. It replaces only the marked section, adds one above
+`Fixes #` (else above the footer, else at the end) when there's none, removes it when nothing is accepted, and refuses a
+body whose section it can't bound safely. When it refuses, show the person the body and ask what to keep.
+
+Run each command below as one `&&` chain in one Bash call, and stop when any part fails. `body` removes
+`<run>/body.md` first and writes it only on success, so a failed fetch or a refused splice never reaches `gh`.
+
+When the PR is opened, write its body to `<run>/old-body.md` and run:
+
+```bash
+scripts/review.sh body <run>/old-body.md <run>/body.md && GH_REPO=mpaulosky/auth0-management-app gh pr create … --body-file <run>/body.md
+```
+
+After that, once `scripts/review.sh check` passes (the person's last accept made) and the branch is pushed, run:
+
+```bash
+GH_REPO=mpaulosky/auth0-management-app gh pr view <n> --json body -q .body > <run>/old-body.md && scripts/review.sh body <run>/old-body.md <run>/body.md && GH_REPO=mpaulosky/auth0-management-app gh pr edit <n> --body-file <run>/body.md
+```
+
+`--body-file` replaces the whole description, so never pass it the notes alone.
+
+Editing the description starts PR Auto-Merge, which is why it waits for the push: before it, the PR could merge the head
+without this run's fixes. Push a thread's fix before replying to or resolving its thread, for the same reason. GitHub's
+reviewers aren't known to read the description, so they may raise an accepted finding again: its thread gets the reply
+every thread left for the owner gets (CLAUDE.md), only "Left for the owner." and the `<!-- claude-session -->` marker.
 
 The description becomes public release notes, so the notes list the accepted Critical and Advisory findings, leave out
 accepted security findings (every finding the report marks `(security)`: one graded Warning, one whose lens names

@@ -10,6 +10,7 @@ import {
   latestDesignNote,
   isGitHubServerError,
   isWorkflowPushRejection,
+  LEGACY_REFERENCES,
   PR_BODY_LIMIT,
   publicErrorText,
   publish,
@@ -29,6 +30,7 @@ import {
   type OptionalRole,
 } from "./config.mts";
 import { RunLimits } from "./limits.mts";
+import { breakReferences } from "./plain-text.mts";
 import type { SecretMatch } from "./scan.mts";
 
 const issue = { number: 69, title: "Run the gate", body: "", labels: ["Sandcastle"], comments: [], roles: [] as OptionalRole[] };
@@ -1163,6 +1165,84 @@ describe("buildIssue reading the reviewer's PR body", () => {
     ["missing the What changed heading", "## Why\n\nBecause.\n\n## Verification\n\nRan the tests."],
     ["missing the Verification heading", "## Why\n\nBecause.\n\n## What changed\n\nAdded X."],
     ["too long for a PR body", `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT)}`],
+    // The local review's notes are a person's acceptances, bounded by HTML
+    // comments: an agent's body mustn't pass for them, or hide text at all.
+    ["holding a Review notes section", `${validPrBody}\n\n## Review notes\n\nAccepted: fine.`],
+    ["holding a Review notes heading indented and closed with hashes", `${validPrBody}\n\n   ## Review notes ##\n\nAccepted: fine.`],
+    ["holding a setext Review notes heading", `${validPrBody}\n\nReview notes\n---\n\nAccepted: fine.`],
+    ["holding an HTML Review notes heading", `${validPrBody}\n\n<h2>Review notes</h2>\n\nAccepted: fine.`],
+    ["holding Review notes split by a zero-width space", `${validPrBody}\n\n## Review\u200b notes\n\nAccepted: fine.`],
+    ["holding Review notes split by a no-break space", `${validPrBody}\n\n## Review\u00a0notes\n\nAccepted: fine.`],
+    ["holding an HTML comment", `${validPrBody}\n\n<!-- review-notes -->\nHidden.\n<!-- /review-notes -->`],
+    ["holding an HTML comment quoted in a code span", `${validPrBody}\n\nRemoved the \`<!-- TODO -->\`.`],
+    ["holding a link reference definition, which renders as nothing", `${validPrBody}\n\n[//]: # (Hidden from people.)`],
+    ["holding a link reference definition in a quote", `${validPrBody}\n\n> [x]: # (Hidden.)`],
+    ["holding a link reference definition in a list item", `${validPrBody}\n\n- [x]: # (Hidden.)`],
+    ["holding a link reference definition with an escaped bracket", `${validPrBody}\n\n[a\\]]: # (Hidden.)`],
+    ["holding a processing instruction", `${validPrBody}\n\nDone.<?x hidden ?>`],
+    ["holding a declaration", `${validPrBody}\n\nDone.<!X hidden>`],
+    ["holding CDATA", `${validPrBody}\n\nDone.<![CDATA[hidden]]>`],
+    ["holding an element GitHub drops with its content", `${validPrBody}\n\n<style>hidden</style>`],
+    ["holding Review notes in fullwidth letters", `${validPrBody}\n\n## \uff32\uff45\uff56\uff49\uff45\uff57 \uff4e\uff4f\uff54\uff45\uff53`],
+    ["holding Review notes with emphasis inside a word", `${validPrBody}\n\n## Re*view* **notes**`],
+    ["holding Review notes with a character reference", `${validPrBody}\n\n## Review&#32;notes`],
+    ["holding Review notes with an invisible format character", `${validPrBody}\n\n## Review\u200e\u034f notes`],
+    ["holding Review notes between a stray < and >", `${validPrBody}\n\n< x\n\n## Review notes\n\ny >`],
+    ["holding Review notes in an attribute", `${validPrBody}\n\n<img alt="Review notes" src="x.png">`],
+    ["holding Review notes as an image's alt text", `${validPrBody}\n\n![Review notes](x.png)`],
+    ["holding Review notes as a link's title", `${validPrBody}\n\n[x](https://example.com "Review notes")`],
+    ["holding Review notes with an invisible Hangul filler", `${validPrBody}\n\n## Review\u3164notes`],
+    ["holding Review notes with a dotted capital I", `${validPrBody}\n\n## Rev\u0130ew notes`],
+    ["holding Review notes with a reference lacking its semicolon", `${validPrBody}\n\n## Review&#32notes`],
+    ["holding Review notes in look-alike Cyrillic letters", `${validPrBody}\n\n## R\u0435view n\u043et\u0435s`],
+    ["holding Review notes after a < that starts no tag", `${validPrBody}\n\n<x\n\n## Review notes\n\ny >`],
+    ["holding Review notes after a < and a comma", `${validPrBody}\n\nSee <x Review, notes> here.`],
+    ["holding Review notes in an autolink", `${validPrBody}\n\n<https://example.com/Review-notes>`],
+    ["holding Review notes in an attribute holding a <", `${validPrBody}\n\n<img alt="<Review notes>" src="x.png">`],
+    ["holding Review notes as valueless attributes", `${validPrBody}\n\n<x Review notes>`],
+    ["holding Review notes split by an anchor", `${validPrBody}\n\nRe<a href="u">view notes</a>`],
+    ["holding Review notes split by a span", `${validPrBody}\n\n## Rev<span class="x">iew notes`],
+    ["holding Review notes in Greek capitals", `${validPrBody}\n\n## R\u0395VI\u0395W \u039dOTES`],
+    ["holding Review notes in Latin small capitals", `${validPrBody}\n\n## \u0280\u1d07\u1d20\u026a\u1d07\u1d21 \u0274\u1d0f\u1d1b\u1d07\ua731`],
+    ["holding Review notes spelt with a named reference lacking its semicolon", `${validPrBody}\n\n<div>Review&nbspnotes</div>`],
+    ["holding a soft-hyphen reference lacking its semicolon", `${validPrBody}\n\n<div>Review&shy notes</div>`],
+    ["exactly one character over the limit", `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT - validPrBody.length - 1)}`],
+    ["under the limit, but over it once its references are broken", `${validPrBody}\n\n${"#1 ".repeat(Math.floor((PR_BODY_LIMIT - validPrBody.length - 2) / 3))}`],
+    ["holding a tag-shaped Review notes in a code span", `${validPrBody}\n\nUses \`<Review notes>\` here.`],
+    ["holding an escaped tag-shaped Review notes", `${validPrBody}\n\n\\<Review notes>`],
+    ["holding a tag-shaped Review notes in a fence", `${validPrBody}\n\n\`\`\`\n<Review notes>\n\`\`\``],
+    ["holding a tag-shaped Review notes with a no-break space", `${validPrBody}\n\n<Review\u00a0notes>`],
+    ["holding Review notes finished by an image's alt", `${validPrBody}\n\n## Review <img alt="notes" src="x.png">`],
+    ["holding Review notes started by an image's alt", `${validPrBody}\n\nRev<img alt="iew notes" src="x.png">`],
+    ["holding Review notes in two images' alts", `${validPrBody}\n\n<img alt="Review " src="a"><img alt="notes" src="b">`],
+    ["holding Review notes round a quoted value with a blank line", `${validPrBody}\n\nRevie<w _="\n\n">notes`],
+    ["holding Review notes in Lisu letters", `${validPrBody}\n\n## \ua4e3\ua4f0\ua4e6\ua4f2\ua4f0\ua4ea \ua4e0\ua4f3\ua4d4\ua4f0\ua4e2`],
+    ["holding Review notes in Cherokee and Latin letters", `${validPrBody}\n\n## \u13a1\u13ac\u13d9\u13a5\u13ac\u13b3 notes`],
+    ["holding a Greek word", `${validPrBody}\n\nThe \u0394 case.`],
+    ["holding a CJK word", `${validPrBody}\n\n\u691c\u8a0e.`],
+    ["holding an upper-case legacy reference without its semicolon", `${validPrBody}\n\n<div>Review&NBSPnotes</div>`],
+    ["holding a two-letter legacy reference without its semicolon", `${validPrBody}\n\nUses &lt here.`],
+    ["holding an upper-case two-letter reference without its semicolon", `${validPrBody}\n\nUses &AMP here.`],
+    ["holding a legacy name at the start of a longer word", `${validPrBody}\n\nSee &notes.`],
+    ["holding Review notes finished by an alt after a title", `${validPrBody}\n\n## Review <img title="x" alt="notes" src="missing.png">`],
+    ["holding Review notes round a tag with a no-break space in a value", `${validPrBody}\n\nRe<a href=x\u00a0>view notes</a>`],
+    ["holding Review notes in an HTML block with a tag only a browser reads", `${validPrBody}\n\n<div>\nRev<x_>iew notes\n</div>`],
+    ["holding Review notes round a real tag and a code span", `${validPrBody}\n\nRe<b>view</b> \`<notes>\``],
+    ["holding Review notes across a blockquote's line", `${validPrBody}\n\n> Re<b\n> x>view notes`],
+    ["holding a micro-look-alike symbol, the estimated sign", `${validPrBody}\n\nR\u212Eview notes`],
+    ["holding a Latin letter outside the table, a small iota", `${validPrBody}\n\nRev\u0269ew notes`],
+    ["holding an inverted exclamation mark", `${validPrBody}\n\nRev\u00a1ew notes`],
+    ["holding a no-break space", `${validPrBody}\n\nA\u00a0b.`],
+    ["holding a soft hyphen", `${validPrBody}\n\nA\u00adb.`],
+    ["holding a modifier letter apostrophe", `${validPrBody}\n\nIt\u02bcs.`],
+    ["holding a fullwidth Latin letter", `${validPrBody}\n\n\uff32\uff45\uff56 test.`],
+    ["holding a legacy name before an equals sign outside a link", `${validPrBody}\n\nSet &sect=1 now.`],
+    ["holding Review notes in a name", `${validPrBody}\n\nRenamed renderReviewNotes.`],
+    // The character-reference rule alone: visibleLetters drops these without
+    // reading the letters they spell.
+    ["holding a named character reference that spells a letter", `${validPrBody}\n\n## Revi&escr;w notes`],
+    ["holding a numeric character reference without its semicolon", `${validPrBody}\n\nUses &#33 here.`],
+    ["holding an ordinary character reference", `${validPrBody}\n\nUses &amp; here.`],
   ] as const) {
     it(`falls back to the generic PR body, and logs why, when the file is ${scenario}`, async () => {
       const { logs, publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
@@ -1184,6 +1264,93 @@ describe("buildIssue reading the reviewer's PR body", () => {
 
     assert.equal(publishedPrBodies.at(-1), undefined);
     assert.ok(logs.some((line) => /PR body/i.test(line)), logs.join("\n"));
+  });
+
+  // What refusals must not catch: a description like these is ordinary in this
+  // repository, and a false refusal loses the reviewer's description.
+  for (const [scenario, text] of [
+    ["a generic type", "Returns `Result<T>` from the handler."],
+    ["a comparison and an arrow", "Holds when 0 < n, and maps x => y, or a -> b."],
+    ["an ampersand in a name", "Fixes the R&D table."],
+    ["a link", "See [the docs](https://example.com/docs) for how."],
+    ["a checkbox list", "- [x] Added a test\n- [ ] Ran it"],
+    ["a word that holds review", "A review of the previews, and the notes for them."],
+    ["a link with a query string", "See [the docs](https://learn.microsoft.com/dotnet/api?view=net-10.0&tabs=windows&pivots=cs)."],
+    ["an ampersand and a word that no legacy reference starts", "Q&As and AT&T and fish&chips."],
+    ["accented Latin letters", "Überprüfung of the café, naïve."],
+    ["a micro sign", "Takes 3 \u00b5s."],
+    ["typographic marks", "A \u2013 B \u2014 \u201cC\u201d \u2018D\u2019 \u2026 \u2192 \u2264 \u2265 \u2713."],
+    ["a link whose query holds legacy-named keys", "See [docs](https://example.com/x?a=1&section=b&region=us&param=x&notify=1&center=2)."],
+    ["a bare URL whose query holds a legacy-named key", "See https://example.com/x?a=1&section=b."],
+    ["an autolink whose query holds a legacy-named key", "See <https://example.com/x?a=1&region=us>."],
+    ["a fenced code block with an operator", "```csharp\nvar a = b < c;\n```"],
+  ] as const) {
+    it(`publishes the reviewer's description when it holds ${scenario}`, async () => {
+      const prBodyFile = `${validPrBody}\n\n${text}`;
+      const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
+
+      await buildIssue(issue, branch, base, buildHost);
+
+      assert.equal(publishedPrBodies.at(-1), prBodyFile);
+    });
+  }
+
+  // The legacy names HTML decodes without a semicolon (the spec's list),
+  // written out here rather than read from the constant, so a dropped or
+  // mistyped name fails.
+  const legacyNames = [
+    "AElig", "AMP", "Aacute", "Acirc", "Agrave", "Aring", "Atilde", "Auml", "COPY", "Ccedil", "ETH", "Eacute", "Ecirc", "Egrave", "Euml", "GT",
+    "Iacute", "Icirc", "Igrave", "Iuml", "LT", "Ntilde", "Oacute", "Ocirc", "Ograve", "Oslash", "Otilde", "Ouml", "QUOT", "REG", "THORN",
+    "Uacute", "Ucirc", "Ugrave", "Uuml", "Yacute", "aacute", "acirc", "acute", "aelig", "agrave", "amp", "aring", "atilde", "auml", "brvbar",
+    "ccedil", "cedil", "cent", "copy", "curren", "deg", "divide", "eacute", "ecirc", "egrave", "eth", "euml", "frac12", "frac14", "frac34",
+    "gt", "iacute", "icirc", "iexcl", "igrave", "iquest", "iuml", "laquo", "lt", "macr", "micro", "middot", "nbsp", "not", "ntilde", "oacute",
+    "ocirc", "ograve", "ordf", "ordm", "oslash", "otilde", "ouml", "para", "plusmn", "pound", "quot", "raquo", "reg", "sect", "shy", "sup1",
+    "sup2", "sup3", "szlig", "thorn", "times", "uacute", "ucirc", "ugrave", "uml", "uuml", "yacute", "yen", "yuml",
+  ];
+
+  it("lists exactly the legacy character references HTML decodes without a semicolon", () => {
+    assert.deepEqual([...LEGACY_REFERENCES].sort(), [...legacyNames].sort());
+  });
+
+  for (const name of legacyNames) {
+    it(`falls back to the generic PR body when the file holds &${name} without its semicolon`, async () => {
+      const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile: `${validPrBody}\n\nUses &${name}x here.` });
+
+      await buildIssue(issue, branch, base, buildHost);
+
+      assert.equal(publishedPrBodies.at(-1), undefined);
+    });
+  }
+
+  it("falls back to the generic PR body when the file spells a letter of the phrase with a reference", async () => {
+    const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile: `${validPrBody}\n\nReview n&ordmtes.` });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(publishedPrBodies.at(-1), undefined);
+  });
+
+  it("publishes a description of exactly the limit", async () => {
+    const prBodyFile = `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT - validPrBody.length - 2)}`;
+    assert.equal(prBodyFile.length, PR_BODY_LIMIT);
+    const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(publishedPrBodies.at(-1), prBodyFile);
+  });
+
+  // R75: the body went out as written, so a closing keyword would close
+  // another issue and a mention would notify someone.
+  it("publishes the reviewer's description with its mentions and issue references broken, so it closes and notifies no one", async () => {
+    const prBodyFile = `${validPrBody}\n\nCloses #5, thanks @someone and @org/team, see mpaulosky/other#7, GH-9 and https://github.com/mpaulosky/other/issues/9.`;
+    const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    const published = publishedPrBodies.at(-1);
+    assert.equal(published, breakReferences(prBodyFile));
+    assert.doesNotMatch(published!, /@[A-Za-z0-9]|#\d|GH-\d|github\.com/i);
   });
 
   it("removes an earlier round's pr-body.md before any role runs, so its description never goes out with this round's change", async () => {

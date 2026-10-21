@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { HIDDEN_ELEMENTS } from "./build.mts";
 import { SANDBOX_SKILLS } from "./skills.mts";
 
 const sandcastleFile = (path: string) => new URL(`../${path}`, import.meta.url);
@@ -242,4 +243,40 @@ describe("pass role prompts' brief", () => {
     assert.match(prompt, /out of the brief's scope/);
     assert.doesNotMatch(prompt, /the issue's (acceptance criteria|scope)/);
   });
+});
+
+// Sandcastle runs every !`command` in a prompt before the agent sees it, and a
+// command that fails ends the run (the reviewer then publishes unreviewed). So
+// the only !` in a prompt is a line that starts a git command, closed on its
+// line; text that merely holds those two characters, such as a rule naming
+// `<!`, would run the command it matches.
+describe("prompt shell expansions", () => {
+  // Every prompt file Sandcastle reads, not only the reviewer's and the roles'.
+  const prompts = [
+    ...readdirSync(sandcastleFile("."))
+      .filter((name) => name.endsWith(".md"))
+      .sort(),
+    ...readdirSync(sandcastleFile("roles"))
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => `roles/${name}`),
+  ];
+
+  for (const prompt of prompts) {
+    it(`${prompt} holds an exclamation mark and a backtick only to run a git command`, () => {
+      for (const [number, line] of read(prompt).split("\n").entries()) {
+        if (!line.includes("!`")) continue;
+        assert.match(line, /^!`git [^`]+`$/, `${prompt}:${number + 1}: ${line}`);
+      }
+    });
+  }
+});
+
+// The host refuses a reviewer's PR body for these elements, and the prompt is
+// what tells the reviewer, so it names each one.
+describe("the reviewer prompt's refusals", () => {
+  for (const element of HIDDEN_ELEMENTS) {
+    it(`names the ${element} element the host refuses`, () => {
+      assert.ok(read("review-prompt.md").includes(`<${element}>`));
+    });
+  }
 });
