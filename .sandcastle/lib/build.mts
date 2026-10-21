@@ -27,7 +27,7 @@ import { commentOnIssue, markerComments, openPullRequest, repoName, type Sandcas
 import { handBackWorkflowChange, recordFailedAttempt, type WorkflowChange } from "./handback.mts";
 import { repoGitDir, worktreeLinkProblems, worktreePathFor } from "./host-safety.mts";
 import { runLimits, type RunLimits } from "./limits.mts";
-import { visibleLetters } from "./plain-text.mts";
+import { breakReferences, visibleLetters } from "./plain-text.mts";
 import { architectPromptArgs, backendPromptArgs, gateFixerPromptArgs, issuePromptArgs } from "./prompts.mts";
 import type { Outcome } from "./report.mts";
 import { containsSandboxSecret, containsSecret, sandboxSecrets } from "./sandbox-env.mts";
@@ -46,9 +46,10 @@ export const HIDDEN_ELEMENTS = ["script", "style", "noscript", "template", "text
 // not: an HTML comment, declaration, CDATA or processing instruction (`<!`,
 // `<?`); a link reference definition, which renders as nothing and may sit in
 // a quote or list and escape a bracket (`]:`); an element in HIDDEN_ELEMENTS;
-// and a character reference, which GitHub does show but which can spell what
+// and a character reference, with or without its semicolon (HTML decodes a
+// numeric one either way), which GitHub does show but which can spell what
 // the other checks look for.
-const HIDDEN_TEXT = new RegExp(String.raw`<[!?]|\]:|&#?\w+;|<\/?(?:${HIDDEN_ELEMENTS.join("|")})\b`, "i");
+const HIDDEN_TEXT = new RegExp(String.raw`<[!?]|\]:|&#?\w+;|&#[0-9a-z]|<\/?(?:${HIDDEN_ELEMENTS.join("|")})\b`, "i");
 
 // Re-exported for the callers and tests that already import it from here.
 export { UncountedStopError };
@@ -675,9 +676,10 @@ async function buildMarkedIssue(
   // The reviewer's PR description (#335): its Why, What changed and
   // Verification sections, for publish() to put under the marker and
   // `Closes #n`. Read inside the sandbox, as postDesignNote reads the design
-  // note, since an agent wrote it. It's published word for word (the squash
-  // commit, the Release's notes, the release blog), so anything it can't be
-  // trusted with as it is returns undefined, for publish()'s generic body,
+  // note, since an agent wrote it. It's published as written, apart from its
+  // mentions and issue references (the squash commit, the Release's notes,
+  // the release blog), so anything it can't be trusted with as it is returns
+  // undefined, for publish()'s generic body,
   // and the log says why: a missing description never blocks publishing.
   async function reviewerPrBody(): Promise<string | undefined> {
     let read: { stdout: string; exitCode: number };
@@ -715,7 +717,10 @@ async function buildMarkedIssue(
       log(`the reviewer's PR body ${problem}, so the PR gets the generic body`);
       return undefined;
     }
-    return prBody;
+    // Published word for word otherwise, so a closing keyword would close
+    // another issue and a mention would notify someone: break each, as the
+    // comments built from untrusted text do.
+    return breakReferences(prBody);
   }
 
   // Run the scribe. Returns false when the run threw or used up its

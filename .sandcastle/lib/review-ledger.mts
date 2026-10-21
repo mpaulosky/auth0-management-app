@@ -26,6 +26,7 @@
 // Run as a script: `scripts/review.sh <command>` (see USAGE below). Sandcastle
 // doesn't use this module yet; it lives here for its type-check and tests.
 
+import { isUtf8 } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -304,9 +305,10 @@ const pinnedDiff = [
 // couldn't read it: a text file a diff attribute (in .gitattributes or the
 // clone's info/attributes) marks binary, a binary file the branch turns into
 // text, which git prints whole as binary because one side is, or UTF-16 or
-// UTF-32 text (known by its byte order mark), whose NULs make it look binary. A real
-// binary file has a NUL byte in its first 8000 bytes, as git's own test for
-// one does: a NUL past them doesn't make git print a text file as binary.
+// UTF-32 text (known by its byte order mark), whose NULs make it look binary,
+// or UTF-8 text with a stray NUL. A real binary file has a NUL byte in its
+// first 8000 bytes, as git's own test for one does: a NUL past them doesn't
+// make git print a text file as binary.
 export function reviewPatch(cwd: string, base: string, head: string = headCommit(cwd)): Buffer {
   const patch = gitBytes(cwd, [...pinnedDiff, base, head]);
   const text = patch.toString("latin1");
@@ -322,6 +324,14 @@ export function reviewPatch(cwd: string, base: string, head: string = headCommit
       // turned into text (below), so that file needs a new path.
       const where = absent(before) ? "" : " at a new path, and delete this one";
       throw new Error(`${file}: this text is UTF-16 or UTF-32, which git shows only as "Binary files differ", so the reviewers couldn't read it. Re-encode it as UTF-8${where}.`);
+    }
+    // Text with a stray NUL, which git prints as binary: a real binary file
+    // isn't valid UTF-8, and one that is holds no text but NULs (R42).
+    if (!absent(after) && binary(after)) {
+      const bytes = gitBytes(cwd, ["cat-file", "blob", after as string]);
+      if (isUtf8(bytes) && bytes.some((byte) => byte !== 0)) {
+        throw new Error(`${file}: this UTF-8 text holds a NUL byte, so git shows it only as "Binary files differ" and the reviewers couldn't read it. Remove the NUL, or make the file a real binary format.`);
+      }
     }
     // An emptied file has no text to read, so there's nothing hidden to refuse.
     const emptied = !absent(after) && gitBytes(cwd, ["cat-file", "blob", after as string]).length === 0;

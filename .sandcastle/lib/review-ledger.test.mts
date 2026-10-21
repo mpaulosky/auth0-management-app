@@ -344,8 +344,11 @@ describe("diffKey", () => {
     [8000, false],
   ] as const) {
     it(`takes a NUL at byte ${index} of a new file ${binary ? "for" : "not for"} binary, as git does`, () => {
+      // An 0xff byte, which no UTF-8 text holds, so it is a binary file and
+      // not text with a stray NUL (refused below).
       const bytes = Buffer.alloc(8100, "a");
       bytes[index] = 0;
+      bytes[8099] = 0xff;
       writeFileSync(join(repo, "n.cs"), bytes);
       run(repo, "add", "n.cs");
       run(repo, "commit", "--quiet", "-m", "a file with a NUL");
@@ -353,6 +356,43 @@ describe("diffKey", () => {
       const patch = reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1");
 
       assert.equal(/^Binary files .*n\.cs.* differ$/m.test(patch), binary);
+    });
+  }
+
+  // R74 (R42): git prints text with a stray NUL as "Binary files differ", so
+  // the reviewers would never read it. Real binary files aren't valid UTF-8.
+  for (const [scenario, bytes] of [
+    ["a stray NUL", Buffer.from("class A { }\0\n")],
+    ["a NUL and multi-byte text", Buffer.from("// \u00fc \u691c\0\nclass A { }\n")],
+    ["a NUL at the very start", Buffer.from("\0class A { }\n")],
+  ] as const) {
+    it(`refuses a new file that is UTF-8 text with ${scenario}`, () => {
+      writeFileSync(join(repo, "n.cs"), bytes);
+      run(repo, "add", "n.cs");
+      run(repo, "commit", "--quiet", "-m", "a text file with a NUL");
+
+      assert.throws(() => diffKey(repo, mergeBase(repo)), /n\.cs.*NUL/);
+    });
+  }
+
+  it("refuses a change that adds a stray NUL to a text file", () => {
+    writeFileSync(join(repo, "app.cs"), "class A { }\0\n");
+    run(repo, "commit", "--quiet", "-am", "add a NUL");
+
+    assert.throws(() => diffKey(repo, mergeBase(repo)), /app\.cs.*NUL/);
+  });
+
+  for (const [scenario, bytes] of [
+    ["a PNG header", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d])],
+    ["bytes that aren't UTF-8", Buffer.from([0, 1, 2, 3, 0, 255])],
+    ["only NUL bytes, which hold no text", Buffer.alloc(16)],
+  ] as const) {
+    it(`still reviews a new binary file holding ${scenario}`, () => {
+      writeFileSync(join(repo, "logo.png"), bytes);
+      run(repo, "add", "logo.png");
+      run(repo, "commit", "--quiet", "-m", "an image");
+
+      assert.match(reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1"), /^Binary files .*logo\.png.* differ$/m);
     });
   }
 

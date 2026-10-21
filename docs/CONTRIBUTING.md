@@ -221,8 +221,8 @@ merge a fork's). On every other thread (one you decline, one
 raising a finding you accepted, one waiting on a decision), reply only "Left for the owner." and leave it unresolved for
 the maintainer. The reply is the same on all of them, so none points at an accepted security finding. An accepted
 finding's reason is in your PR's `## Review notes` unless it's a security one. Tell the maintainer any other reason
-privately, a security one in the private report [SECURITY.md](SECURITY.md#how-to-report) describes, never in an issue
-or a public comment.
+privately: by [email](mailto:matthew.paulosky@outlook.com), or for a security one in the private report
+[SECURITY.md](SECURITY.md#how-to-report) describes. Never put it in an issue or a public comment.
 
 ### Write code
 

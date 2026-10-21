@@ -102,7 +102,10 @@ sentences. Use exactly these three headings, in this order, and no others at tha
   `<plaintext>`, `<noembed>`, `<noframes>`. Not even in backticks or a code block: describe them in words.
   Never write the words "Review notes" either, in any form. The host joins every letter of the description, ignoring spaces, punctuation and line breaks, and refuses it
   wherever "review" is followed by "notes": run together, inside a name such as `renderReviewNotes`, inside a word such as "preview notes", or across a sentence ("the
-  review. Notes"). Name the file or describe the function instead, or keep the two words apart with another word.
+  review. Notes"). Name the file or describe the function instead, or keep the two words apart with another word. The join reads HTML attribute values, link titles and image
+  alt text too, drops letters that draw nothing, and takes look-alike letters from other scripts for the Latin ones.
+  The host breaks every at-mention and every hash or GH- issue reference with an invisible character before publishing, so write none: a `Closes` would not close and a mention
+  would not notify.
   The host refuses a description with any of these and publishes its generic one: it adds its own HTML-comment marker, Review notes hold a person's accepted findings,
   which only their local review writes, and nothing published may be hidden from the people reading it.
 

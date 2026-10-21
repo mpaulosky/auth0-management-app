@@ -18,6 +18,70 @@ describe("visibleLetters", () => {
     });
   }
 
+  // R61: a stray < and > far apart aren't a tag, so what's between them shows.
+  for (const [form, text] of [
+    ["a stray < and > on other lines", "a < b\n\n## Review notes\n\nc > d"],
+    ["a < left open before the heading", "x <\n## Review notes"],
+    ["a < before and a > after, in one line", "1 < 2 Review notes 3 > 2"],
+  ] as const) {
+    it(`reads ${form} without swallowing the words between them`, () => {
+      assert.ok(visibleLetters(text).includes("reviewnotes"), visibleLetters(text));
+    });
+  }
+
+  // R62: text in a tag's attributes, which a tooltip or a failed image shows.
+  for (const [form, text] of [
+    ["a double-quoted alt", '<img alt="Review notes" src="x.png">'],
+    ["a single-quoted title", "<a title='Review notes'>x</a>"],
+    ["an unquoted value", "<p title=reviewnotes>x</p>"],
+    ["an image's alt text", "![Review notes](x.png)"],
+    ["a link's title", '[x](https://example.com "Review notes")'],
+  ] as const) {
+    it(`reads ${form} as visible`, () => {
+      assert.ok(visibleLetters(text).includes("reviewnotes"), visibleLetters(text));
+    });
+  }
+
+  // R63: letters that draw nothing, and one that lowercases to two characters.
+  for (const [form, text] of [
+    ["a Hangul filler", "Review\u3164notes"],
+    ["a halfwidth Hangul filler", "Review\uffa0 notes"],
+    ["Hangul choseong and jungseong fillers", "Rev\u115f\u1160iew notes"],
+    ["a dotted capital I", "Rev\u0130ew notes"],
+    ["a dotless i", "Rev\u0131ew notes"],
+  ] as const) {
+    it(`reads ${form} as the letters a reader sees`, () => {
+      assert.equal(visibleLetters(text), "reviewnotes");
+    });
+  }
+
+  // R64: HTML decodes a numeric reference with no semicolon.
+  for (const [form, text] of [
+    ["a decimal reference without a semicolon", "Review&#32notes"],
+    ["a hexadecimal reference without a semicolon", "Re&#x76iew notes"],
+    ["a reference ending the line", "Review notes&#33"],
+  ] as const) {
+    it(`reads ${form} as the letters a reader sees`, () => {
+      assert.equal(visibleLetters(text), "reviewnotes");
+    });
+  }
+
+  // R65: letters of the phrase drawn by another script's look-alike.
+  for (const [form, text] of [
+    ["Cyrillic e and o", "R\u0435view n\u043et\u0435s"],
+    ["Cyrillic i and s", "Rev\u0456ew note\u0455"],
+    ["Greek omicron and nu", "Re\u03bdiew n\u03bfte\u0073"],
+    ["Armenian n", "Review \u0578otes"],
+  ] as const) {
+    it(`reads ${form} as the Latin letters they look like`, () => {
+      assert.equal(visibleLetters(text), "reviewnotes");
+    });
+  }
+
+  it("reads an HTML comment, which shows nothing, as nothing, even across lines", () => {
+    assert.equal(visibleLetters("a<!-- Review\nnotes -->b <?php hidden ?>c"), "abc");
+  });
+
   it("reads nothing as nothing, and markup alone as nothing", () => {
     assert.equal(visibleLetters(""), "");
     assert.equal(visibleLetters("<br><hr/> ## ** &nbsp; &#33;"), "");

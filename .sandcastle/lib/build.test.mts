@@ -29,6 +29,7 @@ import {
   type OptionalRole,
 } from "./config.mts";
 import { RunLimits } from "./limits.mts";
+import { breakReferences } from "./plain-text.mts";
 import type { SecretMatch } from "./scan.mts";
 
 const issue = { number: 69, title: "Run the gate", body: "", labels: ["Sandcastle"], comments: [], roles: [] as OptionalRole[] };
@@ -1185,10 +1186,19 @@ describe("buildIssue reading the reviewer's PR body", () => {
     ["holding Review notes with emphasis inside a word", `${validPrBody}\n\n## Re*view* **notes**`],
     ["holding Review notes with a character reference", `${validPrBody}\n\n## Review&#32;notes`],
     ["holding Review notes with an invisible format character", `${validPrBody}\n\n## Review\u200e\u034f notes`],
+    ["holding Review notes between a stray < and >", `${validPrBody}\n\n< x\n\n## Review notes\n\ny >`],
+    ["holding Review notes in an attribute", `${validPrBody}\n\n<img alt="Review notes" src="x.png">`],
+    ["holding Review notes as an image's alt text", `${validPrBody}\n\n![Review notes](x.png)`],
+    ["holding Review notes as a link's title", `${validPrBody}\n\n[x](https://example.com "Review notes")`],
+    ["holding Review notes with an invisible Hangul filler", `${validPrBody}\n\n## Review\u3164notes`],
+    ["holding Review notes with a dotted capital I", `${validPrBody}\n\n## Rev\u0130ew notes`],
+    ["holding Review notes with a reference lacking its semicolon", `${validPrBody}\n\n## Review&#32notes`],
+    ["holding Review notes in look-alike Cyrillic letters", `${validPrBody}\n\n## R\u0435view n\u043et\u0435s`],
     ["holding Review notes in a name", `${validPrBody}\n\nRenamed renderReviewNotes.`],
     // The character-reference rule alone: visibleLetters drops these without
     // reading the letters they spell.
     ["holding a named character reference that spells a letter", `${validPrBody}\n\n## Revi&escr;w notes`],
+    ["holding a numeric character reference without its semicolon", `${validPrBody}\n\nUses &#33 here.`],
     ["holding an ordinary character reference", `${validPrBody}\n\nUses &amp; here.`],
   ] as const) {
     it(`falls back to the generic PR body, and logs why, when the file is ${scenario}`, async () => {
@@ -1233,6 +1243,19 @@ describe("buildIssue reading the reviewer's PR body", () => {
       assert.equal(publishedPrBodies.at(-1), prBodyFile);
     });
   }
+
+  // R75: the body is published word for word, so a closing keyword would
+  // close another issue and a mention would notify someone.
+  it("publishes the reviewer's description with its mentions and issue references broken, so it closes and notifies no one", async () => {
+    const prBodyFile = `${validPrBody}\n\nCloses #5, thanks @someone and @org/team, see mpaulosky/other#7, GH-9 and https://github.com/mpaulosky/other/issues/9.`;
+    const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    const published = publishedPrBodies.at(-1);
+    assert.equal(published, breakReferences(prBodyFile));
+    assert.doesNotMatch(published!, /@[A-Za-z0-9]|#\d|GH-\d|github\.com/i);
+  });
 
   it("removes an earlier round's pr-body.md before any role runs, so its description never goes out with this round's change", async () => {
     const { workCommands, buildHost } = host([0, 0], { prBodyFile: validPrBody });
