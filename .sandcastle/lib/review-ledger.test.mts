@@ -764,7 +764,19 @@ describe("recordReview", () => {
     rewriteFindings(path, ({ severity: _, ...rest }) => rest);
 
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
-    assert.equal(latestLedger(repo, mergeBase(repo))?.findings[0]?.severity, undefined);
+    const latest = latestLedger(repo, mergeBase(repo));
+    assert.equal(latest?.key, ledger.key);
+    assert.equal(latest?.findings[0]?.severity, undefined);
+  });
+
+  it("accepts an open finding on a ledger recorded before findings had a severity, so the check passes", () => {
+    const ledger = record([finding({ status: "open", test: null })]);
+    rewriteFindings(join(ledgerDir(repo), `${ledger.key}.json`), ({ severity: _, ...rest }) => ({ ...rest, security: false }));
+
+    acceptFinding(repo, mergeBase(repo), "R1", "Old.");
+
+    assert.equal(readLedger(repo, ledger.key)?.findings[0]?.status, "accepted");
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
   });
 
   it("still reads a ledger recorded with a security mark and no severity, and treats its open finding as a Warning that blocks", () => {
@@ -993,9 +1005,10 @@ describe("renderReport", () => {
       sections.map((section) => section.split("\n")[0]),
       ["Critical", "Warning", "Advisory"],
     );
-    assert.match(sections[0] ?? "", /^\| R2 \|/m);
-    assert.match(sections[1] ?? "", /^\| R3 \|/m);
-    assert.match(sections[2] ?? "", /^\| R1 \|/m);
+    assert.deepEqual(
+      sections.map((section) => [...section.matchAll(/^\| (R\d+) \|/gm)].map((match) => match[1])),
+      [["R2"], ["R3"], ["R1"]],
+    );
   });
 
   it("leaves out a severity no finding has", () => {
