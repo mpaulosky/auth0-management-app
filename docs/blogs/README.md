@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-10-21 | [docs(README): Point the Releases table to how Releases are cut](2026-10-21-pr-86-docs-readme-point-the-releases-table-to-how-releases-are-cut.md) | release,automation |
 | 2026-10-21 | [feat(review): Review every branch locally before it's pushed](2026-10-21-pr-82-feat-review-review-every-branch-locally-before-it-s-pushed.md) | release,automation |
 | 2026-10-20 | [feat(sandcastle): Show why each Sandcastle PR is held](2026-10-20-pr-79-feat-sandcastle-show-why-each-sandcastle-pr-is-held.md) | release,automation |
 | 2026-10-20 | [feat: Warn when the git hooks aren't enabled, so the pre-push gate isn't silently skipped](2026-10-20-pr-75-feat-warn-when-the-git-hooks-aren-t-enabled-so-the-pre-push-gate-isn-t-silently-skipped.md) | release,automation |
