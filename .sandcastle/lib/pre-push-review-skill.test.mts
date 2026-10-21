@@ -83,10 +83,22 @@ describe("the pre-push-review skill's follow-up issue", () => {
     assert.match(skill, /Never write the body by hand/);
   });
 
-  // record refuses an earlier id, so a re-raised finding gets a new one.
-  it("counts a re-raised Advisory finding as listed when the issue lists the id it names", () => {
-    assert.match(skill, /recorded open again as Advisory, its summary opening with the old id\s+\(`R3 again: \.\.\.`\)/);
-    assert.match(skill, /a finding whose\s+summary opens with an id the issue lists counts as listed/);
+  // record refuses an earlier id, so a re-raised finding has a new one, and
+  // an amend or rebase can start the numbering again.
+  const flat = skill.replace(/\s+/g, " ");
+
+  it("names a re-raised Advisory finding by the id the follow-up issue lists, however often it's re-raised", () => {
+    assert.ok(flat.includes("its summary opening with the id the follow-up issue lists it under (`R3 again: ...`), kept from the old summary when that already opens with one"));
+  });
+
+  it("counts a finding as listed only by an id the issue lists with the same path", () => {
+    assert.ok(flat.includes("a finding counts as listed when the issue lists the id its summary opens with, or its own id, with the same path"));
+    assert.ok(flat.includes("until an amend or rebase leaves the earlier reviews behind and the numbering starts again"));
+  });
+
+  it("says the agent numbers findings, and record only refuses a reused id", () => {
+    assert.ok(flat.includes("The agent numbers findings from `scripts/review.sh next`, and `record` refuses a reused id"));
+    assert.doesNotMatch(flat, /`record` gives a re-raised finding a new id/);
   });
 
   it("is looked for only among the person's own issues, by its exact title", () => {
