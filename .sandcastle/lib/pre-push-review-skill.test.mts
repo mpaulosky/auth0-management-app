@@ -211,3 +211,11 @@ describe("the pre-push-review skill's Critical grade", () => {
     assert.ok(flatBar.includes("`critical` when in doubt between `critical` and `advisory`"));
   });
 });
+
+describe("CLAUDE.md's list of the gate's own checks", () => {
+  it("names the gh repository check, which runs on every gate", () => {
+    const flat = claude.replace(/\s+/g, " ");
+
+    assert.ok(flat.includes("the local review check, the `gh` repository check on every gate,"));
+  });
+});

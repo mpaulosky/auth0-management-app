@@ -106,9 +106,11 @@ SANDCASTLE_LABEL=<label> pnpm run sandcastle          # work the issues labelled
 ```
 
 `scripts/gate.sh` is the definition of "ready to push": lint of the changed YAML, Markdown, workflows and shell
-scripts, then this repo's own checks in `.github/ci/gate-checks.sh` (the local review check, then the Copilot review sync
-check, the test of `scripts/check-git-hooks.sh` and the Sandcastle check, each when its files changed), then a Release
-build and each test project under `tests/`, run one by one.
+scripts, then this repo's own checks in `.github/ci/gate-checks.sh` (the local review check, the `gh` repository check on
+every gate, which refuses a `gh` command in `.claude/skills/` or `scripts/` given neither
+`GH_REPO=mpaulosky/auth0-management-app` nor `--repo`, then the Copilot review sync check, the test of
+`scripts/check-git-hooks.sh` and the Sandcastle check, each when its files changed), then a Release build and each test
+project under `tests/`, run one by one.
 `scripts/gate.sh` is an Owned file of the CI Baseline (see `.claude/rules/baseline.md`), overwritten on every Apply,
 so a new repo-only check goes in `gate-checks.sh`. Don't use `dotnet test --solution` as the check: under Microsoft
 Testing Platform it can report zero tests while the project runs pass. The pre-push hook runs the gate after its own branch

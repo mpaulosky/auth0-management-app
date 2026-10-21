@@ -232,12 +232,22 @@ describe("gate-checks.sh's gh repository check", () => {
     [script, "#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app; echo hi\ngh pr checks 3\n"],
     [script, "#!/usr/bin/env bash\nexport GH_REPO=mpaulosky/auth0-management-app && echo hi\ngh pr checks 3\n"],
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo.`\n"],
+    // --repo and -R name the repository only after the subcommand, never for
+    // gh api, which has neither, and only for their own gh command.
+    [skill, "Run `gh api repos/{owner}/{repo}/pulls --repo o/r`.\n"],
+    [skill, 'Run `gh pr view 3 --repo ""`.\n'],
+    [skill, "Run `gh pr view 3 --repo`.\n"],
+    [skill, "Run `gh pr view 3 --repository o/r`.\n"],
+    [skill, "Run `gh pr view 3; gh pr checks 3 --repo o/r`.\n"],
+    [skill, "Run `gh pr view 3` and then `gh pr checks 3 -R o/r`.\n"],
+    [skill, "Run `gh pr view 3 && GH_REPO=o/r gh pr checks 3 --repo o/r`.\n"],
   ]) {
     it(`fails on a gh command not told its repository: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
 
       assert.equal(result.status, 1);
       assert.match(result.stderr, /GH_REPO=mpaulosky\/auth0-management-app/);
+      assert.match(result.stderr, /--repo mpaulosky\/auth0-management-app/);
     });
   }
 
@@ -279,6 +289,11 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo-x view`.\n"],
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo_x view`.\n"],
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo2 view`.\n"],
+    [skill, "Run `gh pr view 3 --repo mpaulosky/auth0-management-app`.\n"],
+    [skill, "Run `gh issue list -R mpaulosky/auth0-management-app --state open`.\n"],
+    [skill, "Run `gh pr checks 3 --repo=mpaulosky/auth0-management-app`.\n"],
+    [skill, "Run `gh pr view 3 --repo o/r` and `gh issue view 4 -R o/r`.\n"],
+    [script, '#!/usr/bin/env bash\ngh pr checks "$pr" --repo "$repo" --json bucket\n'],
   ]) {
     it(`passes a gh command told its repository, or text that runs none: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");

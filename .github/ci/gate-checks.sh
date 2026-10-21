@@ -55,8 +55,9 @@ fi
 # every gh command, placeholders in gh api included, whatever their spelling,
 # so the skills and scripts run gh with it set: a shell file (a .sh name or a
 # #! first line) exports it before its first gh command, and a skill writes
-# GH_REPO=mpaulosky/auth0-management-app before each one. gh repo's
-# subcommands don't read it, so each takes the repository as its first
+# GH_REPO=mpaulosky/auth0-management-app before each one, or gives it
+# --repo (or -R) after its subcommand, which gh api has no flag for. gh repo's
+# subcommands don't read GH_REPO, so each takes the repository as its first
 # argument (or -R), except list, create and clone, which name their own.
 # GH_REPO counts only as a prefix of the gh command itself, or an export
 # alone on its line but for a comment, with a value that isn't empty. Text
@@ -91,7 +92,16 @@ if ((${#gh_files[@]} > 0)); then
       exports = "^[ \t]*export GH_REPO=" value "[ \t]*(;[ \t]*)?(#.*)?$"
       # gh repo <subcommand>, then its repository: o/r (bare or quoted, not a
       # redirect), <owner>/<repo>, a variable, or -R and --repo.
+      # --repo or -R with its value, after the subcommand of a gh command
+      # other than gh api.
+      flagged = "^[a-z][a-z-]*[ \t][^`;&|()]*[ \t](-R|--repo)([ \t]+|=)" value "([ \t`;&|()]|$)"
       named = "^repo[ \t]+[a-z-]+[ \t]+([\"" q "]?[^- \t<>`\"" q "$&|;(][^ \t`<>&|;\"" q "]*/|<[A-Za-z]|\"?[$]|-R[ =]|--repo[ =])"
+    }
+    # The text of one gh command: up to the next command or gh.
+    function own(text) {
+      if (match(text, /[`;&|()]/)) text = substr(text, 1, RSTART - 1)
+      if (match(text, /[^A-Za-z0-9_.-]gh[ \t]/)) text = substr(text, 1, RSTART)
+      return text
     }
     FNR == 1 { shell = (FILENAME ~ /\.sh$/ || $0 ~ /^#!/); exported = 0 }
     /^[ \t]*#/ { next }
@@ -116,7 +126,7 @@ if ((${#gh_files[@]} > 0)); then
             print FILENAME ":" FNR ": " $0
             next
           }
-        } else if (!(shell && exported) && before !~ told) {
+        } else if (!(shell && exported) && before !~ told && !(rest !~ /^api([^A-Za-z0-9_-]|$)/ && own(rest) ~ flagged)) {
           print FILENAME ":" FNR ": " $0
           next
         }
@@ -124,7 +134,7 @@ if ((${#gh_files[@]} > 0)); then
     }' "${gh_files[@]}")"
 fi
 if [[ -n "$untold" ]]; then
-  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, alone on its line but for a comment, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill, keeping each gh command on one line. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
+  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, alone on its line but for a comment, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill, or give the command --repo mpaulosky/auth0-management-app (or -R) after its subcommand, keeping each gh command on one line. gh api has no --repo: give it GH_REPO. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
   echo "$untold" >&2
   exit 1
 fi
