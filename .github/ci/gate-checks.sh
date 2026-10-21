@@ -57,8 +57,10 @@ fi
 # GH_REPO=mpaulosky/auth0-management-app before each one. gh repo's
 # subcommands don't read it, so each takes the repository as its first
 # argument (or -R), except list, create and clone, which name their own.
-# Text that reads gh and a word counts as a command, so prose rewords it, and
-# a gh command is kept on one line: a line that ends in gh fails.
+# GH_REPO counts only as a prefix of the gh command itself, with a value
+# that isn't empty. Text that reads gh and a word or flag counts as a command,
+# so prose rewords it, and a gh command is kept on one line: a line that ends
+# in gh, or continues it with a backslash, fails.
 # Whole-line comments are skipped. Only files the worktree has are read, and a
 # listing that fails fails the gate. Cheap enough to run on every gate.
 echo -e "${CYAN}🐙 gh commands are told their repository...${RESET}"
@@ -70,24 +72,40 @@ while IFS= read -r -d '' file; do
 done < <(git ls-files -z -- .claude/skills scripts)
 untold=""
 if ((${#gh_files[@]} > 0)); then
-  untold="$(awk '
+  # q is an apostrophe, which the awk program, in single quotes, can't hold.
+  untold="$(awk -v q="'" '
+    BEGIN {
+      # A value gh receives: quoted and not empty, or bare up to the next blank.
+      value = "(\"[^\" \t]+\"|" q "[^" q " \t]+" q "|[^ \t`\"" q ";&|,()<>]+)"
+      told = "(^|[^A-Za-z0-9_])GH_REPO=" value "[ \t]+$"
+      exports = "^[ \t]*export GH_REPO=" value
+      # gh repo <subcommand>, then its repository: o/r (bare or quoted, not a
+      # redirect), <owner>/<repo>, a variable, or -R and --repo.
+      named = "^repo[ \t]+[a-z-]+[ \t]+([\"" q "]?[^- \t<>`\"" q "$&|;(][^ \t`<>&|;\"" q "]*/|<[A-Za-z]|\"?[$]|-R[ =]|--repo[ =])"
+    }
     FNR == 1 { shell = (FILENAME ~ /\.sh$/ || $0 ~ /^#!/); exported = 0 }
     /^[ \t]*#/ { next }
-    shell && /^[ \t]*export GH_REPO=[^ \t]/ { exported = 1 }
-    # A line that ends in gh leaves its command on the next line, out of sight.
-    /(^|[^A-Za-z0-9_.-])gh[ \t]*$/ { print FILENAME ":" FNR ": " $0; next }
+    shell && $0 ~ exports { exported = 1 }
+    # A line that ends in gh, or continues gh onto the next one, leaves its
+    # command out of sight. Where GH_REPO is exported, only gh repo needs
+    # its words, so a bare gh there (command -v gh) is no command.
+    /(^|[^A-Za-z0-9_.-])gh[ \t]+\\$/ || (!(shell && exported) && /(^|[^A-Za-z0-9_.-])gh[ \t]*$/) {
+      print FILENAME ":" FNR ": " $0
+      next
+    }
     {
       rest = $0
-      while (match(rest, /(^|[^A-Za-z0-9_.-])gh [a-z]/)) {
-        at = RSTART + RLENGTH - 4
+      while (match(rest, /(^|[^A-Za-z0-9_.-])gh[ \t]+[a-z-]/)) {
+        at = RSTART + (substr(rest, RSTART, 1) == "g" ? 0 : 1)
         before = substr(rest, 1, at - 1)
-        rest = substr(rest, at + 3)
+        rest = substr(rest, at + 2)
+        sub(/^[ \t]+/, "", rest)
         if (rest ~ /^repo[ \t]+[a-z-]/) {
-          if (rest !~ /^repo[ \t]+(list|create|clone)/ && rest !~ /^repo[ \t]+[a-z-]+[ \t]+([^- \t<>`"$][^ \t`]*\/|<[A-Za-z]|"?\$|-R[ =]|--repo[ =])/) {
+          if (rest !~ /^repo[ \t]+(list|create|clone)/ && rest !~ named) {
             print FILENAME ":" FNR ": " $0
             next
           }
-        } else if (!(shell && exported) && before !~ /GH_REPO=[^ \t`]+[ \t]+$/) {
+        } else if (!(shell && exported) && before !~ told) {
           print FILENAME ":" FNR ": " $0
           next
         }
@@ -126,11 +144,12 @@ fi
 # gate.sh pins, review-ledger.test.mts and gate-checks.test.mts check the
 # local review's ledger (and its Owned list against .claude/rules/baseline.md)
 # and this file, and pre-push-review-skill.test.mts checks that the review's
-# reviewers are read-only, and readme.test.mts checks README.md's Releases
-# section, so a change to any of them reruns them.
+# reviewers are read-only, readme.test.mts checks README.md's Releases
+# section, and config.test.mts and watch-pr.test.mts check scripts/watch-pr.sh,
+# so a change to any of them reruns them.
 if changed .sandcastle README.md package.json ':(glob)pnpm-*.yaml' scripts/check-branch-name.sh .claude/skills/code-review scripts/gate.sh \
   scripts/review.sh .github/ci/gate-checks.sh .claude/rules/baseline.md .claude/agents .claude/skills/pre-push-review \
-  .claude/settings.json; then
+  .claude/settings.json scripts/watch-pr.sh; then
   echo -e "${CYAN}🏰 Sandcastle TypeScript check...${RESET}"
   run_clean pnpm run check:sandcastle
 else

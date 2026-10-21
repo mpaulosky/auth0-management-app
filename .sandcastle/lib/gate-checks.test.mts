@@ -116,6 +116,22 @@ describe("gate-checks.sh's local review check", () => {
     assert.match(calls(), /^run check:sandcastle$/m);
   });
 
+  it("reruns the Sandcastle check when scripts/watch-pr.sh changes, since watch-pr.test.mts runs it", () => {
+    const base = head();
+    writeFileSync(join(repo, "scripts/watch-pr.sh"), "#!/usr/bin/env bash\n");
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "add", "."], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "watch"], { cwd: repo });
+    const bin = join(repo, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "pnpm"), `#!/bin/sh\necho "$*" >> '${log}'\n`);
+    chmodSync(join(bin, "pnpm"), 0o755);
+
+    const result = gate(base, { GATE_SKIP_REVIEW: "1", PATH: `${bin}:${process.env.PATH ?? ""}` });
+
+    assert.match(result.stdout, /Sandcastle TypeScript check/);
+    assert.match(calls(), /^run check:sandcastle$/m);
+  });
+
   it("doesn't skip the check for any other value of GATE_SKIP_REVIEW", () => {
     const result = gate(head(), { GATE_SKIP_REVIEW: "true", REVIEW_EXIT: "1" });
 
@@ -157,6 +173,23 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo edit --description x`.\n"],
     [skill, "Read it with `gh\npr view 3`.\n"],
     [skill, "Read it with `GH_REPO=mpaulosky/auth0-management-app gh\npr view 3`.\n"],
+    [skill, "Read it with `gh  pr view 3`.\n"],
+    [skill, "Read it with `gh\tpr view 3`.\n"],
+    [skill, "Read it with `gh \\\n  pr view 3`.\n"],
+    [skill, "Read it with `gh --repo o/r pr view 3`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app; gh pr view 3`.\n"],
+    [skill, "Set GH_REPO=mpaulosky/auth0-management-app, gh pr view 3.\n"],
+    [skill, "Run `NOT_GH_REPO=mpaulosky/auth0-management-app gh pr view 3`.\n"],
+    [skill, 'Run `GH_REPO="" gh pr view 3`.\n'],
+    [skill, "Run `GH_REPO='' gh pr view 3`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app echo x && gh pr view 3`.\n"],
+    [skill, "export GH_REPO=mpaulosky/auth0-management-app\nRun `gh pr view 3`.\n"],
+    [script, '#!/usr/bin/env bash\nexport GH_REPO=""\ngh pr checks 3\n'],
+    [script, "#!/usr/bin/env bash\nexport GH_REPO=''\ngh pr checks 3\n"],
+    [script, "#!/usr/bin/env bash\nexport GH_REPO=;\ngh pr checks 3\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view 2>/dev/null`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view &>/dev/null`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view >/tmp/out`.\n"],
   ]) {
     it(`fails on a gh command not told its repository: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
@@ -181,6 +214,17 @@ describe("gate-checks.sh's gh repository check", () => {
     [script, `#!/usr/bin/env bash\n# gh pr checks is used below\n${exported}gh pr checks 3\n`],
     [script, "#!/usr/bin/env bash\necho done\n"],
     ["docs/notes.md", "gh pr view 3\n"],
+    [skill, 'Run `GH_REPO=mpaulosky/auth0-management-app gh repo view "o/r" --json name`.\n'],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view 'o/r' --json name`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view $repo`.\n"],
+    [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo rename --repo o/r new`.\n"],
+    [skill, "Run `gh repo create --public`.\n"],
+    [skill, 'Run `GH_REPO="mpaulosky/auth0-management-app" gh pr view 3`.\n'],
+    [skill, "That is enough\nor high\nand a high-gh pr view, or a sigh pr.\n"],
+    ["scripts/plain.sh", "export GH_REPO=mpaulosky/auth0-management-app\ngh pr checks 3\n"],
+    ["scripts/watch", `#!/usr/bin/env bash\n${exported}gh pr checks 3\n`],
+    [script, "#!/usr/bin/env bash\nexport GH_REPO='mpaulosky/auth0-management-app'\ngh pr checks 3\n"],
+    [script, `#!/usr/bin/env bash\n${exported}command -v gh\nif ! command -v gh; then exit 1; fi\n`],
   ]) {
     it(`passes a gh command told its repository, or text that runs none: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");
@@ -188,6 +232,16 @@ describe("gate-checks.sh's gh repository check", () => {
       assert.equal(result.status, 0, result.stderr);
     });
   }
+
+  it("reads a script's export of GH_REPO for that script only", () => {
+    assert.equal(gateWith("scripts/a.sh", `#!/usr/bin/env bash\n${exported}gh pr checks 3\n`).status, 0);
+
+    const result = gateWith("scripts/b.sh", "#!/usr/bin/env bash\ngh pr checks 3\n");
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /scripts\/b\.sh:2:/);
+    assert.doesNotMatch(result.stderr, /scripts\/a\.sh/);
+  });
 
   it("names the file and line of each command it refuses", () => {
     const result = gateWith(".claude/skills/a b/SKILL.md", "first\nRun `gh pr view 3`.\n");
