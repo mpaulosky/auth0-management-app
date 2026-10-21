@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { plainText, visibleLetters } from "./plain-text.mts";
+import { CAPITAL_LOOK_ALIKES, LOOK_ALIKES, plainText, visibleLetters } from "./plain-text.mts";
 
 describe("visibleLetters", () => {
   for (const [form, text] of [
@@ -28,6 +28,66 @@ describe("visibleLetters", () => {
       assert.ok(visibleLetters(text).includes("reviewnotes"), visibleLetters(text));
     });
   }
+
+  // Round 2: GitHub shows a < that isn't a tag, so the words after it count.
+  for (const [form, text] of [
+    ["a < followed by a letter, then a blank line", "<x\n\n## Review notes\n\ny>"],
+    ["a < followed by a letter, then a heading line", "a <b\n## Review notes\n>"],
+    ["a < followed by a letter, with a comma inside", "Compare <x Review, notes> here"],
+    ["a Markdown autolink", "<https://example.com/Review-notes>"],
+    ["a generic type left open", "Result<T Review notes"],
+  ] as const) {
+    it(`reads ${form} as text`, () => {
+      assert.ok(visibleLetters(text).includes("reviewnotes"), visibleLetters(text));
+    });
+  }
+
+  // Round 2: a tag inside the phrase mustn't split it, and a tag's own words
+  // (names and values) count too, since a raw reader sees them.
+  for (const [form, text] of [
+    ["an anchor inside the phrase", 'Re<a href="u">view notes</a>'],
+    ["a span inside the phrase", 'Rev<span class="x">iew notes'],
+    ["a span in a heading", '## <span title="x">Review notes</span>'],
+    ["a heading with an id", '<h2 id="notes">Review notes</h2>'],
+    ["a < inside a quoted value", '<img alt="<Review notes>" src="x.png">'],
+    ["words as valueless attributes", "<x Review notes>"],
+    ["a tag open across a line", '<img\n  alt="Review notes">'],
+  ] as const) {
+    it(`reads ${form} as visible`, () => {
+      assert.ok(visibleLetters(text).includes("reviewnotes"), visibleLetters(text));
+    });
+  }
+
+  it("puts the text before the attribute words, so a line that opens with the phrase starts with it", () => {
+    assert.ok(visibleLetters('<h2 id="notes" class="x">Review notes</h2>').startsWith("reviewnotes"));
+  });
+
+  // Round 2: every look-alike in the tables is read as its letter, capital or not.
+  for (const [letter, latin] of Object.entries(LOOK_ALIKES)) {
+    it(`reads U+${letter.codePointAt(0)!.toString(16).padStart(4, "0")} as ${latin}`, () => {
+      assert.equal(visibleLetters(letter), latin);
+    });
+  }
+  for (const [letter, latin] of Object.entries(CAPITAL_LOOK_ALIKES)) {
+    it(`reads capital U+${letter.codePointAt(0)!.toString(16).padStart(4, "0")} as ${latin}`, () => {
+      assert.equal(visibleLetters(letter), latin);
+    });
+  }
+
+  for (const [form, text] of [
+    ["Greek capitals", "R\u0395VI\u0395W \u039dOTES"],
+    ["Cyrillic capitals", "R\u0415VIEW N\u041eT\u0415\u0405"],
+    ["Latin small capitals", "\u0280\u1d07\u1d20\u026a\u1d07\u1d21 \u0274\u1d0f\u1d1b\u1d07\ua731"],
+    ["Greek lowercase epsilon", "R\u03b5view notes"],
+  ] as const) {
+    it(`reads the phrase in ${form}`, () => {
+      assert.equal(visibleLetters(text), "reviewnotes");
+    });
+  }
+
+  it("doesn't take a Cyrillic or Greek capital that looks like P for an R", () => {
+    assert.equal(visibleLetters("\u0420 \u03a1"), "\u0440\u03c1");
+  });
 
   // R62: text in a tag's attributes, which a tooltip or a failed image shows.
   for (const [form, text] of [

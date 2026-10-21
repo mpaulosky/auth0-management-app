@@ -338,40 +338,47 @@ describe("diffKey", () => {
   });
 
   // git calls a file binary when a NUL is among its first 8000 bytes: the byte
-  // at index 7999 is the last it looks at.
+  // at index 7999 is the last it looks at. A text file git takes for binary is
+  // refused, and git taking it for text is no concern.
   for (const [index, binary] of [
     [7999, true],
     [8000, false],
   ] as const) {
     it(`takes a NUL at byte ${index} of a new file ${binary ? "for" : "not for"} binary, as git does`, () => {
-      // An 0xff byte, which no UTF-8 text holds, so it is a binary file and
-      // not text with a stray NUL (refused below).
       const bytes = Buffer.alloc(8100, "a");
       bytes[index] = 0;
-      bytes[8099] = 0xff;
       writeFileSync(join(repo, "n.cs"), bytes);
       run(repo, "add", "n.cs");
       run(repo, "commit", "--quiet", "-m", "a file with a NUL");
 
-      const patch = reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1");
-
-      assert.equal(/^Binary files .*n\.cs.* differ$/m.test(patch), binary);
+      if (binary) {
+        assert.throws(() => diffKey(repo, mergeBase(repo)), /n\.cs.*NUL/);
+      } else {
+        assert.doesNotMatch(reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1"), /^Binary files/m);
+      }
     });
   }
 
-  // R74 (R42): git prints text with a stray NUL as "Binary files differ", so
-  // the reviewers would never read it. Real binary files aren't valid UTF-8.
-  for (const [scenario, bytes] of [
-    ["a stray NUL", Buffer.from("class A { }\0\n")],
-    ["a NUL and multi-byte text", Buffer.from("// \u00fc \u691c\0\nclass A { }\n")],
-    ["a NUL at the very start", Buffer.from("\0class A { }\n")],
+  // R74 (R42): git prints a text file with a stray NUL as "Binary files
+  // differ", so the reviewers would never read it. Only a file with a binary
+  // format's extension may be binary: whatever its bytes, since one 0xff
+  // byte would otherwise make it look like a real binary file.
+  for (const [scenario, name, bytes] of [
+    ["a stray NUL", "n.cs", Buffer.from("class A { }\0\n")],
+    ["a NUL and multi-byte text", "n.md", Buffer.from("// \u00fc \u691c\0\nclass A { }\n")],
+    ["a NUL at the very start", "n.sh", Buffer.from("\0echo hi\n")],
+    ["a NUL and an 0xff byte, which isn't UTF-8", "n.mts", Buffer.from("// \0\xff\nexport {};\n")],
+    ["a NUL and a Latin-1 letter", "n.cs", Buffer.from("// \0\xe9\nclass A { }\n")],
+    ["no extension", "script", Buffer.from("echo hi\0\xff\n")],
+    ["the name of a binary format and no dot", "png", Buffer.from("echo hi\0\xff\n")],
+    ["an extension that only ends like a binary one", "n.cs.png.txt", Buffer.from("echo hi\0\xff\n")],
   ] as const) {
-    it(`refuses a new file that is UTF-8 text with ${scenario}`, () => {
-      writeFileSync(join(repo, "n.cs"), bytes);
-      run(repo, "add", "n.cs");
+    it(`refuses a new ${name} holding ${scenario}`, () => {
+      writeFileSync(join(repo, name), bytes);
+      run(repo, "add", name);
       run(repo, "commit", "--quiet", "-m", "a text file with a NUL");
 
-      assert.throws(() => diffKey(repo, mergeBase(repo)), /n\.cs.*NUL/);
+      assert.throws(() => diffKey(repo, mergeBase(repo)), /NUL/);
     });
   }
 
@@ -382,17 +389,21 @@ describe("diffKey", () => {
     assert.throws(() => diffKey(repo, mergeBase(repo)), /app\.cs.*NUL/);
   });
 
-  for (const [scenario, bytes] of [
-    ["a PNG header", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d])],
-    ["bytes that aren't UTF-8", Buffer.from([0, 1, 2, 3, 0, 255])],
-    ["only NUL bytes, which hold no text", Buffer.alloc(16)],
+  for (const [scenario, name, bytes] of [
+    ["a PNG header", "logo.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d])],
+    ["bytes that aren't UTF-8", "logo.png", Buffer.from([0, 1, 2, 3, 0, 255])],
+    ["only NUL bytes", "logo.png", Buffer.alloc(16)],
+    ["bytes all below 0x80, as an empty WebAssembly module is", "m.wasm", Buffer.from("\0asm\x01\0\0\0", "latin1")],
+    ["an empty ZIP's bytes", "a.zip", Buffer.from("PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", "latin1")],
+    ["an upper-case extension", "LOGO.PNG", Buffer.from([0, 1, 2, 3])],
+    ["a name with a dot before the extension", "my.logo.v2.ico", Buffer.from([0, 0, 1, 0])],
   ] as const) {
-    it(`still reviews a new binary file holding ${scenario}`, () => {
-      writeFileSync(join(repo, "logo.png"), bytes);
-      run(repo, "add", "logo.png");
-      run(repo, "commit", "--quiet", "-m", "an image");
+    it(`still reviews a new binary file, ${name}, holding ${scenario}`, () => {
+      writeFileSync(join(repo, name), bytes);
+      run(repo, "add", name);
+      run(repo, "commit", "--quiet", "-m", "a binary file");
 
-      assert.match(reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1"), /^Binary files .*logo\.png.* differ$/m);
+      assert.match(reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")).toString("latin1"), /^Binary files .* differ$/m);
     });
   }
 
@@ -1703,6 +1714,9 @@ describe("spliceReviewNotes", () => {
     ["a Review notes heading in emphasis with a colon", "## Why\n\n## **Review notes:**\n\nOld.\n"],
     ["a setext Review notes heading", "## Why\n\nReview notes\n---\n\nOld.\n"],
     ["an HTML Review notes heading", "## Why\n\n<h2>Review notes</h2>\n\nOld.\n"],
+    ["an HTML Review notes heading with an attribute", '## Why\n\n<h2 align="left">Review notes</h2>\n\nOld.\n'],
+    ["an HTML Review notes heading with an id", '## Why\n\n<h2 id="notes">Review notes</h2>\n\nOld.\n'],
+    ["a Review notes heading inside a span with a title", '## Why\n\n## <span title="x">Review notes</span>\n\nOld.\n'],
     ["a setext Review notes heading underlined with =", "## Why\n\nReview notes\n===\n\nOld.\n"],
     ["a Review notes heading in a quote", "## Why\n\n> ## Review notes\n\nOld.\n"],
     ["a Review notes heading in a list item", "## Why\n\n- ## Review notes\n\nOld.\n"],

@@ -41,47 +41,71 @@ export function plainText(text: string): string {
 // A code point as text, or nothing for one that isn't a character.
 const character = (codePoint: number) => (codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : "");
 
-// Letters from other scripts that draw like the Latin ones of "Review notes"
-// (R, e, v, i, w, n, o, t, s), which NFKC leaves alone. Only those nine
-// letters: no list of every look-alike could be complete.
-const LOOK_ALIKES: Record<string, string> = {
+// Letters that draw like the Latin ones of "Review notes" (R, e, v, i, w, n,
+// o, t, s) and that NFKC leaves alone: from other scripts, and a few Latin
+// ones (the dotless i, the small capitals). Only those nine letters: no list
+// of every look-alike could be complete. The lowercase table is applied
+// after lowercasing, the capitals one before it, since a capital Greek Nu
+// lowercases to a nu, which looks like a v. Cyrillic and Greek capitals that
+// look like P or B aren't here: the phrase has neither.
+export const LOOK_ALIKES: Record<string, string> = {
   "\u0131": "i", "\u0435": "e", "\u043e": "o", "\u0456": "i", "\u0455": "s", "\u0433": "r", "\u0442": "t",
-  "\u03bf": "o", "\u03bd": "v", "\u03b9": "i", "\u03c4": "t", "\u0475": "v", "\u051d": "w", "\u0578": "n", "\u057c": "n",
-  "\u0585": "o", "\u03c9": "w",
+  "\u03b5": "e", "\u03bf": "o", "\u03bd": "v", "\u03b9": "i", "\u03c4": "t", "\u03c9": "w",
+  "\u0475": "v", "\u051d": "w", "\u0578": "n", "\u057c": "n", "\u0585": "o",
+  "\u0280": "r", "\u1d07": "e", "\u1d20": "v", "\u026a": "i", "\u1d21": "w", "\u0274": "n", "\u1d0f": "o", "\u1d1b": "t", "\ua731": "s",
 };
+export const CAPITAL_LOOK_ALIKES: Record<string, string> = {
+  "\u0395": "e", "\u039d": "n", "\u0399": "i", "\u039f": "o", "\u03a4": "t",
+  "\u0415": "e", "\u041e": "o", "\u0422": "t", "\u0406": "i", "\u0405": "s", "\u051c": "w",
+};
+const fold = (text: string, table: Record<string, string>) => [...text].map((letter) => table[letter] ?? letter).join("");
 
-// A real tag (`<b>`, `</b>`, `<br/>`, `<a title="x">`) is replaced by the
-// letters of its attribute values: a stray `<` and `>` far apart aren't one,
-// and the values can show as a tooltip or an image's alt text.
-// An HTML comment, declaration or processing instruction shows nothing (the
-// comment's own text may span lines, as in HTML).
+// What GitHub's Markdown takes for raw HTML, which draws nothing itself: a
+// comment, declaration or processing instruction (the comment's own text may
+// span lines), and a tag (CommonMark's grammar: a name, attributes that are a
+// name and an optional value, quoted values holding anything, and no blank
+// line inside). Anything else that starts with `<`, a stray `<`, a generic
+// type, an autolink, is text a reader sees.
 const HIDDEN_MARKUP = /<!--[\s\S]*?-->|<[!?][^>]*>/g;
-const TAG = /<\/?[a-z][^<>]*>/gi;
-const attributeValues = (tag: string) =>
-  [...tag.matchAll(/=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g)].map((match) => ` ${match[1] ?? match[2] ?? match[3]} `).join("");
+const WS = String.raw`(?:[^\S\n]|\n(?![^\S\n]*\n))`;
+const TAG = new RegExp(
+  String.raw`<\/[a-z][a-z0-9-]*${WS}*>|<[a-z][a-z0-9-]*(?:${WS}+[a-z_:][\w.:-]*(?:${WS}*=${WS}*(?:[^\s"'=<>\x60]+|'[^']*'|"[^"]*"))?)*${WS}*\/?>`,
+  "gi",
+);
 
 // The letters a reader sees in Markdown `text`, lowercased and run together:
-// HTML comments dropped, real tags dropped but their attribute values kept, numeric character
-// references decoded (with or without the semicolon, as HTML does) and named
-// ones dropped, compatibility forms folded (NFKC), characters that draw
-// nothing (Hangul fillers and other default-ignorable code points) removed,
-// the look-alikes of the phrase's letters mapped to them, and everything that
-// isn't a letter dropped (spaces, punctuation, emphasis and code marks,
-// format and combining characters). So `## Re*view*&#32;**notes**` reads
-// "reviewnotes", as it renders. A link's destination and title and an image's
-// alt text stay in: over-reading only refuses more.
+// the text with HTML comments and tags dropped, then the words inside the
+// tags (names and values: a tooltip, an image's alt text, or what a raw
+// reader sees in an element GitHub drops), after it so a tag inside the
+// phrase doesn't split it. Numeric character references are decoded (with or
+// without the semicolon, as HTML does) and named ones dropped; compatibility
+// forms are folded (NFKC); characters that draw nothing (Hangul fillers and
+// other default-ignorable code points) are removed; look-alikes of the
+// phrase's letters are mapped to them; and everything that isn't a letter is
+// dropped (spaces, punctuation, emphasis and code marks, format and combining
+// characters). So `## Re*view*&#32;**notes**` reads "reviewnotes", as it
+// renders. A link's destination and title and an image's alt text stay in:
+// over-reading only refuses more. A named reference without its semicolon is
+// left alone: where its name ends can't be told, so build.mts refuses it.
 export function visibleLetters(text: string): string {
-  const folded = text
-    .replace(HIDDEN_MARKUP, "")
-    .replace(TAG, attributeValues)
-    .replace(/&#x([0-9a-f]+);?/gi, (_, hex: string) => character(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);?/g, (_, decimal: string) => character(Number(decimal)))
-    .replace(/&[a-z][a-z0-9]*;/gi, " ")
-    .normalize("NFKC")
-    .replace(/\p{Default_Ignorable_Code_Point}/gu, "")
+  const inTags: string[] = [];
+  const shown = text.replace(HIDDEN_MARKUP, "").replace(TAG, (tag) => {
+    inTags.push(tag.replace(/^<\/?[a-z][a-z0-9-]*/i, " ").replace(/\/?>$/, " "));
+    return "";
+  });
+  const folded = fold(
+    [shown, ...inTags]
+      .join(" ")
+      .replace(/&#x([0-9a-f]+);?/gi, (_, hex: string) => character(Number.parseInt(hex, 16)))
+      .replace(/&#(\d+);?/g, (_, decimal: string) => character(Number(decimal)))
+      .replace(/&[a-z][a-z0-9]*;/gi, " ")
+      .normalize("NFKC")
+      .replace(/\p{Default_Ignorable_Code_Point}/gu, ""),
+    CAPITAL_LOOK_ALIKES,
+  )
     // Lowercased before the non-letters go: a dotted capital I lowercases to
     // an i and a combining dot, which NFKC doesn't compose.
     .toLowerCase()
     .normalize("NFKC");
-  return [...folded].map((letter) => LOOK_ALIKES[letter] ?? letter).join("").replace(/[^\p{L}]+/gu, "");
+  return fold(folded, LOOK_ALIKES).replace(/[^\p{L}]+/gu, "");
 }

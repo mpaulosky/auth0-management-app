@@ -46,10 +46,12 @@ export const HIDDEN_ELEMENTS = ["script", "style", "noscript", "template", "text
 // not: an HTML comment, declaration, CDATA or processing instruction (`<!`,
 // `<?`); a link reference definition, which renders as nothing and may sit in
 // a quote or list and escape a bracket (`]:`); an element in HIDDEN_ELEMENTS;
-// and a character reference, with or without its semicolon (HTML decodes a
-// numeric one either way), which GitHub does show but which can spell what
-// the other checks look for.
-const HIDDEN_TEXT = new RegExp(String.raw`<[!?]|\]:|&#?\w+;|&#[0-9a-z]|<\/?(?:${HIDDEN_ELEMENTS.join("|")})\b`, "i");
+// and a character reference, which GitHub does show but which can spell what
+// the other checks look for: one with its semicolon, a numeric one without
+// (`&#` and a digit or letter), and a named one without (`&` and two letters,
+// since HTML decodes the legacy names such as `&nbsp` either way, and where
+// a name ends can't be told). A lone ampersand (`R&D`, `AT&T`) is fine.
+const HIDDEN_TEXT = new RegExp(String.raw`<[!?]|\]:|&#?\w+;|&#[0-9a-z]|&[a-z]{2}|<\/?(?:${HIDDEN_ELEMENTS.join("|")})\b`, "i");
 
 // Re-exported for the callers and tests that already import it from here.
 export { UncountedStopError };
@@ -162,7 +164,8 @@ const DESIGN_NOTE_LIMIT = 60_000;
 
 // GitHub refuses a PR body over 65,536 characters too; this leaves room for
 // the marker, `Closes #n` and the warnings publish() adds around the
-// reviewer's sections (#335).
+// reviewer's sections (#335). It applies to the body once its references are
+// broken, which adds a character for each.
 export const PR_BODY_LIMIT = 60_000;
 
 // The headings the reviewer's pr-body.md must hold, the ones docs/PROCESS.md
@@ -677,7 +680,7 @@ async function buildMarkedIssue(
   // Verification sections, for publish() to put under the marker and
   // `Closes #n`. Read inside the sandbox, as postDesignNote reads the design
   // note, since an agent wrote it. It's published as written, apart from its
-  // mentions and issue references (the squash commit, the Release's notes,
+  // mentions, issue references and github.com links (the squash commit, the Release's notes,
   // the release blog), so anything it can't be trusted with as it is returns
   // undefined, for publish()'s generic body,
   // and the log says why: a missing description never blocks publishing.
@@ -691,13 +694,17 @@ async function buildMarkedIssue(
     }
     const prBody = read.exitCode === 0 ? read.stdout.replace(/\r\n?/g, "\n").trim() : "";
     const missing = PR_BODY_HEADINGS.filter((heading) => !new RegExp(`^## ${heading}[ \t]*$`, "m").test(prBody));
+    // Published as written, apart from its mentions and issue references,
+    // which would otherwise notify people and close issues: each break adds a
+    // character, so the length is measured after it.
+    const published = breakReferences(prBody);
     let problem: string | undefined;
     if (prBody === "") {
       problem = `is missing or empty at ${prBodyPath}`;
     } else if (missing.length > 0) {
       problem = `lacks the ${missing.map((heading) => `"## ${heading}"`).join(", ")} heading${missing.length > 1 ? "s" : ""}`;
-    } else if (prBody.length > PR_BODY_LIMIT) {
-      problem = `is ${prBody.length} characters, more than the ${PR_BODY_LIMIT} a PR body can hold`;
+    } else if (published.length > PR_BODY_LIMIT) {
+      problem = `is ${published.length} characters once its references are broken, more than the ${PR_BODY_LIMIT} a PR body can hold`;
     } else if (HIDDEN_TEXT.test(prBody) || visibleLetters(prBody).includes("reviewnotes")) {
       // The local review's `## Review notes`, between HTML-comment markers,
       // are a person's acceptances (scripts/review.sh notes), and a reader
@@ -717,10 +724,7 @@ async function buildMarkedIssue(
       log(`the reviewer's PR body ${problem}, so the PR gets the generic body`);
       return undefined;
     }
-    // Published word for word otherwise, so a closing keyword would close
-    // another issue and a mention would notify someone: break each, as the
-    // comments built from untrusted text do.
-    return breakReferences(prBody);
+    return published;
   }
 
   // Run the scribe. Returns false when the run threw or used up its

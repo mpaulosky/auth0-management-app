@@ -81,7 +81,8 @@ If you find improvements to make:
 If the code is already clean and well-structured, change nothing.
 
 Either way, write the PR description last, once the branch is final, to `.sandcastle/work/{{TASK_ID}}/pr-body.md`, creating the folder. It's gitignored, so don't commit it:
-the host reads it after your run and publishes it as the PR's body, under its own marker and `Closes #{{TASK_ID}}`. The description is published word for word as the squash
+the host reads it after your run and publishes it as the PR's body, under its own marker and `Closes #{{TASK_ID}}`. The description is published as written, apart from the
+references the host breaks (below), as the squash
 commit's message, the Release's notes and the release blog post, so follow "The PR description" in `docs/PROCESS.md` and write it for a reader who wasn't there, in plain
 sentences. Use exactly these three headings, in this order, and no others at that level:
 
@@ -97,20 +98,22 @@ sentences. Use exactly these three headings, in this order, and no others at tha
 - **What changed**: what the branch does, as a short list a reader can check against the diff. Name any departure from the design note.
 - **Verification**: the tests added or changed, by file and what they pin, and the gate checkpoints the branch passed. Claim only checks this run made or the commits record:
   never a manual test, a real-sandbox run or a CI result nobody ran.
-- Never write a `<` directly followed by an exclamation mark or a question mark, a closing bracket directly followed by a colon, a character reference such as an ampersand, a
-  word and a semicolon, or any of these tags, opening or closing: `<script>`, `<style>`, `<noscript>`, `<template>`, `<textarea>`, `<iframe>`, `<svg>`, `<math>`, `<xmp>`,
+- Never write a `<` directly followed by an exclamation mark or a question mark, a closing bracket directly followed by a colon, a character reference (an ampersand and a word and
+  a semicolon, an ampersand and a hash sign, or an ampersand and two letters, as in `&nbsp`; a lone ampersand, as in `R&D`, is fine), or any of these tags, opening or closing: `<script>`, `<style>`, `<noscript>`,
+  `<template>`, `<textarea>`, `<iframe>`, `<svg>`, `<math>`, `<xmp>`,
   `<plaintext>`, `<noembed>`, `<noframes>`. Not even in backticks or a code block: describe them in words.
   Never write the words "Review notes" either, in any form. The host joins every letter of the description, ignoring spaces, punctuation and line breaks, and refuses it
   wherever "review" is followed by "notes": run together, inside a name such as `renderReviewNotes`, inside a word such as "preview notes", or across a sentence ("the
   review. Notes"). Name the file or describe the function instead, or keep the two words apart with another word. The join reads HTML attribute values, link titles and image
   alt text too, drops letters that draw nothing, and takes look-alike letters from other scripts for the Latin ones.
-  The host breaks every at-mention and every hash or GH- issue reference with an invisible character before publishing, so write none: a `Closes` would not close and a mention
-  would not notify.
   The host refuses a description with any of these and publishes its generic one: it adds its own HTML-comment marker, Review notes hold a person's accepted findings,
   which only their local review writes, and nothing published may be hidden from the people reading it.
+  The host does not refuse mentions and issue references but breaks them: every at sign before a letter or digit, every hash sign or GH- before a digit, and the dot of every
+  github.com gets an invisible character, even in code and links, so a `Closes` would not close and a mention would not notify. Describe a Razor directive such as page, inject or
+  rendermode in words, since quoted it would not copy as written, and don't link to GitHub.
 
 Don't add `Closes`, `Fixes`, a marker or a sign-off line: the host adds what it needs. Never put a secret, a token or a credential in it. When the file is missing, lacks a heading,
-is too long, holds anything the bullet above forbids or looks like it holds a secret, the host publishes a generic body instead.
+is too long, holds anything the bullet above refuses or looks like it holds a secret, the host publishes a generic body instead.
 
 Once the description is written, output <promise>COMPLETE</promise>.
 

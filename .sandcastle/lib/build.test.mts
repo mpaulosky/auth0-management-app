@@ -1194,6 +1194,19 @@ describe("buildIssue reading the reviewer's PR body", () => {
     ["holding Review notes with a dotted capital I", `${validPrBody}\n\n## Rev\u0130ew notes`],
     ["holding Review notes with a reference lacking its semicolon", `${validPrBody}\n\n## Review&#32notes`],
     ["holding Review notes in look-alike Cyrillic letters", `${validPrBody}\n\n## R\u0435view n\u043et\u0435s`],
+    ["holding Review notes after a < that starts no tag", `${validPrBody}\n\n<x\n\n## Review notes\n\ny >`],
+    ["holding Review notes after a < and a comma", `${validPrBody}\n\nSee <x Review, notes> here.`],
+    ["holding Review notes in an autolink", `${validPrBody}\n\n<https://example.com/Review-notes>`],
+    ["holding Review notes in an attribute holding a <", `${validPrBody}\n\n<img alt="<Review notes>" src="x.png">`],
+    ["holding Review notes as valueless attributes", `${validPrBody}\n\n<x Review notes>`],
+    ["holding Review notes split by an anchor", `${validPrBody}\n\nRe<a href="u">view notes</a>`],
+    ["holding Review notes split by a span", `${validPrBody}\n\n## Rev<span class="x">iew notes`],
+    ["holding Review notes in Greek capitals", `${validPrBody}\n\n## R\u0395VI\u0395W \u039dOTES`],
+    ["holding Review notes in Latin small capitals", `${validPrBody}\n\n## \u0280\u1d07\u1d20\u026a\u1d07\u1d21 \u0274\u1d0f\u1d1b\u1d07\ua731`],
+    ["holding Review notes spelt with a named reference lacking its semicolon", `${validPrBody}\n\n<div>Review&nbspnotes</div>`],
+    ["holding a soft-hyphen reference lacking its semicolon", `${validPrBody}\n\n<div>Review&shy notes</div>`],
+    ["exactly one character over the limit", `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT - validPrBody.length - 1)}`],
+    ["under the limit, but over it once its references are broken", `${validPrBody}\n\n${"#1 ".repeat(Math.floor((PR_BODY_LIMIT - validPrBody.length - 2) / 3))}`],
     ["holding Review notes in a name", `${validPrBody}\n\nRenamed renderReviewNotes.`],
     // The character-reference rule alone: visibleLetters drops these without
     // reading the letters they spell.
@@ -1244,8 +1257,18 @@ describe("buildIssue reading the reviewer's PR body", () => {
     });
   }
 
-  // R75: the body is published word for word, so a closing keyword would
-  // close another issue and a mention would notify someone.
+  it("publishes a description of exactly the limit", async () => {
+    const prBodyFile = `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT - validPrBody.length - 2)}`;
+    assert.equal(prBodyFile.length, PR_BODY_LIMIT);
+    const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(publishedPrBodies.at(-1), prBodyFile);
+  });
+
+  // R75: the body went out as written, so a closing keyword would close
+  // another issue and a mention would notify someone.
   it("publishes the reviewer's description with its mentions and issue references broken, so it closes and notifies no one", async () => {
     const prBodyFile = `${validPrBody}\n\nCloses #5, thanks @someone and @org/team, see mpaulosky/other#7, GH-9 and https://github.com/mpaulosky/other/issues/9.`;
     const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });

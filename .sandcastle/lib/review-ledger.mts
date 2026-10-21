@@ -26,7 +26,6 @@
 // Run as a script: `scripts/review.sh <command>` (see USAGE below). Sandcastle
 // doesn't use this module yet; it lives here for its type-check and tests.
 
-import { isUtf8 } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -300,15 +299,25 @@ const pinnedDiff = [
   "--submodule=short", "--ignore-submodules=none", "-O/dev/null", "--src-prefix=a/", "--dst-prefix=b/",
 ];
 
+// The extensions of files that are binary by nature: only these may have a NUL
+// in their first 8000 bytes, so text with a stray NUL can't pass for one. The
+// list errs short: a binary file with another extension is refused, and the
+// person adds it here.
+export const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
+  "png", "jpg", "jpeg", "gif", "ico", "webp", "avif", "bmp", "tif", "tiff", "woff", "woff2", "ttf", "otf", "eot",
+  "pdf", "zip", "gz", "tgz", "bz2", "xz", "7z", "jar", "nupkg", "snupkg",
+  "wasm", "dll", "exe", "pdb", "so", "dylib", "bin", "db", "sqlite", "mp3", "mp4", "webm", "ogg", "wav", "mov",
+]);
+
 // The pinned patch of `head` against `base`: what the reviewers read. Throws
 // when it shows text only as "Binary files differ", since the reviewers
 // couldn't read it: a text file a diff attribute (in .gitattributes or the
 // clone's info/attributes) marks binary, a binary file the branch turns into
 // text, which git prints whole as binary because one side is, or UTF-16 or
 // UTF-32 text (known by its byte order mark), whose NULs make it look binary,
-// or UTF-8 text with a stray NUL. A real binary file has a NUL byte in its
-// first 8000 bytes, as git's own test for one does: a NUL past them doesn't
-// make git print a text file as binary.
+// or a file with a NUL that isn't a binary format by its extension. A real
+// binary file has a NUL byte in its first 8000 bytes, as git's own test for
+// one does: a NUL past them doesn't make git print a text file as binary.
 export function reviewPatch(cwd: string, base: string, head: string = headCommit(cwd)): Buffer {
   const patch = gitBytes(cwd, [...pinnedDiff, base, head]);
   const text = patch.toString("latin1");
@@ -325,13 +334,13 @@ export function reviewPatch(cwd: string, base: string, head: string = headCommit
       const where = absent(before) ? "" : " at a new path, and delete this one";
       throw new Error(`${file}: this text is UTF-16 or UTF-32, which git shows only as "Binary files differ", so the reviewers couldn't read it. Re-encode it as UTF-8${where}.`);
     }
-    // Text with a stray NUL, which git prints as binary: a real binary file
-    // isn't valid UTF-8, and one that is holds no text but NULs (R42).
-    if (!absent(after) && binary(after)) {
-      const bytes = gitBytes(cwd, ["cat-file", "blob", after as string]);
-      if (isUtf8(bytes) && bytes.some((byte) => byte !== 0)) {
-        throw new Error(`${file}: this UTF-8 text holds a NUL byte, so git shows it only as "Binary files differ" and the reviewers couldn't read it. Remove the NUL, or make the file a real binary format.`);
-      }
+    // A file git prints as binary that isn't a binary format may be text
+    // with a stray NUL (R42): the bytes can't tell them apart, since one
+    // invalid UTF-8 byte makes text look like a real binary file, so the
+    // extension does.
+    const extension = /\.([a-z0-9]+)"?$/i.exec(file)?.[1]?.toLowerCase() ?? "";
+    if (!absent(after) && binary(after) && !BINARY_EXTENSIONS.has(extension)) {
+      throw new Error(`${file}: this file holds a NUL byte, so git shows it only as "Binary files differ" and the reviewers couldn't read it, and its extension isn't a binary format's. Remove the NUL; or, for a real binary file, give it its format's extension (see BINARY_EXTENSIONS in review-ledger.mts).`);
     }
     // An emptied file has no text to read, so there's nothing hidden to refuse.
     const emptied = !absent(after) && gitBytes(cwd, ["cat-file", "blob", after as string]).length === 0;
