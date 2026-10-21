@@ -155,6 +155,8 @@ describe("gate-checks.sh's gh repository check", () => {
     [script, `#!/usr/bin/env bash\n${exported}gh repo view --json name\n`],
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo view`.\n"],
     [skill, "Run `GH_REPO=mpaulosky/auth0-management-app gh repo edit --description x`.\n"],
+    [skill, "Read it with `gh\npr view 3`.\n"],
+    [skill, "Read it with `GH_REPO=mpaulosky/auth0-management-app gh\npr view 3`.\n"],
   ]) {
     it(`fails on a gh command not told its repository: ${JSON.stringify(content)} in ${file}`, () => {
       const result = gateWith(file ?? "", content ?? "");

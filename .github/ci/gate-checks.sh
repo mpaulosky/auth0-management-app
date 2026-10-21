@@ -57,7 +57,8 @@ fi
 # GH_REPO=mpaulosky/auth0-management-app before each one. gh repo's
 # subcommands don't read it, so each takes the repository as its first
 # argument (or -R), except list, create and clone, which name their own.
-# Text that reads gh and a word counts as a command, so prose rewords it.
+# Text that reads gh and a word counts as a command, so prose rewords it, and
+# a gh command is kept on one line: a line that ends in gh fails.
 # Whole-line comments are skipped. Only files the worktree has are read, and a
 # listing that fails fails the gate. Cheap enough to run on every gate.
 echo -e "${CYAN}🐙 gh commands are told their repository...${RESET}"
@@ -73,6 +74,8 @@ if ((${#gh_files[@]} > 0)); then
     FNR == 1 { shell = (FILENAME ~ /\.sh$/ || $0 ~ /^#!/); exported = 0 }
     /^[ \t]*#/ { next }
     shell && /^[ \t]*export GH_REPO=[^ \t]/ { exported = 1 }
+    # A line that ends in gh leaves its command on the next line, out of sight.
+    /(^|[^A-Za-z0-9_.-])gh[ \t]*$/ { print FILENAME ":" FNR ": " $0; next }
     {
       rest = $0
       while (match(rest, /(^|[^A-Za-z0-9_.-])gh [a-z]/)) {
@@ -92,7 +95,7 @@ if ((${#gh_files[@]} > 0)); then
     }' "${gh_files[@]}")"
 fi
 if [[ -n "$untold" ]]; then
-  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
+  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill, keeping each gh command on one line. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
   echo "$untold" >&2
   exit 1
 fi
