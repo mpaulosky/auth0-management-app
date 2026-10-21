@@ -17,6 +17,8 @@
 #
 # Reported review and comment IDs are kept in the git common dir, so a restart
 # after a push doesn't report them again.
+#
+# It watches the PR on WATCH_PR_REPO (default mpaulosky/auth0-management-app).
 
 set -euo pipefail
 
@@ -33,7 +35,9 @@ if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
 fi
 
 idle_limit="${WATCH_PR_IDLE_MINUTES:-30}"
-repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+# Named, not gh's default repository: in a clone whose only remote is a fork,
+# that's the fork, which doesn't have the PR.
+repo="${WATCH_PR_REPO:-mpaulosky/auth0-management-app}"
 owner="${repo%%/*}"
 name="${repo##*/}"
 seen_file="$(git rev-parse --git-common-dir)/watch-pr-${pr}.seen"

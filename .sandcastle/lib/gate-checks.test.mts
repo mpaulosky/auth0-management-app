@@ -123,6 +123,12 @@ describe("gate-checks.sh's gh repository check", () => {
     [".claude/skills/a/SKILL.md", "Read it with `gh issue view <n> --json comments`."],
     [".claude/skills/a/SKILL.md", "Run `gh api repos/{owner}/{repo}/issues/3`."],
     [".claude/skills/a/SKILL.md", "Run `gh api repos/:owner/:repo/pulls`."],
+    ["scripts/watch.sh", 'repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"'],
+    ["scripts/watch.sh", 'gh pr view "$pr" --repo "$repo" --json body; gh pr checks "$pr" --json bucket'],
+    [".claude/skills/a/SKILL.md", "Read it with `gh pr view <n> --repo o/r --json body` and edit it with `gh pr edit <n> --body-file x`."],
+    ["scripts/watch.sh", "cp -R a b && gh pr view 3"],
+    ["scripts/watch.sh", "gh pr checks 3 | grep -R x ."],
+    ["scripts/watch.sh", "gh pr checks 3  # add --repo later"],
   ]) {
     it(`fails on a command that names no repository: ${line}`, () => {
       const result = gateWith(file ?? "", `first\n${line}\n`);
@@ -141,6 +147,8 @@ describe("gate-checks.sh's gh repository check", () => {
     [".claude/skills/a/SKILL.md", "`gh api repos/mpaulosky/auth0-management-app/issues/3`"],
     [".claude/skills/a/SKILL.md", "`gh api graphql -F owner=mpaulosky -F name=auth0-management-app`"],
     ["docs/notes.md", "gh pr view 3"],
+    ["scripts/watch.sh", 'repo="$(gh repo view mpaulosky/auth0-management-app --json nameWithOwner)"'],
+    ["scripts/watch.sh", 'gh pr view "$pr" --repo "$repo" --json body; gh pr checks "$pr" -R "$repo"'],
   ]) {
     it(`passes a command that names its repository, a comment, or a file outside the checked folders: ${line}`, () => {
       const result = gateWith(file ?? "", `${line}\n`);
@@ -153,6 +161,23 @@ describe("gate-checks.sh's gh repository check", () => {
     const result = gateWith("scripts/watch.sh", 'gh pr checks "$pr" \\\n  --repo "$repo"\n');
 
     assert.equal(result.status, 0, result.stderr);
+  });
+
+  it("doesn't join a shell comment that ends in a backslash with the next line, as bash doesn't", () => {
+    const result = gateWith("scripts/watch.sh", "# a note \\\ngh pr view 3\n");
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /scripts\/watch\.sh:2:/);
+  });
+
+  it("skips a tracked file deleted from the worktree, rather than stop the gate", () => {
+    gateWith("scripts/gone.sh", "echo\n");
+    rmSync(join(repo, "scripts/gone.sh"));
+
+    const result = gate(head(), { GATE_SKIP_REVIEW: "1" });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Every gh command names its repository/);
   });
 
   it("checks a file whose name holds a space", () => {

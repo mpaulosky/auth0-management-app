@@ -49,27 +49,46 @@ else
   run_clean scripts/review.sh check "$base"
 fi
 
-# A gh issue or gh pr command without --repo (or -R), or a gh api call on
-# repos/{owner} or repos/:owner, reaches the clone's default repository, which
-# in a fork's clone is the fork. The skills and scripts must name the
-# repository. Shell comments are skipped, and a command continued with a
-# trailing backslash is read as one line. Cheap enough to run on every gate.
+# A gh issue or gh pr command without --repo (or -R), a gh repo view without
+# a repository argument, or a gh api call on repos/{owner} or repos/:owner,
+# reaches gh's default repository, which in a clone whose only remote is a
+# fork is the fork. The skills and scripts must name the repository. Each
+# command is checked on its own, up to the next backtick, |, ;, &, ) or
+# comment, so a flag elsewhere on the line doesn't count. Shell comments are
+# skipped, and a command continued with a trailing backslash is read as one
+# line (a comment ending in one isn't continued, as in bash). Only files the
+# worktree has are read. Cheap enough to run on every gate.
 echo -e "${CYAN}🐙 gh commands name their repository...${RESET}"
 gh_files=()
 while IFS= read -r -d '' file; do
-  gh_files+=("$file")
+  [[ -f "$file" ]] && gh_files+=("$file")
 done < <(git ls-files -z -- .claude/skills scripts)
 unnamed=""
 if ((${#gh_files[@]} > 0)); then
   unnamed="$(awk '
+    # Whether one of the gh commands on `line` names no repository.
+    function names_none(line,   rest, command, args) {
+      rest = line
+      while (match(rest, /(^|[^A-Za-z0-9_-])gh (issue|pr|repo view)([ \t]|$)/)) {
+        command = substr(rest, RSTART, RLENGTH)
+        rest = substr(rest, RSTART + RLENGTH)
+        args = rest
+        if (match(args, /[`|;&)]|[ \t]#/)) args = substr(args, 1, RSTART - 1)
+        if (command ~ /repo view/) {
+          if (args !~ /^[ \t]*[^- \t]/) return 1
+        } else if (args !~ /(^|[ \t])(--repo|-R)([ =]|$)/) {
+          return 1
+        }
+      }
+      return 0
+    }
     FNR == 1 { held = "" }
+    held == "" && /^[ \t]*#/ { next }
     /\\$/ { held = held substr($0, 1, length($0) - 1) " "; next }
     {
       line = held $0
       held = ""
-      if (line ~ /^[ \t]*#/) next
-      if ((line ~ /(^|[^A-Za-z0-9_-])gh (issue|pr)[ \t]/ && line !~ /(--repo|-R)[ =]/) ||
-          line ~ /(^|[^A-Za-z0-9_-])gh api [^|;&]*repos\/(\{owner\}|:owner)/) {
+      if (names_none(line) || line ~ /(^|[^A-Za-z0-9_-])gh api [^|;&]*repos\/(\{owner\}|:owner)/) {
         print FILENAME ":" FNR ": " line
       }
     }' "${gh_files[@]}")"
