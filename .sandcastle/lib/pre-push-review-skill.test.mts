@@ -87,17 +87,20 @@ describe("the pre-push-review skill's follow-up issue", () => {
   // an amend or rebase can start the numbering again.
   const flat = skill.replace(/\s+/g, " ");
 
-  it("names a re-raised Advisory finding by the id the follow-up issue lists, however often it's re-raised", () => {
-    assert.ok(flat.includes("its summary opening with the id the follow-up issue lists it under (`R3 again: ...`), kept from the old summary when that already opens with one"));
+  it("names the old id in a re-raised Advisory finding, for the person reading it", () => {
+    assert.ok(flat.includes("its summary opening with the old id (`R3 again: ...`)"));
+    assert.doesNotMatch(flat, /kept from the old summary/);
   });
 
-  it("counts a finding as listed only by an id the issue lists with the same path", () => {
-    assert.ok(flat.includes("a finding counts as listed when the issue lists the id its summary opens with, or its own id, with the same path"));
-    assert.ok(flat.includes("until an amend or rebase leaves the earlier reviews behind and the numbering starts again"));
+  // A re-raised finding's id, path and line can all change, and an id can be
+  // reused after an amend or rebase, so none of them decides.
+  it("counts a finding as listed by the problem it names, never by its id or path", () => {
+    assert.ok(flat.includes("a finding counts as listed when the issue already lists the same problem, whatever its id, path or line"));
+    assert.doesNotMatch(flat, /with the same path/);
   });
 
   it("says the agent numbers findings, and record only refuses a reused id", () => {
-    assert.ok(flat.includes("The agent numbers findings from `scripts/review.sh next`, and `record` refuses a reused id"));
+    assert.ok(flat.includes("the agent numbers findings from `scripts/review.sh next`, and `record` refuses a reused one"));
     assert.doesNotMatch(flat, /`record` gives a re-raised finding a new id/);
   });
 
