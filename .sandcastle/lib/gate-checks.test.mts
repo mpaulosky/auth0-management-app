@@ -156,6 +156,30 @@ describe("gate-checks.sh's local review check", () => {
     assert.match(calls(), /^run check:sandcastle$/m);
   });
 
+  // status.test.mts reads the Sandcastle plan, and config.test.mts the
+  // workflow's name.
+  for (const file of ["docs/plans/sandcastle-workflow.md", ".github/workflows/sandcastle.yml"]) {
+    it(`reruns the Sandcastle check when ${file} changes, since a Sandcastle test reads it`, () => {
+      // Arrange
+      const base = head();
+      mkdirSync(join(repo, file, ".."), { recursive: true });
+      writeFileSync(join(repo, file), "changed\n");
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "add", "."], { cwd: repo });
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "file"], { cwd: repo });
+      const bin = join(repo, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "pnpm"), `#!/bin/sh\necho "$*" >> '${log}'\n`);
+      chmodSync(join(bin, "pnpm"), 0o755);
+
+      // Act
+      const result = gate(base, { GATE_SKIP_REVIEW: "1", PATH: `${bin}:${process.env.PATH ?? ""}` });
+
+      // Assert
+      assert.match(result.stdout, /Sandcastle TypeScript check/);
+      assert.match(calls(), /^run check:sandcastle$/m);
+    });
+  }
+
   it("doesn't skip the check for any other value of GATE_SKIP_REVIEW", () => {
     const result = gate(head(), { GATE_SKIP_REVIEW: "true", REVIEW_EXIT: "1" });
 
@@ -264,6 +288,10 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, "Run `gh issue create --body 'it'\\''s -R x'`.\n"],
     [skill, 'Run `gh pr comment 3 --body "a \\" -R x \\" b"`.\n'],
     [skill, 'Run `gh pr view 3 -R o/r"`.\n'],
+    // A comment, and the next gh command, end a command's text.
+    [script, "#!/usr/bin/env bash\ngh pr checks 3 # or --repo o/r\n"],
+    [skill, "Run `gh pr view 3 # -R o/r`.\n"],
+    [skill, "Run gh pr view 3 or gh pr checks 3 --repo o/r.\n"],
     // A backslash before a backtick is no escape, so a code span ending in
     // one still ends there, and inside single quotes a backslash is literal.
     [skill, "Run `gh pr view 3 \\` and add --repo o/r later.\n"],
@@ -331,6 +359,8 @@ describe("gate-checks.sh's gh repository check", () => {
     [skill, 'Run `gh pr view 3 --body "a\\\\" -R o/r --title "b"`.\n'],
     [skill, "Run `gh issue create --body it\\'s --repo o/r`.\n"],
     [skill, "Run `gh issue create --body 'C:\\' --repo o/r`.\n"],
+    [skill, "Run `gh pr view 3 --repo o/r # note`.\n"],
+    [skill, "Run `gh issue create --body a#b --repo o/r`.\n"],
     [skill, "Run `gh pr view 3 --repo o/r`, but don't run it twice.\n"],
   ]) {
     it(`passes a gh command told its repository, or text that runs none: ${JSON.stringify(content)} in ${file}`, () => {
@@ -377,6 +407,15 @@ describe("gate-checks.sh's gh repository check", () => {
 
     assert.equal(result.status, 1);
     assert.match(result.stderr, /a quoted argument that holds a backtick can't be read here: give that command GH_REPO/);
+  });
+
+  // Text in a quoted argument that reads gh and a word counts as a command,
+  // which the line's GH_REPO prefix can't tell; the message says to reword it.
+  it("refuses a quoted argument that reads as a gh command, and says to reword it", () => {
+    const result = gateWith(skill, 'Run `GH_REPO=mpaulosky/auth0-management-app gh pr comment 3 --body "Run gh pr checks"`.\n');
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Text in a quoted argument that reads gh and a word counts as a command: reword it/);
   });
 
   it("names the file and line of each command it refuses", () => {

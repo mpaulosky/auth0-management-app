@@ -100,7 +100,8 @@ if ((${#gh_files[@]} > 0)); then
       named = "^repo[ \t]+[a-z-]+[ \t]+([\"" q "]?[^- \t<>`\"" q "$&|;(][^ \t`<>&|;\"" q "]*/|<[A-Za-z]|\"?[$]|-R[ =]|--repo[ =])"
     }
     # The text of one gh command, read a character at a time up to a
-    # backtick, an unquoted ; & | ( or ), or the next gh. Each quoted
+    # backtick, an unquoted ; & | ( or ), a # that starts a word (a comment),
+    # or the next gh. Each quoted
     # argument becomes a bare Q (an empty one <>, which no value matches), so
     # the words of a flag inside one, as in --body "use -R x (y)", are not the
     # flag. A backslash escapes the next character, except inside single
@@ -130,6 +131,7 @@ if ((${#gh_files[@]} > 0)); then
         }
         if (c == "\"" || c == q) { open = c; empty = 1; continue }
         if (c ~ /[;&|()]/) break
+        if (c == "#" && (out == "" || out ~ /[ \t]$/)) break
         out = out c
       }
       if (open != "") out = out "<>"
@@ -167,7 +169,7 @@ if ((${#gh_files[@]} > 0)); then
     }' "${gh_files[@]}")"
 fi
 if [[ -n "$untold" ]]; then
-  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, alone on its line but for a comment, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill, or give the command --repo mpaulosky/auth0-management-app (or -R) after its command group or subcommand, keeping each gh command on one line. gh api has no --repo: give it GH_REPO. In a skill, a quoted argument that holds a backtick can't be read here: give that command GH_REPO. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
+  echo "❌ These gh commands aren't told their repository, so from a fork's clone they can reach the fork. Run each with GH_REPO=mpaulosky/auth0-management-app: export it at the top of a script, alone on its line but for a comment, or write GH_REPO=mpaulosky/auth0-management-app gh ... in a skill, or give the command --repo mpaulosky/auth0-management-app (or -R) after its command group or subcommand, keeping each gh command on one line. gh api has no --repo: give it GH_REPO. In a skill, a quoted argument that holds a backtick can't be read here: give that command GH_REPO. Text in a quoted argument that reads gh and a word counts as a command: reword it. gh repo's subcommands don't read GH_REPO: give the repository as the first argument (or -R)." >&2
   echo "$untold" >&2
   exit 1
 fi
@@ -200,11 +202,12 @@ fi
 # and this file, and pre-push-review-skill.test.mts checks that the review's
 # reviewers are read-only, its severities, and the rules they change where
 # CLAUDE.md and this file restate them, readme.test.mts checks README.md's
-# Releases section, and config.test.mts and watch-pr.test.mts check scripts/watch-pr.sh,
-# so a change to any of them reruns them.
+# Releases section, config.test.mts and watch-pr.test.mts check scripts/watch-pr.sh
+# (and config.test.mts the Sandcastle workflow's name), and status.test.mts
+# checks the Sandcastle plan, so a change to any of them reruns them.
 if changed .sandcastle README.md package.json ':(glob)pnpm-*.yaml' scripts/check-branch-name.sh .claude/skills/code-review scripts/gate.sh \
   scripts/review.sh .github/ci/gate-checks.sh .claude/rules/baseline.md .claude/agents .claude/skills/pre-push-review \
-  .claude/settings.json scripts/watch-pr.sh CLAUDE.md; then
+  .claude/settings.json scripts/watch-pr.sh CLAUDE.md docs/plans/sandcastle-workflow.md .github/workflows/sandcastle.yml; then
   echo -e "${CYAN}🏰 Sandcastle TypeScript check...${RESET}"
   run_clean pnpm run check:sandcastle
 else

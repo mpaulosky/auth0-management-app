@@ -871,6 +871,13 @@ describe("recordReview", () => {
     });
   }
 
+  it("records a Warning marked security, which blocks and which the notes only count", () => {
+    const ledger = record([finding({ severity: "warning", security: true, status: "open", test: null })]);
+
+    assert.equal(readLedger(repo, ledger.key)?.findings[0]?.security, true);
+    assert.match(checkReview(repo, mergeBase(repo), {}).message, /R1 warning/);
+  });
+
   it("refuses findings that share an id", () => {
     assert.throws(() => record([finding(), finding()]), /repeat: R1/);
   });
@@ -1413,6 +1420,19 @@ describe("main", () => {
     assert.equal(result.code, 1);
     assert.match(result.err, /isn't one of HEAD's commits/);
     assert.equal(existsSync(join(root, "run", "fixes.patch")), false);
+  });
+
+  // An amend or a rebase replaces the commit the round before printed, so no
+  // commit gives the fixes alone: the review starts again.
+  it("prepare tells a later round to start again at round 1 after the HEAD it printed was amended", () => {
+    const dir = join(root, "run");
+    const before = cli(["prepare", dir]).out.trim().split("\n")[1] ?? "";
+    run(repo, "commit", "--amend", "--quiet", "--allow-empty", "-m", "amended");
+
+    const result = cli(["prepare", dir, before]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /After an amend or a rebase there's none: start again at round 1/);
   });
 
   it("prepare refuses the HEAD it just printed when nothing was committed since, whose fixes patch would be empty", () => {

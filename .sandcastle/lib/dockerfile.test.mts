@@ -26,3 +26,11 @@ describe("the sandbox image's linters", () => {
     });
   }
 });
+
+// The gate's gh check is an awk program, tested with gawk; Debian's default
+// awk is mawk, so the sandbox installs gawk, which becomes its awk.
+describe("the sandbox image's awk", () => {
+  it("installs gawk, which the gate's gh check is tested under", () => {
+    assert.match(read(".sandcastle/Dockerfile"), /^\s+gawk \\$/m);
+  });
+});

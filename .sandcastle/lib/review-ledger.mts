@@ -667,7 +667,9 @@ export function renderReviewNotes(ledger: Ledger): string {
 // earlier one only rereads more, as when a round is prepared twice), a merge
 // of main since (the patch would hold main's changes), or no fixes at all.
 function fixesPatch(cwd: string, dir: string, since: string, base: string, head: string): Buffer | string {
-  if (!isAncestor(cwd, since, head)) return `${since} isn't one of HEAD's commits: give the HEAD prepare printed in the round before.`;
+  if (!isAncestor(cwd, since, head)) {
+    return `${since} isn't one of HEAD's commits: give the HEAD prepare printed in the round before. After an amend or a rebase there's none: start again at round 1 (prepare without <since>).`;
+  }
   const headFile = join(dir, "head");
   const before = existsSync(headFile) ? readFileSync(headFile, "utf8").trim() : undefined;
   if (before === undefined || !isAncestor(cwd, since, before)) {
