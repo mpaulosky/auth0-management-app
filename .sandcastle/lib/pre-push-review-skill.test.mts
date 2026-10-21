@@ -87,7 +87,7 @@ describe("the pre-push-review skill's severities", () => {
     const row = /\| \*\*Advisory\*\* \|[^\n]*/.exec(skill)?.[0] ?? "";
 
     assert.match(row, /Fixed in the review/);
-    assert.ok(flat.includes("**Fix it** when it's a real Critical or Advisory finding and `needsPerson` is false."));
+    assert.ok(flat.includes("**Fix it** when it's a real Critical or Advisory finding, `needsPerson` is false,"));
     assert.doesNotMatch(flat, /Never fix it in the review/);
     assert.doesNotMatch(flat, /Advisory findings are never fixed/);
     assert.match(claude.replace(/\s+/g, " "), /Advisory findings are fixed in the review too/);
@@ -252,5 +252,39 @@ describe("the owner's decisions on #83", () => {
   it("keeps the Lessons from GitHub's review section, which CLAUDE.md points the watching agent to", () => {
     assert.match(skill, /^### Lessons from GitHub's review$/m);
     assert.ok(claude.replace(/\s+/g, " ").includes("**Lessons from GitHub's review**"));
+  });
+});
+
+// Run 3 of #89's review: the rules the table changed, where they're restated,
+// and step 9's follow-up issue.
+describe("the pre-push-review skill's later rules", () => {
+  const flat = skill.replace(/\s+/g, " ");
+
+  it("keeps every line of its front matter at or under 200 characters", () => {
+    const frontMatter = /^---\n([\s\S]*?)\n---\n/.exec(skill)?.[1] ?? "";
+
+    for (const line of frontMatter.split("\n")) {
+      assert.ok(line.length <= 200, `${line.length} characters: ${line.slice(0, 60)}...`);
+    }
+  });
+
+  it("grades untested behaviour and build configuration Critical where CLAUDE.md restates the grades", () => {
+    const flatClaude = claude.replace(/\s+/g, " ");
+
+    assert.ok(flatClaude.includes("build and dependency configuration, or new or changed behaviour with no test"));
+  });
+
+  it("leaves open for a person a Critical finding the last, review-only round raised", () => {
+    assert.ok(flat.includes("and the round isn't the last, review-only one (step 7)"));
+    assert.ok(flat.includes("or the last, review-only round raised it (step 7)"));
+  });
+
+  it("finds the branch's follow-up issue by its full title, past gh's default of 30", () => {
+    assert.match(skill, /--limit 100/);
+    assert.ok(flat.includes(`--search 'in:title "Advisory review findings: <branch>"'`));
+  });
+
+  it("asks the person again about a re-raised Advisory finding rather than filing it", () => {
+    assert.ok(flat.includes("ask the person to accept it again with `scripts/review.sh accept`"));
   });
 });

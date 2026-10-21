@@ -90,8 +90,9 @@ export const underOwnedPattern = (path: string) => ownedPatterns.some((pattern) 
 export const isOwnedPath = (path: string) => !NOT_OWNED.has(path) && underOwnedPattern(path);
 
 // How much a finding matters, which decides what happens to it. `critical`:
-// a bug in code that runs (src/, tests/, and the repository's tooling, which
-// decides what merges and releases), fixed in the review behind a regression
+// a bug in code that runs (src/, tests/, the repository's tooling, which
+// decides what merges and releases, and build and dependency configuration),
+// or new or changed behaviour with no test, fixed in the review behind a regression
 // test, and blocking until it is fixed, or until the person accepts one left
 // open for them. `warning`: a security weakness, whatever file it's in, which
 // blocks until the person fixes or accepts it. `advisory`: everything else
@@ -173,9 +174,9 @@ export type Finding = z.infer<typeof storedFindingSchema>;
 // A finding's severity, a Warning when it has none.
 export const severityOf = (finding: Finding): Severity => finding.severity ?? "warning";
 
-// Whether a finding is a security weakness: a Warning, one whose lens names
-// security whatever it was graded, or one triage didn't mark as no security
-// weakness, so a misgraded or unmarked one isn't published. The report's mark,
+// Whether a finding is a security weakness: one graded Warning, one whose lens
+// names security whatever it was graded, or one triage didn't mark as no
+// security weakness, so a misgraded or unmarked one isn't published. The report's mark,
 // the notes, the follow-up issue and the check all ask this, so they never
 // disagree.
 export const isSecurity = (finding: Finding) =>
@@ -633,8 +634,9 @@ export function renderReport(ledger: Ledger): string {
 }
 
 // The PR description's `## Review notes`: the Critical and Advisory findings a
-// person accepted, for people reading the PR. Security findings (Warnings, see
-// isSecurity) are only counted, so the maintainer knows to wait for the
+// person accepted, for people reading the PR. Security findings (see
+// isSecurity: graded Warning, a lens naming security, or unmarked) are only
+// counted, so the maintainer knows to wait for the
 // private report. GitHub's reviewers aren't known to read the description, so
 // a thread one opens on an accepted finding gets the same "Left for the
 // owner." reply as every thread left for the owner (CLAUDE.md), which doesn't

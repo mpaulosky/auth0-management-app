@@ -3,8 +3,9 @@ name: pre-push-review
 description: >-
   The heavy local review every branch passes before it's pushed. Reviews the branch's whole diff against origin/main
   with parallel reviewers, grades each finding Critical, Warning or Advisory, fixes the Critical ones behind a regression
-  test and the Advisory ones as they're found, reviews the fixes again, and records the result the gate checks. Use before every push (the first and every fix), when asked to review a branch before pushing, or when the
-  gate says no review is recorded for this diff.
+  test and the Advisory ones as they're found, reviews the fixes again, and records the result the gate checks. Use
+  before every push (the first and every fix), when asked to review a branch before pushing, or when the gate says no
+  review is recorded for this diff.
 ---
 
 # Pre-push review
@@ -23,7 +24,7 @@ Every finding has a severity, and the severity decides what happens to it:
 
 | Severity | What it covers | Fix | Blocks the push? |
 | --- | --- | --- | --- |
-| **Critical** | Bugs in code that runs: application code (`src/`), tests (`tests/`), the repository's tooling (`.sandcastle/`, `scripts/`, `.github/ci/`, `.github/scripts/`, workflows, git hooks) and build and dependency configuration (`*.csproj`, `Directory.*.props`, `global.json`, `package.json`, pnpm files), and new or changed behaviour with no test | Fixed in the review, behind a regression test | Yes, until fixed, or until the person accepts one left open for them (`needsPerson`, or an earlier decision) |
+| **Critical** | Bugs in code that runs: application code (`src/`), tests (`tests/`), the repository's tooling (`.sandcastle/`, `scripts/`, `.github/ci/`, `.github/scripts/`, workflows, git hooks) and build and dependency configuration (`*.csproj`, `Directory.*.props`, `global.json`, `package.json`, pnpm files), and new or changed behaviour with no test | Fixed in the review, behind a regression test | Yes, until fixed, or until the person accepts one left open for them (`needsPerson`, an earlier decision, or one the last, review-only round raised) |
 | **Warning** | Security weaknesses, whatever file they're in | Suggested; the person chooses to fix it or accept it | Yes, until the person decides |
 | **Advisory** | Docs, comments, skill and prompt text, conventions, everything else | Fixed in the review, with a gate check when one can pin it | Never: one left for a person goes to the follow-up issue |
 
@@ -175,14 +176,16 @@ in doubt, and then it's a Warning. The follow-up issue and the notes publish onl
 misgraded under a lens that doesn't say security is still held back. Read the
 code at each finding's line yourself, then give it one outcome:
 
-- **Fix it** when it's a real Critical or Advisory finding and `needsPerson` is false.
+- **Fix it** when it's a real Critical or Advisory finding, `needsPerson` is false, and the round isn't the last,
+  review-only one (step 7).
 - **Leave it open with its suggested fix** when it's a real Warning: the person decides whether it's fixed or accepted
   (step 9). Never fix a Warning they haven't asked you to fix.
 - **Leave it open for the follow-up issue** when it's a real Advisory finding whose `needsPerson` is true, or one the
   last, review-only round raised (step 7).
 - **Dismiss it** when the code shows the reviewer was wrong. Its reason cites the code (`file:line`) that shows it.
   Never dismiss a finding because it's hard to fix.
-- **Leave it open** for a person when a Critical finding's `needsPerson` is true, or when it's a problem a person decided needs no change, in
+- **Leave it open** for a person when a Critical finding's `needsPerson` is true, or the last, review-only round raised
+  it (step 7), or when it's a problem a person decided needs no change, in
   the earlier review or in the owner's own PR-thread reply (step 3), or one the earlier review left open: the person
   decides it again for this code (step 9). Name the earlier finding or thread and its reason in the summary, so they can.
   Reviewers see an accepted or open security finding only by id, so check each one in `latest` against the code
@@ -265,17 +268,20 @@ File the open Advisory findings in one follow-up issue per branch, as #81 did. T
 path, line, summary and suggested fix through the same plain-text rendering as the notes, leaves out any finding the
 report marks `(security)`, and ends with the `<!-- claude-session -->` marker. Never write the body by hand, and file
 nothing when it prints "No open Advisory findings." Before filing, have the person look over the report's Advisory
-section: the issue is public.
+section: the issue is public. An open Advisory finding that re-raises a person's earlier decision (its summary opens
+`R3 again: ...`) isn't work to file: ask the person to accept it again with `scripts/review.sh accept`, which leaves it
+out of `scripts/review.sh advisory`, and file only the rest.
 
 Look for the branch's issue only among the person's own, by its exact title:
 
 ```bash
-GH_REPO=mpaulosky/auth0-management-app gh issue list --author @me --state open \
-  --search "in:title Advisory review findings" --json number,title \
+GH_REPO=mpaulosky/auth0-management-app gh issue list --author @me --state open --limit 100 \
+  --search 'in:title "Advisory review findings: <branch>"' --json number,title \
   --jq '.[] | select(.title == "chore(review): Advisory review findings: <branch>") | .number'
 ```
 
-Anyone can open an issue with that title, so never use one someone else opened. When there's none, run
+Anyone can open an issue with that title, so never use one someone else opened. When it prints more than one number,
+use the lowest, and tell the person about the others. When there's none, run
 `GH_REPO=mpaulosky/auth0-management-app gh issue create --title "chore(review): Advisory review findings: <branch>" --body-file <run>/advisory.md`.
 When there is one, decide which findings it already lists from its body and comments posted under the person's login
 that end with `<!-- claude-session -->` only, by the problem each one names, not by its id: a finding counts as listed
@@ -298,7 +304,8 @@ raise an accepted finding again: its thread gets the reply every thread left for
 "Left for the owner." and the `<!-- claude-session -->` marker.
 
 The description becomes public release notes, so the notes list the accepted Critical and Advisory findings, leave out
-accepted security findings (every Warning, any finding whose lens names security, and any finding not marked `security: false`) and only count them, so the
+accepted security findings (every finding the report marks `(security)`: one graded Warning, one whose lens names
+security, and any finding not marked `security: false`) and only count them, so the
 maintainer knows to wait for the private report. Before the notes go into the PR, have the person check the severities
 and `(security)` marks in the report on every accepted finding: an unmarked one is published.
 Tell the person to report each one privately before pushing, naming the branch, as `docs/SECURITY.md` describes, unless

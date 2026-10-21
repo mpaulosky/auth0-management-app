@@ -196,7 +196,8 @@ Pull requests without unit tests will be delayed and asked for unit tests to pro
 
 Contributing needs [Claude Code](https://claude.com/claude-code). Every branch passes the local review before each push:
 run `/pre-push-review` in your branch's worktree. It reviews the whole branch and grades each finding. It fixes
-**Critical** findings (bugs in code that runs: application code, tests and tooling) behind regression tests, and leaves
+**Critical** findings (bugs in code that runs: application code, tests, tooling and build and dependency configuration,
+and new or changed behaviour with no test) behind regression tests, and leaves
 each **Warning** (a security weakness), and any finding that needs your decision, for you to fix or to accept with `scripts/review.sh accept <id> "<reason>"`.
 **Advisory** findings (docs, comments, conventions) are fixed in the review too, and never block: one left for you to
 decide goes to one follow-up issue for your branch.

@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 
 import { NOT_OWNED, OWNED_PATHS } from "./review-ledger.mts";
 
-// .github/ci/gate-checks.sh's local review check, run for real in a scratch
+// .github/ci/gate-checks.sh's local review check and gh repository check, and
+// the reruns of the Sandcastle check, run for real in a scratch
 // repository whose scripts/review.sh is a stub that logs its arguments and
 // exits with REVIEW_EXIT. The hook tests in .github/hooks/tests (Owned by the
 // Baseline) replace this file with a stub, so nothing else runs it.
@@ -39,8 +40,9 @@ afterEach(() => {
   rmSync(repo, { recursive: true, force: true });
 });
 
-// Run the checks with `base` as their merge base. HEAD is the base, so no
-// other check has anything to do.
+// Run the checks with `base` as their merge base. With HEAD as the base, only
+// the checks that run on every gate (the review check and the gh repository
+// check) have anything to do.
 function gate(base: string, env: NodeJS.ProcessEnv = {}) {
   const clean = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== "GATE_SKIP_REVIEW"));
   return spawnSync("bash", [".github/ci/gate-checks.sh", base], { cwd: repo, encoding: "utf8", env: { ...clean, ...env } });

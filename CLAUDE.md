@@ -125,9 +125,10 @@ at the start of a session when it isn't set. Don't report the pre-push gate as p
 
 Before every push, the first and every fix, run the `pre-push-review` skill (`/pre-push-review`). It reviews the
 branch's whole diff against `origin/main` with a reviewer per lens in the code-review skill, grades each finding, fixes
-the Critical ones behind a regression test, reviews the fixes again, and records the outcome in `.git/review/`. A
-finding is **Critical** (a bug in code that runs: `src/`, `tests/` and the tooling), **Warning** (a security weakness, in
-any file) or **Advisory** (docs, comments, prompts, conventions). The gate refuses a diff it hasn't passed, and any open
+the Critical ones behind a regression test and the Advisory ones as they're found, reviews the fixes again, and records
+the outcome in `.git/review/`. A finding is **Critical** (a bug in code that runs: `src/`, `tests/`, the tooling and
+build and dependency configuration, or new or changed behaviour with no test), **Warning** (a security weakness, in any
+file) or **Advisory** (docs, comments, prompts, conventions). The gate refuses a diff it hasn't passed, and any open
 Critical or Warning finding blocks the push until it's fixed or the person you work for (the owner, or a contributor on
 their own branch) accepts it with `scripts/review.sh accept`. Advisory findings are fixed in the review too, and never
 block: one left for a person goes to one follow-up issue per branch. Never accept a finding on the person's behalf, and never push with
