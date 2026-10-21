@@ -29,7 +29,10 @@ describe("README.md Releases section", () => {
 
   it("keeps the line in the Releases section, before the next heading", () => {
     const releasesHeading = lines.indexOf("## Releases");
-    const nextHeading = lines.findIndex((line, i) => i > releasesHeading && line.startsWith("## "));
+    assert.notEqual(releasesHeading, -1, "README.md has no ## Releases heading");
+    // Without a later heading, the section runs to the end of the file.
+    const next = lines.findIndex((line, i) => i > releasesHeading && line.startsWith("## "));
+    const nextHeading = next === -1 ? lines.length : next;
 
     assert.notEqual(pointerLine, -1, "README.md has no how-Releases-are-cut line");
     assert.ok(pointerLine > releasesHeading && pointerLine < nextHeading, "the line must sit inside ## Releases");
