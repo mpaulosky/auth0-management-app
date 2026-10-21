@@ -54,10 +54,11 @@ describe("the pre-push-review skill's severities", () => {
     assert.match(skill, /Refuse a finding whose `severity` is missing or isn't `critical`, `warning` or `advisory`/);
   });
 
-  it("reviews again only after a round that fixed a Critical or Warning finding, and then only the fixes", () => {
-    assert.match(skill, /Only a round that fixed a Critical or Warning finding is followed by another/);
+  it("reviews again after a round that fixed anything, and then only the fixes", () => {
+    assert.match(skill, /Only a round that fixed something is followed by another/);
     assert.match(skill, /A round that fixed nothing ends the review/);
     assert.doesNotMatch(skill, /fixed only Advisory/);
+    assert.doesNotMatch(skill, /fixed a Critical or Warning finding is followed/);
     assert.match(skill, /A later round reviews the fixes, not the whole branch again/);
     assert.doesNotMatch(skill, /Every round\s+reviews the whole branch/);
   });
@@ -73,8 +74,21 @@ describe("the pre-push-review skill's severities", () => {
     }
   });
 
-  it("files Advisory findings in one follow-up issue per branch", () => {
+  it("files the Advisory findings left open in one follow-up issue per branch", () => {
     assert.match(skill, /File the open Advisory findings in one follow-up issue per branch/);
+  });
+
+  // The owner's decision on #89: a doc or comment finding is fixed in the
+  // review like a Critical one, so it doesn't wait for a follow-up issue.
+  it("fixes every real Advisory finding in the review, leaving open only one for a person or the last round", () => {
+    const flat = skill.replace(/\s+/g, " ");
+    const row = /\| \*\*Advisory\*\* \|[^\n]*/.exec(skill)?.[0] ?? "";
+
+    assert.match(row, /Fixed in the review/);
+    assert.ok(flat.includes("**Fix it** when it's a real Critical or Advisory finding and `needsPerson` is false."));
+    assert.doesNotMatch(flat, /Never fix it in the review/);
+    assert.doesNotMatch(flat, /Advisory findings are never fixed/);
+    assert.match(claude.replace(/\s+/g, " "), /Advisory findings are fixed in the review too/);
   });
 });
 
@@ -156,7 +170,7 @@ describe("the rules the severities change, where they're restated", () => {
   });
 
   it("forbids accepting any finding on the person's behalf in CLAUDE.md, not only an Advisory one", () => {
-    assert.match(claude.replace(/\s+/g, " "), /Never accept a finding on their behalf/);
+    assert.match(claude.replace(/\s+/g, " "), /Never accept a finding on the person's behalf/);
     assert.doesNotMatch(claude.replace(/\s+/g, " "), /Never accept one on their behalf/);
   });
 

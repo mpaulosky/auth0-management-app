@@ -92,10 +92,11 @@ export const isOwnedPath = (path: string) => !NOT_OWNED.has(path) && underOwnedP
 // How much a finding matters, which decides what happens to it. `critical`:
 // a bug in code that runs (src/, tests/, and the repository's tooling, which
 // decides what merges and releases), fixed in the review behind a regression
-// test, and blocking until it is. `warning`: a security weakness, whatever file
-// it's in, which blocks until the person fixes or accepts it. `advisory`:
-// everything else (docs, comments, prompts, conventions), which never blocks
-// and goes to the branch's follow-up issue.
+// test, and blocking until it is fixed, or until the person accepts one left
+// open for them. `warning`: a security weakness, whatever file it's in, which
+// blocks until the person fixes or accepts it. `advisory`: everything else
+// (docs, comments, prompts, conventions), fixed in the review too, which never
+// blocks: one left for a person goes to the branch's follow-up issue.
 export const SEVERITIES = ["critical", "warning", "advisory"] as const;
 
 export type Severity = (typeof SEVERITIES)[number];

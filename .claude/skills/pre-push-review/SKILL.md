@@ -3,7 +3,7 @@ name: pre-push-review
 description: >-
   The heavy local review every branch passes before it's pushed. Reviews the branch's whole diff against origin/main
   with parallel reviewers, grades each finding Critical, Warning or Advisory, fixes the Critical ones behind a regression
-  test, reviews the fixes again, and records the result the gate checks. Use before every push (the first and every fix), when asked to review a branch before pushing, or when the
+  test and the Advisory ones as they're found, reviews the fixes again, and records the result the gate checks. Use before every push (the first and every fix), when asked to review a branch before pushing, or when the
   gate says no review is recorded for this diff.
 ---
 
@@ -25,11 +25,12 @@ Every finding has a severity, and the severity decides what happens to it:
 | --- | --- | --- | --- |
 | **Critical** | Bugs in code that runs: application code (`src/`), tests (`tests/`), the repository's tooling (`.sandcastle/`, `scripts/`, `.github/ci/`, `.github/scripts/`, workflows, git hooks) and build and dependency configuration (`*.csproj`, `Directory.*.props`, `global.json`, `package.json`, pnpm files), and new or changed behaviour with no test | Fixed in the review, behind a regression test | Yes, until fixed, or until the person accepts one left open for them (`needsPerson`, or an earlier decision) |
 | **Warning** | Security weaknesses, whatever file they're in | Suggested; the person chooses to fix it or accept it | Yes, until the person decides |
-| **Advisory** | Docs, comments, skill and prompt text, conventions, everything else | Suggested, reported only | Never |
+| **Advisory** | Docs, comments, skill and prompt text, conventions, everything else | Fixed in the review, with a gate check when one can pin it | Never: one left for a person goes to the follow-up issue |
 
 Tooling counts as code that runs: it decides what merges and releases. A security weakness is always a Warning, never
-Critical or Advisory, so it never passes unseen and accepting it stays one command. Advisory findings are never fixed in
-the review: they go to the branch's follow-up issue (step 9).
+Critical or Advisory, so it never passes unseen and accepting it stays one command. Advisory findings are fixed in the
+review too, so a stale doc or comment never waits for a later branch. Only one that needs a person, or that the last,
+review-only round raises (step 7), goes to the branch's follow-up issue (step 9).
 
 ## Rules
 
@@ -174,11 +175,11 @@ in doubt, and then it's a Warning. The follow-up issue and the notes publish onl
 misgraded under a lens that doesn't say security is still held back. Read the
 code at each finding's line yourself, then give it one outcome:
 
-- **Fix it** when it's a real Critical finding and `needsPerson` is false.
+- **Fix it** when it's a real Critical or Advisory finding and `needsPerson` is false.
 - **Leave it open with its suggested fix** when it's a real Warning: the person decides whether it's fixed or accepted
   (step 9). Never fix a Warning they haven't asked you to fix.
-- **Leave it open for the follow-up issue** when it's a real Advisory finding. Never fix it in the review, and never
-  start another round for it.
+- **Leave it open for the follow-up issue** when it's a real Advisory finding whose `needsPerson` is true, or one the
+  last, review-only round raised (step 7).
 - **Dismiss it** when the code shows the reviewer was wrong. Its reason cites the code (`file:line`) that shows it.
   Never dismiss a finding because it's hard to fix.
 - **Leave it open** for a person when a Critical finding's `needsPerson` is true, or when it's a problem a person decided needs no change, in
@@ -186,8 +187,8 @@ code at each finding's line yourself, then give it one outcome:
   decides it again for this code (step 9). Name the earlier finding or thread and its reason in the summary, so they can.
   Reviewers see an accepted or open security finding only by id, so check each one in `latest` against the code
   yourself, and record each one still there as a new open Warning naming the old id, whether or not a reviewer raised it.
-  An earlier Advisory finding that's still there is recorded open again as Advisory, its summary opening with the
-  old id (`R3 again: ...`): it never blocks.
+  An earlier Advisory finding that's still there is fixed now, unless it waits for a person: then it's recorded open
+  again as Advisory, its summary opening with the old id (`R3 again: ...`), and it never blocks.
 
 Number this run's findings from the id `scripts/review.sh next` prints at the start of the run, continuing across its
 rounds. `record` refuses any id at or below the highest that the review it replaces, or any earlier review of the
@@ -195,7 +196,7 @@ branch's own commits, took, so a person reading an older report can't accept a d
 
 ### 6. Fix behind a regression test
 
-Fix only Critical findings, and the Warnings the person asks you to fix. For each one:
+Fix the Critical and Advisory findings, and the Warnings the person asks you to fix. For each one:
 
 1. Write the test first, in the test project that mirrors the code (`tests/<Project>.Tests.<Kind>/`, a
    `.sandcastle/lib/*.test.mts`). Run it and see it fail for the reason the finding names.
@@ -203,11 +204,13 @@ Fix only Critical findings, and the Warnings the person asks you to fix. For eac
 3. Commit the test and the fix together: `fix(<scope>): <Summary>`.
 
 A finding no test can pin, such as one in a workflow or in prose, gets a deterministic check in
-`.github/ci/gate-checks.sh` when one can express it, or a reason saying why it has no test.
+`.github/ci/gate-checks.sh` when one can express it, or a reason saying why it has no test. Most Advisory findings are
+prose: fix them, commit them as `docs(<scope>): <Summary>`, and record the reason. Fix every Advisory finding of a round
+in that round, with its Critical ones, so the next round reviews them together.
 
 ### 7. Review the fixes until a round fixes nothing
 
-Only a round that fixed a Critical or Warning finding is followed by another, so the last round reviewed the code being
+Only a round that fixed something is followed by another, so the last round reviewed the code being
 recorded. A round that fixed nothing ends the review: go to step 8. Otherwise run `GATE_SKIP_REVIEW=1 scripts/gate.sh`
 again, then go back to step 4 for a round that reviews the fixes. After 3 rounds that fixed something, run one more round
 that only reviews: anything it finds new stays open for a person (an Advisory one for the follow-up issue).
@@ -238,7 +241,8 @@ JSON
 The ids in the example are illustrative: use the ones step 5 gave.
 `status` is `fixed` (with `test`, or `reason` when it has none), `dismissed` (with `reason`) or `open`. Never
 `accepted`: `record` refuses it, since only the person accepts a finding, with `scripts/review.sh accept`. `severity` is
-the grade from step 5, and an Advisory finding is `open` unless it was dismissed. `security` is the mark from step 5:
+the grade from step 5, and an Advisory finding is `fixed` or `dismissed`, or `open` when it waits for a person or the
+last, review-only round raised it. `security` is the mark from step 5:
 `record` refuses a finding without one, and one marked `true` that isn't graded `warning`. `record` refuses an Advisory finding
 whose lens names security: grade it Warning, and never rename or trim its lens to get past the refusal. `line` is 0 when a finding has no line. The record holds this run's findings only, from every
 round, and replaces any earlier record of the same diff: an acceptance made on the earlier code doesn't carry, so the
@@ -252,8 +256,8 @@ happened to it, and its test or reason.
 
 When Critical or Warning findings are open, the push is blocked: say so, and for each one say what decision it needs and
 the suggested fix. The person either accepts it with `scripts/review.sh accept R3 "<reason>"`, or asks you to fix it:
-fix it as in step 6, then start a new run at step 1, in which the record just made is step 3's earlier review. Open
-Advisory findings never block. Sandcastle doesn't run this review yet: its sandboxes skip the check and see an empty
+fix it as in step 6, then start a new run at step 1, in which the record just made is step 3's earlier review. The
+Advisory findings left open never block. Sandcastle doesn't run this review yet: its sandboxes skip the check and see an empty
 `.git/review`, and how a Sandcastle run records a review is still to be decided.
 
 File the open Advisory findings in one follow-up issue per branch, as #81 did. The body is the output of
