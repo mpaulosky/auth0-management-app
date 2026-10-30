@@ -498,11 +498,12 @@ round. Three gaps remain:
 - **A follow-up event can be dropped.** A follow-up run that finds a PR held by the full run skips it and exits. A review that landed after the full run's pass read its
   threads then waits for the full run's next round, the next CI completion or the scheduled run.
 
-**The run's own check:** a run started by a PR event (`pull_request_review`, `pull_request: unlabeled`) reports the `Sandcastle` job as a check on that PR's head; a `pull_request_target:
-labeled` run reports `Record the approved head`, and its `Sandcastle` job is skipped. It runs while the run does, and Fail on hand-backs turns it red when the run hands back anything, even
-an unrelated issue. So in every mode, the sweep and a pass's read of the head's checks leave out each check run of the `Sandcastle` workflow (`SANDCASTLE_WORKFLOW` in `lib/config.mts`, kept
-in step with the workflow's `name:`). They match the workflow, not the check's name, which also drops a run GitHub cancelled while it waited in its concurrency group. A check another
-workflow names `Sandcastle`, a check with no workflow run (code scanning's `CodeQL`) and every status are kept.
+**The run's own check:** a run started by a PR event (`pull_request_review` or `pull_request: unlabeled`) reports the `Sandcastle` job as a check on that PR's head. That job ends with
+its `Fail on hand-backs` step, which turns it red when the run hands back anything, even an unrelated issue. A run the owner starts by adding the `sandcastle:follow-up` label is a
+`pull_request_target` run: its `Sandcastle` job is skipped, and it reports only `Record the approved head`. So in every mode, the sweep and a pass's read of the head's checks leave out
+each check run of the `Sandcastle` workflow (`SANDCASTLE_WORKFLOW` in `lib/config.mts`, kept in step with the workflow's `name:`). They match the workflow, not the check's name, which
+also drops a run GitHub cancelled while it waited in its concurrency group. A check another workflow names `Sandcastle`, a check with no workflow run (code scanning's `CodeQL`) and every
+status are kept.
 
 **Time:** the job has `timeout-minutes: 350`, and no new round starts after 4 hours. A usage or rate-limit error ends the run cleanly like the time budget: it doesn't fail roles or
 bounce issues. The next trigger resumes the work.

@@ -85,6 +85,9 @@ export const GATE_COVERED_CHECKS: readonly string[] = [
   "Tests: UI.Tests.Unit",
   "markdownlint",
   "yamllint",
+  "actionlint",
+  "zizmor",
+  "shellcheck",
 ];
 
 // The command the host runs in the sandbox as the gate: at each checkpoint, and
@@ -108,11 +111,15 @@ export const GATE_SCRIPT = "scripts/gate.sh";
 // reads its checks from, not only where its script sits.
 export const CHECK_PATHS: readonly string[] = [
   ".sandcastle/",
+  "tests/",
   "scripts/",
   ".github/ci/",
   ".github/workflows/",
   ".github/scripts/",
   ".github/hooks/",
+  ".claude/settings.json",
+  ".claude/skills/",
+  ".claude/agents/",
   "package.json",
   "Directory.Build.props",
   "Directory.Packages.props",

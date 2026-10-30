@@ -30,6 +30,11 @@ describe("GATE_COVERED_CHECKS", () => {
     assert.deepEqual([...listed].sort(), [...testProjects].sort());
   });
 
+  // scripts/gate.sh runs these three lints (lint-actions.yml's jobs) when a workflow or shell file changed.
+  it("names the lint jobs scripts/gate.sh reproduces", () => {
+    for (const name of ["actionlint", "zizmor", "shellcheck"]) assert.ok(GATE_COVERED_CHECKS.includes(name), `GATE_COVERED_CHECKS lacks ${name}`);
+  });
+
   it("matches the name ci.yml gives its test matrix jobs", () => {
     assert.match(workflowText, /name: "Tests: \$\{\{ matrix\.test_name \}\}"/);
   });
@@ -65,6 +70,13 @@ describe("CHECK_PATHS", () => {
       ".markdownlint-cli2.jsonc",
       ".yamllint.yml",
     ]) {
+      assert.ok(CHECK_PATHS.includes(path), `CHECK_PATHS lacks ${path}`);
+    }
+  });
+
+  // Tests decide what the gate proves, and these .claude files decide what the reviewers may read and do.
+  it("lists the tests and the files that govern the reviewers", () => {
+    for (const path of ["tests/", ".claude/settings.json", ".claude/skills/", ".claude/agents/"]) {
       assert.ok(CHECK_PATHS.includes(path), `CHECK_PATHS lacks ${path}`);
     }
   });

@@ -14,3 +14,11 @@
 # instructions, so have a person review every change to this file.
 #
 # With neither kind of line, the workflow installs nothing.
+
+dotfiles-sha 8dc86dfd144cc729b78371702a06395d412d3269
+skill dotnet-tdd
+skill dotnet-add-testing
+skill dotnet-xunit
+skill dotnet-testing-strategy
+skill dotnet-project-analysis
+skill dotnet-inspect
