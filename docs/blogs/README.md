@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-10-30 | [chore(baseline): Migrate auth0-management-app to the repo-ci-baseline Template](2026-10-30-pr-100-chore-baseline-migrate-auth0-management-app-to-the-repo-ci-baseline-template.md) | release,automation |
 | 2026-10-21 | [chore(review): Follow up on the local review's last round](2026-10-21-pr-94-chore-review-follow-up-on-the-local-review-s-last-round.md) | release,automation |
 | 2026-10-21 | [feat(review): Grade local review findings as Critical, Warning or Advisory](2026-10-21-pr-89-feat-review-grade-local-review-findings-as-critical-warning-or-advisory.md) | release,automation |
 | 2026-10-21 | [docs(README): Point the Releases table to how Releases are cut](2026-10-21-pr-86-docs-readme-point-the-releases-table-to-how-releases-are-cut.md) | release,automation |

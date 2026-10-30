@@ -74,6 +74,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.31](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.31) | 2026-10-30 | chore(baseline): Migrate auth0-management-app to the repo-ci-baseline Template | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-30-pr-100-chore-baseline-migrate-auth0-management-app-to-the-repo-ci-baseline-template.md) |
 | [v0.0.30](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.30) | 2026-10-21 | chore(review): Follow up on the local review's last round | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-94-chore-review-follow-up-on-the-local-review-s-last-round.md) |
 | [v0.0.29](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.29) | 2026-10-21 | feat(review): Grade local review findings as Critical, Warning or Advisory | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-89-feat-review-grade-local-review-findings-as-critical-warning-or-advisory.md) |
 | [v0.0.28](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.28) | 2026-10-21 | docs(README): Point the Releases table to how Releases are cut | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-86-docs-readme-point-the-releases-table-to-how-releases-are-cut.md) |
@@ -83,7 +84,6 @@ Blue, the default, renders no attribute.
 | [v0.0.24](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.24) | 2026-10-20 | chore: Re-apply the repo-ci-baseline Template | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-74-chore-re-apply-the-repo-ci-baseline-template.md) |
 | [v0.0.23](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.23) | 2026-10-20 | chore(scripts): Skip Sandcastle's own comments in watch-pr.sh | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-72-chore-scripts-skip-sandcastle-s-own-comments-in-watch-pr-sh.md) |
 | [v0.0.22](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.22) | 2026-10-20 | feat(Roles): List the Roles and the Users who hold them | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-69-feat-roles-list-the-roles-and-the-users-who-hold-them.md) |
-| [v0.0.21](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.21) | 2026-10-20 | feat(sandcastle): Follow up on hand-opened PRs labelled for it | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-70-feat-sandcastle-follow-up-on-hand-opened-prs-labelled-for-it.md) |
 
 <!-- RELEASES_END -->
 
