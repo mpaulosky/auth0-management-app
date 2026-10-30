@@ -138,6 +138,7 @@ export const REPO_SLUG = "mpaulosky/auth0-management-app";
 export const NOT_OWNED_BASELINE_PATHS: readonly string[] = [
   ".sandcastle/lib/code-review-skill.test.mts",
   ".sandcastle/lib/dockerfile.test.mts",
+  ".sandcastle/lib/repo-config.test.mts",
   ".sandcastle/lib/role-prompts.test.mts",
 ];
 

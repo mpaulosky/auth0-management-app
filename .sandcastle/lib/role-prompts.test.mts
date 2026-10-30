@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import type { SandcastleIssue } from "./github.mts";
+import { followUpPromptArgs, gateFixerPromptArgs, issuePromptArgs } from "./prompts.mts";
 import { SANDBOX_SKILLS } from "./repo-config.mts";
 
 const sandcastleFile = (path: string) => new URL(`../${path}`, import.meta.url);
@@ -201,21 +203,15 @@ describe("every prompt", () => {
 });
 
 // #58: the follow-up role and the gate-fixer also work on a hand-off PR that
-// has no issue, so their prompts name the brief and its source, not "the issue".
+// has no issue, so their prompts name the brief, not "the issue".
 describe("pass role prompts' brief", () => {
-  const args = { BRIEF_SOURCE: "The branch implements issue 3", ISSUE_TITLE: "Add a thing" };
-
   for (const role of ["follow-up", "gate-fixer"]) {
-    it(`opens the ${role}'s brief with the brief's source and the title`, () => {
+    it(`opens the ${role}'s brief with the issue number and the title`, () => {
       const prompt = read(`roles/${role}.md`);
 
       assert.match(prompt, /^# THE BRIEF$/m);
       assert.doesNotMatch(prompt, /^# THE ISSUE$/m);
-      assert.ok(prompt.includes("{{BRIEF_SOURCE}}: {{ISSUE_TITLE}}"));
-      assert.equal(
-        prompt.split("\n").find((line) => line.includes("{{BRIEF_SOURCE}}"))!.replace("{{BRIEF_SOURCE}}", args.BRIEF_SOURCE).replace("{{ISSUE_TITLE}}", args.ISSUE_TITLE),
-        "The branch implements issue 3: Add a thing",
-      );
+      assert.ok(prompt.includes("The branch implements #{{TASK_ID}}: {{ISSUE_TITLE}}"));
     });
 
     it(`wraps the ${role}'s brief and its comments in <brief> tags`, () => {
@@ -265,6 +261,30 @@ describe("prompt shell expansions", () => {
       for (const [number, line] of read(prompt).split("\n").entries()) {
         if (!line.includes("!`")) continue;
         assert.match(line, /^!`git [^`]+`$/, `${prompt}:${number + 1}: ${line}`);
+      }
+    });
+  }
+});
+
+// Sandcastle refuses a placeholder with no value, so a role prompt that names
+// one its prompt arguments don't supply fails every run of that role.
+describe("every role prompt's placeholders", () => {
+  const issue: SandcastleIssue = { number: 3, title: "Add a thing", body: "Body", labels: ["Sandcastle"], comments: [] };
+  // The placeholders a role's prompt may name besides the ones its arguments supply: the host adds these.
+  const added = new Set(["SHARED_RULES", "UI_DEVELOPER", "SOURCE_BRANCH", "TARGET_BRANCH"]);
+  const argsOf: Record<string, Record<string, unknown>> = {
+    "follow-up": followUpPromptArgs(issue, "feature/3-add-a-thing", 7, [], "Already contains main."),
+    "gate-fixer": gateFixerPromptArgs(issue, "feature/3-add-a-thing", 2, "gate output"),
+    scribe: issuePromptArgs(issue, "feature/3-add-a-thing"),
+    tester: issuePromptArgs(issue, "feature/3-add-a-thing"),
+  };
+
+  for (const [role, args] of Object.entries(argsOf)) {
+    it(`gives the ${role} prompt a value for every {{NAME}} it names`, () => {
+      const names = [...read(`roles/${role}.md`).matchAll(/\{\{([A-Z_]+)\}\}/g)].map((match) => match[1]!);
+
+      for (const name of names) {
+        assert.ok(name in args || added.has(name), `roles/${role}.md names {{${name}}}, which its prompt arguments don't supply`);
       }
     });
   }
