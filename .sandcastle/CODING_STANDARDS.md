@@ -6,7 +6,7 @@ Every Sandcastle role follows these standards, and the reviewer checks the branc
 
 - `.github/instructions/` holds the rules the Baseline Template owns: commit messages, Markdown and blog posts.
 - `docs/CODING_STANDARDS.md` holds the .NET, Blazor, Auth0, error handling, validation, architecture and testing standards, and wins when another rule file disagrees.
-- `.claude/rules/` holds the path-scoped rules (`blazor.md`, `dotnet.md`, `markdown.md`, `sandcastle.md`).
+- `.claude/rules/` holds the path-scoped rules.
 - `docs/PROCESS.md` says how a change reaches `main`: branches, commits, PR titles and descriptions, checks and review.
 - `CLAUDE.md` says how the repo is built and laid out.
 

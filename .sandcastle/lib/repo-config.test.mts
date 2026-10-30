@@ -88,7 +88,10 @@ describe("ROLE_AGENTS", () => {
 describe(".sandcastle/check.sh", () => {
   // The gate runs `pnpm run check:sandcastle` only when one of check.sh's paths changed, and no CI job runs it, so a file that a
   // .sandcastle test reads must be watched or a change to it passes the gate with that test unrun.
+  // Only the pathspec of the `git diff --quiet` that decides the skip, not the comment above it, which names some of the same files.
   const checkSh = readFileSync(join(root, ".sandcastle/check.sh"), "utf8");
+  const diffStatement = checkSh.slice(checkSh.indexOf("git diff --quiet"), checkSh.indexOf("; then", checkSh.indexOf("git diff --quiet")));
+  const watched = diffStatement.slice(diffStatement.indexOf(" -- ") + 4).split(/[\s\\]+/).map((spec) => spec.replace(/^':\(glob\)|'$/g, ""));
 
   for (const path of [
     "README.md",
@@ -105,7 +108,7 @@ describe(".sandcastle/check.sh", () => {
     ".github/ci/gate-checks.sh",
   ]) {
     it(`reruns the Sandcastle check when ${path} changes`, () => {
-      assert.ok(checkSh.includes(path), `check.sh doesn't watch ${path}`);
+      assert.ok(watched.includes(path), `check.sh doesn't watch ${path}`);
     });
   }
 });
