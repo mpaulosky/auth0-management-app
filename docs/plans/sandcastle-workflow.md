@@ -477,11 +477,9 @@ with the write token, and every other event runs the host code checked out from 
 pending slot and can't displace a real pending run. One run going and at most one pending in the group. Every run re-reads the whole queue, so collapsed triggers lose nothing.
 
 **Follow-up runs** ([#53](https://github.com/mpaulosky/auth0-management-app/issues/53)): the Template's workflow has one `sandcastle` job and no mode switch, so a run started by a review or
-a CI completion is a full run and
-waits behind a running build in the `sandcastle` group. The host still supports `SANDCASTLE_MODE=follow-up` (`runModeFrom` in `lib/config.mts`; any value but empty or `follow-up` fails the
-run before it touches git, `gh` or a sandbox),
-which only sweeps and runs follow-up passes once: use it for a local run. The `SANDCASTLE_FOLLOW_UP_JOB` and `SANDCASTLE_FOLLOW_UP_LABEL` repository variables the earlier workflow read are
-no longer used and can be deleted.
+a CI completion is a full run and waits behind a running build in the `sandcastle` group. The host still supports `SANDCASTLE_MODE=follow-up` (`runModeFrom` in `lib/config.mts`; any value
+but empty or `follow-up` fails the run before it touches git, `gh` or a sandbox), which only sweeps and runs follow-up passes once: use it for a local run. The `SANDCASTLE_FOLLOW_UP_JOB` and
+`SANDCASTLE_FOLLOW_UP_LABEL` repository variables the earlier workflow read are no longer used and can be deleted.
 
 A local follow-up run (`SANDCASTLE_MODE=follow-up`) can be going beside a full run, and a full run still sweeps at the start of each round, as the backstop for a follow-up event
 that was dropped or a pass that failed. `sandcastle:building` keeps the two off the same PR. A pass claims it on the PR's issue, or on a hand-off PR itself,
@@ -501,10 +499,9 @@ round. Three gaps remain:
   threads then waits for the full run's next round, the next CI completion or the scheduled run.
 
 **The run's own check:** a run started by a PR event (`pull_request_review`, `pull_request: unlabeled`) reports the `Sandcastle` job as a check on that PR's head; a `pull_request_target:
-labeled` run reports only
-`Record the approved head`. It runs while the run does, and Fail on hand-backs turns it red when the run hands back anything, even an unrelated issue. So in every mode,
-the sweep and a pass's read of the head's checks leave out each check run of the `Sandcastle` workflow (`SANDCASTLE_WORKFLOW` in `lib/config.mts`, kept in step with the
-workflow's `name:`). They match the workflow, not the check's name, which also drops a run GitHub cancelled while it waited in its concurrency group. A check another
+labeled` run reports `Record the approved head`, and its `Sandcastle` job is skipped. It runs while the run does, and Fail on hand-backs turns it red when the run hands back anything, even
+an unrelated issue. So in every mode, the sweep and a pass's read of the head's checks leave out each check run of the `Sandcastle` workflow (`SANDCASTLE_WORKFLOW` in `lib/config.mts`, kept
+in step with the workflow's `name:`). They match the workflow, not the check's name, which also drops a run GitHub cancelled while it waited in its concurrency group. A check another
 workflow names `Sandcastle`, a check with no workflow run (code scanning's `CodeQL`) and every status are kept.
 
 **Time:** the job has `timeout-minutes: 350`, and no new round starts after 4 hours. A usage or rate-limit error ends the run cleanly like the time budget: it doesn't fail roles or
