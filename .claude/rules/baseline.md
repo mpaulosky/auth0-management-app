@@ -30,21 +30,18 @@ owner's repositories. Each file it supplies is one of two kinds:
 
 ## Not from the Template: this repository's own
 
-- `.github/workflows/sandcastle.yml` comes with Sandcastle, not the Template, so no Apply touches it. Change it here, and
-  make the same change in the other copies (dotfiles' own, and Blazor-Server's) when it applies to them too.
-- `.github/workflows/copilot-review-sync.yml` keeps `.github/copilot-instructions.md` in step with the code-review skill.
-  The Template doesn't carry it.
-- `scripts/tests/check-git-hooks.test.sh` tests `scripts/check-git-hooks.sh`, Claude Code's `SessionStart` hook. The
-  Template doesn't carry it.
+- `.sandcastle/lib/repo-config.mts` holds this repo's Sandcastle values (role models, hooks, the gate's covered checks); it is Seed.
+- `.sandcastle/lib/code-review-skill.test.mts`, `dockerfile.test.mts`, `repo-config.test.mts` and `role-prompts.test.mts` test this repo's own
+  files and are listed in `NOT_OWNED_BASELINE_PATHS`.
+- `.github/copilot-instructions.md` is generated from the code-review skill by `scripts/sync-copilot-review.sh`.
 
 ## Owned files: changed in the Template
 
 Every other file the Template supplies is Owned. Under the paths this rule covers, that is:
 
-- `.github/workflows/*.yml` except the two workflows above, `.github/hooks/**`, `.github/scripts/**`, `.github/instructions/*.md` and
+- `.github/workflows/*.yml` (`sandcastle.yml` and `copilot-review-sync.yml` included), `.github/hooks/**`, `.github/scripts/**`, `.github/instructions/*.md` and
   `.github/pull_request_template.md`;
-- `scripts/gate.sh`, `scripts/check-branch-name.sh`, `scripts/check-pr-title.sh` and `scripts/tests/**` except the test
-  above;
+- `scripts/gate.sh`, `scripts/check-branch-name.sh`, `scripts/check-pr-title.sh` and `scripts/tests/**`;
 - `docs/PROCESS.md`, `.editorconfig`, `.gitignore`, `.markdownlint-cli2.jsonc`, `.yamllint.yml`, `codecov.yml`,
   `GitVersion.yml` and `global.json`.
 

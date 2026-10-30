@@ -1,21 +1,22 @@
 # auth0-management-app coding standards
 
-Every Sandcastle role follows these standards, and the reviewer checks the branch against them. Fill in each section for this repo, and keep it short: link a longer
-document rather than copying it here.
+Every Sandcastle role follows these standards, and the reviewer checks the branch against them. This file points at where the standards live rather than copying them.
 
 ## Where the rules are
 
 - `.github/instructions/` holds the rules the Baseline Template owns: commit messages, Markdown and blog posts.
+- `docs/CODING_STANDARDS.md` holds the .NET, Blazor, Auth0, error handling, validation, architecture and testing standards, and wins when another rule file disagrees.
+- `.claude/rules/` holds the path-scoped rules (`blazor.md`, `dotnet.md`, `markdown.md`, `sandcastle.md`).
 - `docs/PROCESS.md` says how a change reaches `main`: branches, commits, PR titles and descriptions, checks and review.
 - `CLAUDE.md` says how the repo is built and laid out.
 
 ## Code
 
-The language and framework conventions this repo follows: naming, layout, nullability, error handling and logging.
+See `docs/CODING_STANDARDS.md` and `.claude/rules/dotnet.md` and `blazor.md`.
 
 ## Tests
 
-Where tests go, how they're named, and what each kind of test (unit, integration, end-to-end) covers.
+See "Testing" in `docs/CODING_STANDARDS.md`; the test projects sit under `tests/`.
 
 ## Sandcastle's TypeScript
 

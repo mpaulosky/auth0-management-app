@@ -106,10 +106,10 @@ SANDCASTLE_LABEL=<label> pnpm run sandcastle          # work the issues labelled
 ```
 
 `scripts/gate.sh` is the definition of "ready to push": lint of the changed YAML, Markdown, workflows and shell
-scripts, then this repo's own checks in `.github/ci/gate-checks.sh` (the local review check, the `gh` repository check on
-every gate, which refuses a `gh` command in `.claude/skills/` or `scripts/` given neither
-`GH_REPO=mpaulosky/auth0-management-app` nor `--repo`, then the Copilot review sync check, the test of
-`scripts/check-git-hooks.sh` and the Sandcastle check, each when its files changed), then a Release build and each test
+scripts, the `gh` repository check (`.github/scripts/check_gh_repo.py`, which refuses a `gh` command in `.claude/skills/` or
+`scripts/` given neither `GH_REPO=mpaulosky/auth0-management-app` nor `--repo`), the local review check, the Copilot review
+sync check, then this repo's own checks in `.github/ci/gate-checks.sh` (Sandcastle's check through `.sandcastle/check.sh` and the test of
+`scripts/check-git-hooks.sh`, each when its files changed), then a Release build and each test
 project under `tests/`, run one by one.
 `scripts/gate.sh` is an Owned file of the CI Baseline (see `.claude/rules/baseline.md`), overwritten on every Apply,
 so a new repo-only check goes in `gate-checks.sh`. Don't use `dotnet test --solution` as the check: under Microsoft
@@ -152,10 +152,8 @@ Branches, worktrees, commits, PR titles and descriptions, merging and releases f
 Don't start work on an issue labelled `sandcastle:building`: a Sandcastle run is building it, and the label clears when
 that build ends. Check before running `/implement-spec` or opening a branch for an issue.
 
-Claude reviews a PR only when it has the `review:claude` label. Add the label to every PR you open. Sandcastle adds it to
-the PRs it opens itself, and its follow-up sweep adds it to any open Sandcastle PR it sweeps that has never had it, such as
-one whose run stopped between creating it and labelling it. A run that couldn't add the label ends red: add it by hand to
-each PR the run report lists under **Pull requests without `review:claude`**.
+Claude reviews a PR only when it has the `review:claude` label, and its review counts only where Copilot can't review the head. PR Auto-Merge
+and `land.sh` add the label then, so don't add it yourself, except where [docs/PROCESS.md](docs/PROCESS.md) says to.
 
 Watch every PR you open until it merges: Sandcastle's follow-up sweep acts only on the PRs Sandcastle opened itself and
 the ones handed off to it (below), so nothing else answers a hand-opened PR's review threads or fixes its red checks,

@@ -30,15 +30,6 @@ changed() {
   ! git diff --quiet --no-renames "$base" HEAD -- "$@"
 }
 
-# .github/copilot-instructions.md is generated from the code-review skill, so
-# GitHub's Copilot review and Claude Code review against the same rules.
-if changed .claude/skills/code-review/SKILL.md .github/copilot-instructions.md scripts/sync-copilot-review.sh; then
-  echo -e "${CYAN}🔁 Copilot review instructions sync...${RESET}"
-  scripts/sync-copilot-review.sh --check
-else
-  echo -e "${GREEN}✅ No Copilot review sync changes to check.${RESET}"
-fi
-
 # check-git-hooks.sh is Claude Code's SessionStart hook; ci.yml's "Hook tests"
 # job is Owned by the Baseline, so the gate is what runs its test. The test also
 # checks the files that wire the hook in, so a change to one reruns it.
