@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { CHECK_PATHS, GATE_COVERED_CHECKS, ROLE_AGENTS } from "./repo-config.mts";
+import { CHECK_PATHS, GATE_COVERED_CHECKS, ROLE_AGENTS, SANDBOX_SKILLS } from "./repo-config.mts";
 
 // This repo's own values in lib/repo-config.mts, pinned to the files they describe. The Owned tests take their values from the
 // config, so none of them notices a CI job that was renamed or a test project that was added.
@@ -30,9 +30,17 @@ describe("GATE_COVERED_CHECKS", () => {
     assert.deepEqual([...listed].sort(), [...testProjects].sort());
   });
 
-  // scripts/gate.sh runs these three lints (lint-actions.yml's jobs) when a workflow or shell file changed.
-  it("names the lint jobs scripts/gate.sh reproduces", () => {
-    for (const name of ["actionlint", "zizmor", "shellcheck"]) assert.ok(GATE_COVERED_CHECKS.includes(name), `GATE_COVERED_CHECKS lacks ${name}`);
+  // scripts/gate.sh reproduces the lints of lint-actions.yml (`run_tool <name>`), whose jobs carry the same names.
+  it("names every lint job scripts/gate.sh runs from lint-actions.yml", () => {
+    const gate = readFileSync(join(root, "scripts/gate.sh"), "utf8");
+    const lintJobs = readFileSync(join(workflows, "lint-actions.yml"), "utf8");
+    const tools = [...gate.matchAll(/^\s*run_tool (\w+) /gm)].map((match) => match[1] as string);
+
+    assert.ok(tools.length > 0, "scripts/gate.sh has no run_tool call");
+    for (const tool of tools) {
+      assert.match(lintJobs, new RegExp(`^\\s*name:\\s*${escaped(tool)}\\s*$`, "m"), `lint-actions.yml has no job named ${tool}`);
+      assert.ok(GATE_COVERED_CHECKS.includes(tool), `GATE_COVERED_CHECKS lacks ${tool}`);
+    }
   });
 
   it("matches the name ci.yml gives its test matrix jobs", () => {
@@ -81,6 +89,11 @@ describe("CHECK_PATHS", () => {
     }
   });
 
+  it("covers the folder every test project is in", () => {
+    assert.ok(testProjects.length > 0);
+    assert.ok(CHECK_PATHS.includes("tests/"), "CHECK_PATHS lacks tests/, which holds every test project");
+  });
+
   it("ends a folder with a slash", () => {
     for (const path of CHECK_PATHS) assert.equal(statSync(join(root, path)).isDirectory(), path.endsWith("/"), path);
   });
@@ -123,4 +136,22 @@ describe(".sandcastle/check.sh", () => {
       assert.ok(watched.includes(path), `check.sh doesn't watch ${path}`);
     });
   }
+});
+
+// .github/ci/sandcastle-skills.txt is what the Sandcastle workflow installs on the runner; SANDBOX_SKILLS is what lib/skills.mts mounts.
+// An Actions run mounts only what the file lists, so the two must name the same skills, at one pinned dotfiles commit.
+describe("sandcastle-skills.txt", () => {
+  const lines = readFileSync(join(root, ".github/ci/sandcastle-skills.txt"), "utf8")
+    .split("\n")
+    .filter((line) => line.trim() !== "" && !line.startsWith("#"));
+  const skills = lines.filter((line) => line.startsWith("skill ")).map((line) => line.slice("skill ".length));
+
+  it("lists exactly SANDBOX_SKILLS, each once", () => {
+    assert.deepEqual([...skills].sort(), [...SANDBOX_SKILLS].sort());
+  });
+
+  it("pins one dotfiles commit and holds nothing else", () => {
+    assert.equal(lines.filter((line) => /^dotfiles-sha [0-9a-f]{40}$/.test(line)).length, 1);
+    assert.equal(lines.length, skills.length + 1);
+  });
 });

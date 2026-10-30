@@ -447,9 +447,10 @@ chosen key and no value; Sandcastle takes the value from the host's environment.
 login and no-reply address, because Sandcastle copies the host's git identity into the sandbox for the agents' commits.
 
 **Skills:** `lib/skills.mts` mounts the `dotnet-*` skills from `~/.claude/skills`, which a hosted runner doesn't have. The workflow fetches the owner's public
-[dotfiles](https://github.com/mpaulosky/dotfiles) repository (only `Support For New Projects/.claude/skills`, with no token) at a commit pinned in the workflow, like the actions, and
-links that folder to `~/.claude/skills` before it sets up the credential helper. So the run mounts all six skills, the fetch never sends the PAT, and a push to dotfiles changes
-nothing here until the owner moves the pin. The step fails when the pinned commit lacks one of the six.
+[dotfiles](https://github.com/mpaulosky/dotfiles) repository (only `Support For New Projects/.claude/skills`, with no token) at the commit the `dotfiles-sha` line of
+`.github/ci/sandcastle-skills.txt` pins (the file also has one `skill` line per skill), like an action's pin, and links that folder to `~/.claude/skills` before it sets up the credential
+helper. So the run mounts all six skills, the fetch never sends the PAT, and a push to dotfiles changes nothing here until the owner moves the pin. The step fails when the pinned commit
+lacks one of the six.
 
 Triggers:
 
