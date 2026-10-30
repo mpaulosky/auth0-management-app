@@ -129,8 +129,8 @@ describe(".sandcastle/check.sh", () => {
     ".claude/rules",
     ".claude/settings.json",
     "docs/plans/sandcastle-workflow.md",
-    ".github/workflows/sandcastle.yml",
-    ".github/ci/gate-checks.sh",
+    ".github/workflows",
+    ".github/ci",
   ]) {
     it(`reruns the Sandcastle check when ${path} changes`, () => {
       assert.ok(watched.includes(path), `check.sh doesn't watch ${path}`);

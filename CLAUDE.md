@@ -159,7 +159,7 @@ Watch every PR you open until it merges: Sandcastle's follow-up sweep acts only 
 the ones handed off to it (below), so nothing else answers a hand-opened PR's review threads or fixes its red checks,
 and PR Auto-Merge holds it on every unresolved thread. Run `scripts/watch-pr.sh <n>` in the background after opening the PR and after every push. It
 exits with the reason it woke you: the PR closed, it conflicts with or is behind `main`, a check failed, a review thread
-or other feedback is waiting on you, or nothing changed for 30 minutes. Act on it, then run it again:
+or other feedback is waiting on you (exit 0), nothing changed until its timeout (120 minutes, `WATCH_PR_TIMEOUT`; exit 1), or it can't read the PR (exit 2). Act on it, then run it again:
 
 - Merge `origin/main` into the branch in its worktree when it conflicts or is behind, and fix each red check.
 - On a thread you agree with, fix it, push the fix, and only then reply saying what changed; then resolve it if Claude
@@ -180,7 +180,7 @@ or other feedback is waiting on you, or nothing changed for 30 minutes. Act on i
   description also starts PR Auto-Merge, so edit it only once the fix it describes is pushed.
 
 Stop when the PR has merged or closed, when only threads waiting on a person or a check you can't fix remain, or when it
-has sat 30 minutes with nothing to act on, and tell the owner which.
+has sat quiet until the watcher's timeout with nothing to act on, and tell the owner which.
 
 To hand a PR off when you stop watching it (the session is ending, the laptop is closing), add the
 `sandcastle:follow-up` label to it. Once it's on, stop running `scripts/watch-pr.sh` and push nothing more to the
