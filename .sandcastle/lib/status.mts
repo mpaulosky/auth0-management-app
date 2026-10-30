@@ -1,423 +1,511 @@
 // ---------------------------------------------------------------------------
-// Sandcastle status (#65)
+// Sandcastle status
 //
-// Nothing showed why Sandcastle was holding one of its PRs. This module reads
-// every open Sandcastle PR through the sweep's own functions (sweepSkipReason,
-// admitToSweep, decide, markerCommentsSince), so the status can't disagree with
-// what the sweep does, and renders the reason each PR is held, with the
-// Sandcastle workflow's runs in progress and queued. It is read-only: nothing
-// here writes to GitHub.
+// The read-only status of the follow-up sweep: for each open Sandcastle pull
+// request into main, how many follow-up passes it has used, why Sandcastle is
+// holding it (the sweep's own answer), its unresolved threads split into bot,
+// owner and other, and the Sandcastle workflow's recent runs. It owns the
+// report's data and rendering, and writes nothing to GitHub or git.
 // ---------------------------------------------------------------------------
 
-import { FOLLOW_UP_LABEL, FOLLOW_UP_MARKER, FOLLOW_UP_PASS_CAP, PR_MARKER, REVIEW_LABEL, type QueueScope } from "./config.mts";
+import { inspect } from "node:util";
+import {
+  BUILDING_LABEL,
+  FOLLOW_UP_LABEL,
+  FOLLOW_UP_PASS_CAP,
+  LOCAL_QUEUE_LABEL,
+  QUEUE_LABEL,
+  describeQueueScope,
+  queueScopeFrom,
+  type QueueScope,
+} from "./config.mts";
+import {
+  followUpPassCount,
+  hasLabel,
+  repoName,
+  sandcastleWorkflowRuns,
+  type IssueEvent,
+  type WorkflowRun,
+} from "./github.mts";
 import {
   admitToSweep,
-  answeredByHost,
   decide,
   isSandcastlePullRequest,
-  issueNumberOf,
-  lastJudgingComment,
+  labelOriginHold,
   liveFollowUpGitHub,
-  NEEDS_HUMAN,
   sweepContext,
-  sweepSubject,
-  type CheckState,
+  withoutAnsweredThreads,
   type FollowUpGitHub,
-  type SweepAdmission,
+  type LabelOriginHold,
   type SweepContext,
   type SweepDecision,
   type SweepPullRequest,
+  type SweepSubject,
 } from "./follow-up.mts";
-import { hasLabel, markerCommentReads, markerCommentsSince, sandcastleWorkflowRuns, type CommentReads, type WorkflowRun } from "./github.mts";
-import { activeQueueScope, liveQueueGitHub, loadQueue, type IsOwner, type QueueGitHub } from "./queue.mts";
+import { activeQueueScope, liveQueueGitHub, loadQueue, type QueueGitHub } from "./queue.mts";
 
-// What the status reads; every member is a read. The sweep's reads come from
-// FollowUpGitHub, so the status reads what the sweep does; passComments is
-// what the pass counts its passes from, and workflowRuns the Sandcastle
-// workflow's unfinished runs. Tests pass a stub that also carries
-// FollowUpGitHub's writes, which throw.
+// The reads status needs. Only reads, so the type itself keeps the command read-only. `repo` and `queueScope` name what the
+// report is about.
 export type StatusGitHub = Pick<
   FollowUpGitHub,
-  "hostLogin" | "openPullRequests" | "inScopeIssues" | "isOwner" | "pullRequestEvents" | "pullRequestBodyEdits" | "followsHandOffs"
+  | "hostLogin"
+  | "openPullRequests"
+  | "inScopeIssues"
+  | "followsHandOffs"
+  | "pullRequestEvents"
+  | "pullRequestBodyEdits"
+  | "pullRequestComments"
+  | "mergeOfMain"
+  | "isOwner"
+  | "repositoryOwner"
+  | "reviewThreads"
 > & {
-  passComments(pr: number): CommentReads;
-  workflowRuns(): WorkflowRun[];
-  // The lines loadQueue gave for the issues it left out because an owner check
-  // couldn't answer, as of the last inScopeIssues read. Such an issue looks
-  // like an ordinary skip to the sweep's checks, so the status says so itself.
-  uncheckedIssues(): string[];
+  passesUsed(pr: number): number;
+  workflowRuns(limit: number): WorkflowRun[];
+  repo(): string;
+  queueScope(): QueueScope;
 };
 
-// A PR's unresolved review threads, by who opened them: a bot, the repository
-// owner, someone else, or someone whose owner check couldn't answer.
-// `answered` counts the bot and owner threads the host already replied to
-// (answeredByHost), which `decide` doesn't count as needing a pass.
-// `replyUnknown` counts the answered threads where someone replied after the
-// host and an owner check on them couldn't answer: they might be the owner's
-// "still wrong", so the thread may not be answered after all.
-export type ThreadCounts = { bot: number; owner: number; others: number; unknown: number; answered: number; replyUnknown: number };
+// What `decide` can't see: planPass (lib/follow-up-pass.mts) skips a flagged PR when there's no needed merge, no red check with an
+// Actions run behind it and no thread for the role, or its head moved, or a thread author can't be checked. Status reads none of
+// that, so a flag is the sweep's decision, not a promise that a pass runs.
+export const PASS_MAY_SKIP = "a pass may still skip it: nothing it can re-run or fix, a thread author it can't identify, or a moved head";
 
-// A PR head's checks: how many, how many are still running, and the names of
-// the completed red ones.
-export type CheckSummary = { total: number; running: number; red: string[] };
+// Where a PR stands with the sweep.
+export type Held = {
+  state: "skipped" | "waiting" | "flagged for a pass" | "flagged for a hand-back" | "act next sweep" | "settled";
+  reason: string;
+};
 
-// Why a PR is held: the sweep skips it (sweepSkipReason or an admission
-// check), puts back a hand-back label a stranger removed, or decides about it
-// with `decide`. `handsBack` says the next pass hands the PR back, because it
-// needs a pass and has used FOLLOW_UP_PASS_CAP of them. `unknown` on a skip
-// says an owner check couldn't answer, which makes the status partial, as it
-// ends a follow-up run red.
-export type HeldReason =
-  | { kind: "skipped"; reason: string; unknown: boolean }
-  | { kind: "restore"; label: string; reason: string }
-  | { kind: "decided"; decision: SweepDecision; handsBack: boolean };
+// A PR's unresolved threads by who opened them; `answered` are the ones the host replied to, which wait on the owner.
+export type ThreadSplit = { bot: number; owner: number; other: number; answered: number };
 
-// One open Sandcastle PR's entry in the status, or the error that stopped one
-// of its reads: one PR's failure doesn't hide the others.
-export type PullRequestStatus =
-  | {
-      number: number;
-      title: string;
-      url: string;
-      // The issue the PR's branch names (issueNumberOf), if any.
-      issueNumber: number | undefined;
-      // Handed to Sandcastle with sandcastle:follow-up rather than opened by it (#58).
-      handOff: boolean;
-      passesUsed: number;
-      held: HeldReason;
-      threads: ThreadCounts;
-      mergeStateStatus: string;
-      checks: CheckSummary;
-      needsHuman: boolean;
-      reviewLabel: boolean;
-    }
-  | { number: number; title: string; url: string; error: string };
+// One PR's line in the report. A field that couldn't be read is `{ unreadable }` with the reason.
+export type PrStatus = {
+  number: number;
+  title: string;
+  headRefName: string;
+  subject: "issue" | "hand-off" | "not swept" | "unknown";
+  issueNumber?: number;
+  passes: { used: number; cap: number } | { unreadable: string };
+  held: Held;
+  threads: ThreadSplit | { unreadable: string };
+  mergeState: string;
+  draft: boolean;
+  labels: string[];
+};
 
-// Everything the status command prints: the Sandcastle PRs by number, how
-// many other open PRs into main there are, and the workflow's unfinished
-// runs, or why they couldn't be read.
+// What the report shows: `scope` is the queue scope in words, `unlisted` counts the open PRs that aren't listed, and `runs` are
+// the Sandcastle workflow's latest.
 export type StatusReport = {
-  // The login every PR was judged against: whoever is signed in to gh here.
-  // The Actions sweep judges against its own login, so the two can differ.
-  host: string;
-  pullRequests: PullRequestStatus[];
-  othersOpen: number;
-  // Open PRs that carry PR_MARKER but weren't opened by `host`, so they aren't
-  // listed. If gh here isn't signed in as the account the Actions sweep
-  // publishes with, these are its PRs; the status is partial when any.
-  foreignMarked: { number: number; author: string | null }[];
-  // Issues left out of the in-scope set for want of an owner check, so a PR on
-  // one may be listed as an ordinary skip; the status is partial when any.
-  uncheckedIssues: string[];
-  runs: { running: WorkflowRun[]; queued: WorkflowRun[] } | { error: string };
+  repo: string;
+  scope: string;
+  prs: PrStatus[];
+  unlisted: number;
+  runs: WorkflowRun[] | { unreadable: string };
 };
 
-// How many follow-up passes the PR has used: the host's FOLLOW_UP_MARKER
-// comments since sandcastle:needs-human was last removed, counted by
-// markerCommentsSince as the pass counts them (livePassHost.passCount), so a
-// PR handed back and picked up again shows its new count, not its total.
-export function followUpPassesUsed(reads: CommentReads, hostLogin: string): number {
-  return markerCommentsSince(reads.comments, reads.timeline, NEEDS_HUMAN, FOLLOW_UP_MARKER, reads.createdAt, hostLogin).length;
+// How many of the Sandcastle workflow's runs the report lists.
+const RUNS_SHOWN = 10;
+
+// Appended to every line the read-only queue load logs, so a reader of the status can tell a fix the sweep would make from one
+// the status made.
+const QUEUE_LOG_SUFFIX = " (status only: nothing changed)";
+
+// Why a read failed, in one line.
+const causeOf = (error: unknown): string => (error instanceof Error ? error.message : String(error)).trim().split("\n").join(" ");
+
+// Which open PRs are listed: Sandcastle's own, and any same-repo PR into main carrying the owner's hand-off label, so the
+// owner sees why a label that doesn't count leaves a PR alone.
+export function isListed(pr: SweepPullRequest, host: string): boolean {
+  if (isSandcastlePullRequest(pr, host)) return true;
+  return pr.isCrossRepository === false && pr.baseRefName === "main" && hasLabel(pr, FOLLOW_UP_LABEL);
 }
 
-// The PR's unresolved threads, split by who opened them, the way `decide`
-// and the run report tell them apart: a bot's, the owner's (isOwner true),
-// someone else's (false) and unchecked (undefined).
-export function threadCounts(pr: SweepPullRequest, isOwner: IsOwner, hostLogin: string): ThreadCounts {
-  const counts: ThreadCounts = { bot: 0, owner: 0, others: 0, unknown: 0, answered: 0, replyUnknown: 0 };
-  for (const thread of pr.threads.filter((candidate) => !candidate.resolved)) {
-    const owner = thread.byBot ? undefined : isOwner(thread.author);
-    if (thread.byBot) counts.bot++;
-    else if (owner === true) counts.owner++;
-    else if (owner === false) counts.others++;
-    else counts.unknown++;
-    // Only the threads `decide` would count can be waiting on the host's answer.
-    if ((thread.byBot || owner === true) && answeredByHost(thread, isOwner, hostLogin)) {
-      counts.answered++;
-      if (repliedAfterHostUnchecked(thread, isOwner, hostLogin)) counts.replyUnknown++;
-    }
+// The sweep's own answer for one PR, in the sweep's order: not admitted, then the label-origin hold, then `decide`'s
+// decision (made on the PR without the threads the host answered). `passesUsed` tells a flag for a pass from a flag for a hand-back, as
+// the pass's cap check does. Notes on the threads that wait on a person are appended to the reason. No writes.
+export function heldReason(args: {
+  pr: SweepPullRequest;
+  admitted: { subject: SweepSubject } | { skip: string };
+  origin: LabelOriginHold | undefined;
+  decision?: SweepDecision;
+  passesUsed?: number;
+  answered: number;
+  human: number;
+}): Held {
+  const { admitted, origin, decision, passesUsed, answered, human } = args;
+  if ("skip" in admitted) return { state: "skipped", reason: `isn't swept: ${admitted.skip}` };
+  if (origin?.kind === "unknown") {
+    return { state: "skipped", reason: "couldn't check whether the repository owner removed sandcastle:needs-human" };
   }
-  return counts;
+  if (origin?.kind === "restore") return { state: "skipped", reason: `${origin.reason}; the sweep puts the label back` };
+  if (decision === undefined) return { state: "waiting", reason: "the sweep has no decision for it yet" };
+  const notes =
+    (answered > 0 ? `; ${answered} answered thread(s) wait on the owner` : "") +
+    (human > 0 ? `; ${human} thread(s) from others wait on a person` : "");
+  const held = ((): Held => {
+    switch (decision.action) {
+      case "wait":
+        return { state: "waiting", reason: decision.reason };
+      case "needs-pass": {
+        const reasons = decision.reasons.join("; ");
+        if (passesUsed !== undefined && passesUsed >= FOLLOW_UP_PASS_CAP) {
+          return {
+            state: "flagged for a hand-back",
+            reason: `has had ${FOLLOW_UP_PASS_CAP} of ${FOLLOW_UP_PASS_CAP} passes and is flagged for another (${reasons}); a pass that has something to act on hands it back with sandcastle:needs-human (${PASS_MAY_SKIP})`,
+          };
+        }
+        return { state: "flagged for a pass", reason: `${reasons} (${PASS_MAY_SKIP})` };
+      }
+      case "request-review":
+        return { state: "act next sweep", reason: "Copilot will be asked to review the head" };
+      case "update-branch":
+        return { state: "act next sweep", reason: "it will be updated from main" };
+      case "leave":
+        return { state: "settled", reason: decision.reason };
+    }
+  })();
+  return { ...held, reason: held.reason + notes };
 }
 
-// Whether a human commented on the thread after the host's answer and the
-// owner check on them couldn't answer. lastJudgingComment skips such a comment
-// as a stranger's, so the thread would read as answered when it may not be.
-function repliedAfterHostUnchecked(thread: SweepPullRequest["threads"][number], isOwner: IsOwner, hostLogin: string): boolean {
-  const comments = thread.recentComments ?? [];
-  const last = lastJudgingComment(thread, isOwner, hostLogin);
-  return comments
-    .slice(last === undefined ? 0 : comments.lastIndexOf(last) + 1)
-    .some((comment) => !comment.byBot && comment.author !== hostLogin && isOwner(comment.author) === undefined);
+// The unresolved threads of `pr` (the sweep's view, without the ones the host answered) by who opened them, with the same
+// tests as `decide` and the sweep's count of threads waiting on a person: an owner check that can't answer counts as other.
+function splitThreads(threads: SweepPullRequest["threads"], isOwner: StatusGitHub["isOwner"], answered: number): ThreadSplit {
+  const open = threads.filter((thread) => !thread.resolved);
+  const bot = open.filter((thread) => thread.byBot).length;
+  const owner = open.filter((thread) => !thread.byBot && isOwner(thread.author) === true).length;
+  return { bot, owner, other: open.length - bot - owner, answered };
 }
 
-// The head's checks, counted for the PR's entry.
-export function checkSummary(checks: readonly CheckState[]): CheckSummary {
-  return {
-    total: checks.length,
-    running: checks.filter((check) => !check.completed).length,
-    red: checks.filter((check) => check.completed && !check.green).map((check) => check.name),
-  };
-}
-
-// Why the PR is held, from the sweep's own admission and, for a PR it
-// sweeps, `decide`. A PR that needs a pass with its passes used up is handed
-// back by the next pass (lib/follow-up-pass.mts); that pass reads fresh
-// threads and checks first, so this is a forecast, not a promise.
-export function heldReason(
-  admission: SweepAdmission,
+// One PR's status. It reads only; the approval of a hand-off PR is read with a record of the head that does nothing, since the
+// sweep's would post a comment. A read that fails for this PR is shown as unreadable on its own line, and the other PRs still print.
+export function statusOf(
   pr: SweepPullRequest,
-  now: number,
-  isOwner: IsOwner,
-  host: string,
-  passesUsed: number,
-): HeldReason {
-  switch (admission.kind) {
-    case "skipped":
-      return { kind: "skipped", reason: admission.reason, unknown: admission.unknown };
-    case "restore":
-      return { kind: "restore", label: admission.label, reason: admission.reason };
-    case "swept": {
-      const decision = decide(pr, now, isOwner, host);
-      return { kind: "decided", decision, handsBack: decision.action === "needs-pass" && passesUsed >= FOLLOW_UP_PASS_CAP };
+  ctx: { context: SweepContext; now: number },
+  github: StatusGitHub,
+  log: (line: string) => void,
+): PrStatus {
+  const { context, now } = ctx;
+  let events: IssueEvent[] | undefined;
+  const eventsOfPr = () => (events ??= github.pullRequestEvents(pr.number));
+
+  let passes: PrStatus["passes"];
+  let passesUsed: number | undefined;
+  try {
+    passesUsed = github.passesUsed(pr.number);
+    passes = { used: passesUsed, cap: FOLLOW_UP_PASS_CAP };
+  } catch (error) {
+    passes = { unreadable: causeOf(error) };
+  }
+
+  // What decides whether the sweep takes the PR up. A read that fails here leaves the PR held, as the sweep leaves it alone for a round.
+  let admitted: { subject: SweepSubject } | { skip: string };
+  let origin: LabelOriginHold | undefined;
+  let unreadable: string | undefined;
+  try {
+    admitted = admitToSweep(
+      pr,
+      context,
+      {
+        pullRequestBodyEdits: (number) => github.pullRequestBodyEdits(number),
+        pullRequestComments: (number) => github.pullRequestComments(number),
+        mergeOfMain: (commit) => github.mergeOfMain(commit),
+        recordApprovedHead: () => {},
+        isOwner: github.isOwner,
+        repositoryOwner: () => github.repositoryOwner(),
+      },
+      eventsOfPr,
+      log,
+    );
+    origin = "skip" in admitted ? undefined : labelOriginHold(pr, eventsOfPr(), github.isOwner);
+  } catch (error) {
+    admitted = { skip: "" };
+    unreadable = `couldn't read what decides whether it is swept: ${causeOf(error)}`;
+  }
+
+  // The full threads are read once, and a failed read matters even where the sweep carries on without them (a conflicting PR is
+  // flagged whatever its threads say): the report shows those counts as unknown, never the unfiltered ones as if they were read.
+  let thin = pr;
+  let answered = 0;
+  let threads: PrStatus["threads"];
+  let threadsFailed: string | undefined;
+  let threadsThrew = false;
+  try {
+    ({ pr: thin, answered } = withoutAnsweredThreads(
+      pr,
+      {
+        isOwner: github.isOwner,
+        reviewThreads: (number) => {
+          try {
+            return github.reviewThreads(number);
+          } catch (error) {
+            threadsFailed = causeOf(error);
+            throw error;
+          }
+        },
+      },
+      context.host,
+    ));
+    threads = threadsFailed === undefined ? splitThreads(thin.threads, github.isOwner, answered) : { unreadable: threadsFailed };
+  } catch (error) {
+    // A throw from outside the reviewThreads read (the owner check, a thread's standing) has its cause here.
+    threadsFailed ??= causeOf(error);
+    threads = { unreadable: threadsFailed };
+    threadsThrew = true;
+  }
+
+  const subject = "subject" in admitted ? admitted.subject : undefined;
+  const split = "unreadable" in threads ? undefined : threads;
+  const decidable = subject !== undefined && origin === undefined;
+  let held: Held;
+  if (unreadable !== undefined) {
+    held = { state: "skipped", reason: unreadable };
+  } else if (decidable && threadsThrew) {
+    held = { state: "waiting", reason: `its threads couldn't be read (${threadsFailed}), so the sweep leaves it alone this round` };
+  } else {
+    // decide reads times GitHub returned and throws on one that doesn't parse, as it does in the sweep, which skips that PR for the
+    // round: one PR's bad data shows as its own line and the others still print.
+    try {
+      held = heldReason({
+        pr,
+        admitted,
+        origin,
+        decision: decidable ? decide(thin, now, github.isOwner) : undefined,
+        passesUsed,
+        answered,
+        human: split?.other ?? 0,
+      });
+    } catch (error) {
+      held = { state: "skipped", reason: `couldn't decide: ${causeOf(error)}` };
     }
   }
-}
 
-// Reads every open Sandcastle PR's status and the workflow's runs. The
-// Sandcastle PRs are the host's own and the ones labelled sandcastle:follow-up,
-// each listed even when the sweep skips it, with the reason. A failure of the
-// sweep's context or of the open PRs throws; one PR's failure becomes its
-// entry's error, and the runs' becomes the report's.
-export function buildStatus(github: StatusGitHub, now: number): StatusReport {
-  const context = sweepContext(github);
-  const uncheckedIssues = github.uncheckedIssues();
-  const open = github.openPullRequests();
-  const listed = open
-    .filter((pr) => isSandcastlePullRequest(pr, context.host) || hasLabel(pr, FOLLOW_UP_LABEL))
-    .sort((a, b) => a.number - b.number);
   return {
-    host: context.host,
-    pullRequests: listed.map((pr) => pullRequestStatus(pr, context, github, now)),
-    othersOpen: open.length - listed.length,
-    foreignMarked: open
-      .filter((pr) => !listed.includes(pr) && pr.body.includes(PR_MARKER) && pr.author !== context.host)
-      .map((pr) => ({ number: pr.number, author: pr.author })),
-    uncheckedIssues,
-    runs: workflowRunsStatus(github),
+    number: pr.number,
+    title: pr.title,
+    headRefName: pr.headRefName,
+    subject: unreadable !== undefined ? "unknown" : subject === undefined ? "not swept" : subject.kind,
+    ...(subject?.kind === "issue" ? { issueNumber: subject.issueNumber } : {}),
+    passes,
+    held,
+    threads,
+    mergeState: pr.mergeStateStatus,
+    draft: pr.isDraft,
+    labels: pr.labels,
   };
 }
 
-// One listed PR's entry, or its error entry when one of its reads throws.
-function pullRequestStatus(pr: SweepPullRequest, context: SweepContext, github: StatusGitHub, now: number): PullRequestStatus {
-  const { host, inScope, handOffs } = context;
+// Reads everything the report shows. The host's login, the in-scope issues, the open PRs or the repository name failing to read throws: nothing can be said. Anything else that fails
+// shows as unreadable in its place.
+export function collectStatus(github: StatusGitHub, now: number = Date.now(), log: (line: string) => void = console.error): StatusReport {
+  const { context } = sweepContext(github);
+  const open = github.openPullRequests();
+  const listed = open.filter((pr) => isListed(pr, context.host));
+  const prs = [...listed].sort((a, b) => a.number - b.number).map((pr) => statusOf(pr, { context, now }, github, log));
+  let runs: StatusReport["runs"];
   try {
-    const admission = admitToSweep(pr, context, github);
-    const passesUsed = followUpPassesUsed(github.passComments(pr.number), host);
-    const subject = sweepSubject(pr, inScope, host, handOffs);
-    return {
-      number: pr.number,
-      title: pr.title,
-      url: pr.url,
-      issueNumber: issueNumberOf(pr.headRefName),
-      handOff: subject === undefined ? hasLabel(pr, FOLLOW_UP_LABEL) : subject.kind === "pull-request",
-      passesUsed,
-      held: heldReason(admission, pr, now, github.isOwner, host, passesUsed),
-      threads: threadCounts(pr, github.isOwner, host),
-      mergeStateStatus: pr.mergeStateStatus,
-      checks: checkSummary(pr.checks),
-      needsHuman: hasLabel(pr, NEEDS_HUMAN),
-      reviewLabel: hasLabel(pr, REVIEW_LABEL),
-    };
+    runs = github.workflowRuns(RUNS_SHOWN);
   } catch (error) {
-    return { number: pr.number, title: pr.title, url: pr.url, error: messageOf(error) };
+    runs = { unreadable: causeOf(error) };
+    log(terminalLine(`  ⚠ Couldn't read the Sandcastle workflow's runs: ${runs.unreadable}`));
   }
+  return { repo: github.repo(), scope: describeQueueScope(github.queueScope()), prs, unlisted: open.length - listed.length, runs };
 }
 
-// The workflow's unfinished runs, split into the one in progress and the
-// queued ones, or why they couldn't be read.
-function workflowRunsStatus(github: StatusGitHub): StatusReport["runs"] {
-  try {
-    const runs = github.workflowRuns();
-    return {
-      running: runs.filter((run) => run.status === "in_progress"),
-      queued: runs.filter((run) => run.status !== "in_progress"),
-    };
-  } catch (error) {
-    return { error: messageOf(error) };
-  }
+// The labels the report shows on a PR: the ones that say who is working on it, why it is held or who reviews it.
+const SHOWN_LABEL_NAMES = [BUILDING_LABEL, "sandcastle:needs-human", FOLLOW_UP_LABEL, "review:claude", QUEUE_LABEL, LOCAL_QUEUE_LABEL];
+const SHOWN_LABELS = SHOWN_LABEL_NAMES.map((label) => label.toLowerCase());
+
+// GitHub's and gh's text (a title, a branch, a reason, an error) made safe for a terminal: whitespace, including a line break, is one
+// space, and every control character (ESC and the C1 set, so no CSI sequence), format character (bidi marks, zero-width characters,
+// the soft hyphen, the Unicode tag block a model reads as hidden text), default-ignorable character, surrogate, noncharacter, filler that
+// draws as a blank, and code point of the supplementary private-use planes is dropped. Nothing in it can overwrite a line of the report
+// or fake one. Three joiners keep their place where they do the work they are for: a zero-width joiner between two assigned pictographs (an emoji
+// sequence, with a skin tone or an emoji's variation selector in it), that variation selector right after an assigned pictograph, and a zero-width
+// non-joiner between two letters of a script that uses it (Arabic, for Persian, and the Indic scripts; a zero-width joiner between two
+// letters is dropped, so a conjunct such as Sinhala's "Sri" loses it). Anywhere else they are dropped, and at most MAX_KEPT_JOINERS
+// survive in one text. What may still draw as nothing is capped too: at most MAX_KEPT_ODD private-use (an icon-font glyph) or unassigned
+// code points, and no more than MAX_MARKS combining marks in a row, so a few invisible bits are all that can ride on one text. The cost: text
+// that stacks more marks than that (Tibetan, Hebrew with niqqud and cantillation, some Indic clusters) loses the extras. Keycap and
+// flag-tag emoji sequences fall apart.
+export function terminalText(text: string): string {
+  let kept = 0;
+  let odd = 0;
+  return (
+    text
+      // Not \s, which also takes U+FEFF, a byte order mark that is dropped like the other format characters.
+      .replace(/[\t\n\v\f\r \u00a0\u0085\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/gu, " ")
+      .replace(HIDDEN_CHARACTERS, (character, offset: number, whole: string) => {
+        const keep = kept < MAX_KEPT_JOINERS && keptJoiner(character, whole.slice(Math.max(0, offset - JOINER_LOOKBEHIND), offset), whole.slice(offset + character.length, offset + 3));
+        if (keep) kept += 1;
+        return keep ? character : "";
+      })
+      .replace(/[\p{Co}\p{Cn}]/gu, (character) => ((odd += 1) <= MAX_KEPT_ODD ? character : ""))
+      .replace(new RegExp(`(\\p{M}{${MAX_MARKS}})\\p{M}+`, "gu"), "$1")
+      // Dropping a character can leave the spaces on either side of it side by side.
+      .replace(/ {2,}/g, " ")
+      .trim()
+  );
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+// The most private-use or unassigned code points, and the most combining marks in a row, one text keeps.
+const MAX_KEPT_ODD = 8;
+const MAX_MARKS = 8;
+
+const HIDDEN_CHARACTERS =
+  /[\p{Cc}\p{Cf}\p{Cs}\p{Noncharacter_Code_Point}\p{Default_Ignorable_Code_Point}\p{Variation_Selector}\u034f\u115f\u1160\u2800\u3164\uffa0\u{F0000}-\u{10FFFF}]/gu;
+
+// How much text before a joiner is read to decide whether it stays (a letter and its combining marks).
+const JOINER_LOOKBEHIND = 16;
+
+// The most joiners one text keeps.
+const MAX_KEPT_JOINERS = 8;
+
+// The scripts whose words need a zero-width non-joiner: Arabic (Persian too), Syriac, Thaana and the Indic scripts.
+const ZWNJ_SCRIPTS = ["Arabic", "Syriac", "Thaana", "Devanagari", "Bengali", "Gurmukhi", "Gujarati", "Oriya", "Tamil", "Telugu", "Kannada", "Malayalam", "Sinhala"];
+const ZWNJ_LETTER = `(?=\\p{L})[${ZWNJ_SCRIPTS.map((script) => `\\p{scx=${script}}`).join("")}]`;
+const ZWNJ_AFTER_LETTER = new RegExp(`^${ZWNJ_LETTER}`, "u");
+const ZWNJ_BEFORE_LETTER = new RegExp(`${ZWNJ_LETTER}\\p{M}*$`, "u");
+
+// A pictograph that has been assigned: the reserved code points of the emoji blocks are Extended_Pictographic too, and the cap on unassigned
+// code points could drop one after a joiner was kept for it.
+const ASSIGNED_PICTOGRAPH = "(?!\\p{Cn})\\p{Extended_Pictographic}";
+const ZWJ_AFTER_PICTOGRAPH = new RegExp(`${ASSIGNED_PICTOGRAPH}\\p{Emoji_Modifier}?\\ufe0f?$`, "u");
+const PICTOGRAPH_AT_START = new RegExp(`^${ASSIGNED_PICTOGRAPH}`, "u");
+const PICTOGRAPH_AT_END = new RegExp(`${ASSIGNED_PICTOGRAPH}$`, "u");
+
+// Whether a joiner stays: `before` and `after` are the text on either side of it.
+function keptJoiner(character: string, before: string, after: string): boolean {
+  if (character === "\u200d") return ZWJ_AFTER_PICTOGRAPH.test(before) && PICTOGRAPH_AT_START.test(after);
+  if (character === "\ufe0f") return PICTOGRAPH_AT_END.test(before);
+  if (character === "\u200c") return ZWNJ_BEFORE_LETTER.test(before) && ZWNJ_AFTER_LETTER.test(after);
+  return false;
 }
 
-// The report as text: the workflow's runs first, then one block per PR, then
-// the count of other open PRs.
-export function renderStatus(report: StatusReport): string {
-  const lines = [`Judged against the host login ${report.host}, the account signed in to gh here.`, "", "Sandcastle workflow"];
-  if ("error" in report.runs) {
-    lines.push(`  Couldn't read the Sandcastle workflow's runs: ${report.runs.error}`);
-  } else {
-    const { running, queued } = report.runs;
-    if (running.length === 0) lines.push("  No Sandcastle run is in progress.");
-    for (const run of running) lines.push(`  Running: ${runLine(run)}`);
-    if (queued.length === 0) lines.push("  No Sandcastle run is queued.");
-    for (const run of queued) lines.push(`  Queued: ${runLine(run)}`);
-  }
-  if (report.pullRequests.length === 0) lines.push("", "No open Sandcastle PR into main.");
-  for (const status of report.pullRequests) lines.push("", ...pullRequestLines(status));
-  if (report.uncheckedIssues.length > 0) {
-    lines.push("", "Issues whose owner check couldn't answer, so this status is partial:", ...report.uncheckedIssues.map((line) => `  ${line.trim()}`));
-  }
-  if (report.foreignMarked.length > 0) {
-    lines.push(
-      "",
-      `Open PRs that carry the Sandcastle PR marker but weren't opened by ${report.host}, so they aren't listed above.`,
-      "If the Actions sweep publishes as another login, run this signed in as that account; this status is partial:",
-      ...report.foreignMarked.map((foreign) => `  PR #${foreign.number}, opened by ${foreign.author ?? "a deleted account"}`),
-    );
-  }
-  lines.push("", `${report.othersOpen} other open PRs into main aren't Sandcastle's.`);
-  return lines.join("\n");
+// The most indent a log line keeps: more would let text GitHub supplied pad a line to look like a different one.
+const MAX_INDENT = 8;
+
+// A line a log writes, as plain text: terminalText, with the indent the line starts with kept (up to MAX_INDENT).
+export function terminalLine(line: string): string {
+  return (/^ */.exec(line)?.[0] ?? "").slice(0, MAX_INDENT) + terminalText(line);
 }
 
-// A run's line: its id, the event and title that started it, its branch when
-// that isn't main, when it was created and its page.
-function runLine(run: WorkflowRun): string {
-  const branch = run.headBranch === null || run.headBranch === "main" ? "" : `, on ${run.headBranch}`;
-  return `run ${run.id} (${run.event}: ${JSON.stringify(run.displayTitle)}${branch}), since ${run.createdAt}  ${run.url}`;
-}
-
-function pullRequestLines(status: PullRequestStatus): string[] {
-  if ("error" in status) return [`PR #${status.number} ${status.title}: couldn't read its status: ${status.error}`];
-  const issue = status.issueNumber === undefined ? "" : ` (issue #${status.issueNumber})`;
-  const { threads, held } = status;
-  const threadParts = [`${threads.bot} bot`, `${threads.owner} owner`, `${threads.others} waiting on someone else`];
-  if (threads.unknown > 0) threadParts.push(`${threads.unknown} whose author couldn't be checked`);
-  if (threads.replyUnknown > 0) threadParts.push(`${threads.replyUnknown} with a reply whose author couldn't be checked`);
-  if (threads.answered > 0) threadParts.push(`${threads.answered} answered by Sandcastle and waiting on the owner`);
-  // A BEHIND PR the sweep doesn't update is left behind on purpose (#59 on 2026-10-20 looked stuck).
-  const behind = status.mergeStateStatus === "BEHIND" && !(held.kind === "decided" && held.decision.action === "update-branch");
-  const mergeState = `${status.mergeStateStatus}${behind ? " (left behind main until nothing else holds it)" : ""}`;
+// One PR's lines.
+function renderPr(status: PrStatus): string[] {
+  // A label is printed as the report's own spelling of it, never GitHub's string, so what a label is named can't reach the terminal.
+  const shown = status.labels.flatMap((label) => {
+    const known = SHOWN_LABELS.indexOf(label.toLowerCase());
+    return known < 0 ? [] : [SHOWN_LABEL_NAMES[known] as string];
+  });
+  const state = terminalText(status.draft ? `${status.mergeState}, draft` : status.mergeState);
+  const subject = status.subject === "issue" && status.issueNumber !== undefined ? `issue #${status.issueNumber}` : status.subject;
+  const passes = "unreadable" in status.passes ? `unknown (${terminalText(status.passes.unreadable)})` : `${status.passes.used} of ${status.passes.cap}`;
+  const threads =
+    "unreadable" in status.threads
+      ? `unknown (${terminalText(status.threads.unreadable)})`
+      : `bot ${status.threads.bot}, owner ${status.threads.owner}, other ${status.threads.other}` +
+        (status.threads.answered > 0 ? `, answered ${status.threads.answered}` : "");
   return [
-    `PR #${status.number} ${status.title}${issue}${status.handOff ? " (handed off with sandcastle:follow-up)" : ""}`,
-    `  ${status.url}`,
-    `  Follow-up passes: ${status.passesUsed} of ${FOLLOW_UP_PASS_CAP}`,
-    `  Held: ${heldText(held)}`,
-    `  Threads: ${threadParts.join(", ")}`,
-    `  Merge state: ${mergeState} · Checks: ${checksText(status.checks)} · ${NEEDS_HUMAN}: ${yesNo(status.needsHuman)} · ${REVIEW_LABEL}: ${yesNo(status.reviewLabel)}`,
+    `#${status.number} ${terminalText(status.title)}`,
+    `  branch:   ${terminalText(status.headRefName)} (${state})${shown.length > 0 ? `, labels: ${shown.join(", ")}` : ""}`,
+    `  for:      ${subject}`,
+    `  passes:   ${passes}`,
+    `  held:     ${status.held.state}: ${terminalText(status.held.reason)}`,
+    `  threads:  ${threads}`,
   ];
 }
 
-function heldText(held: HeldReason): string {
-  switch (held.kind) {
-    case "skipped":
-      return `the sweep skips it: ${held.reason}${held.unknown ? " (an owner check couldn't answer, so this status is partial)" : ""}`;
-    case "restore":
-      return `the next sweep puts ${held.label} back (${held.reason}), and leaves the PR alone this round`;
-    case "decided":
-      switch (held.decision.action) {
-        case "needs-pass": {
-          const handsBack = held.handsBack
-            ? `; its ${FOLLOW_UP_PASS_CAP} follow-up passes are used up, so the next pass hands it back with ${NEEDS_HUMAN}`
-            : "";
-          return `needs a follow-up pass: ${held.decision.reasons.join("; ")}${handsBack}`;
-        }
-        case "wait":
-          return `waits: ${held.decision.reason}`;
-        case "request-review":
-          return "the next sweep asks Copilot again to review its head";
-        case "update-branch":
-          return "only behind main: the next sweep updates its branch";
-        case "leave":
-          return `left alone: ${held.decision.reason}`;
-      }
+// One workflow run's line: how it ended (or where it is), what started it, on which branch, when, and where to read it.
+function renderRun(run: WorkflowRun): string {
+  const icon = run.status !== "completed" ? "…" : run.conclusion === "success" ? "✓" : "✗";
+  const result = run.status === "completed" ? (run.conclusion ?? run.status) : run.status;
+  return `  ${icon} ${terminalText(`${result} ${run.event} ${run.branch} ${run.createdAt} ${run.url}`)}`;
+}
+
+// The report as plain text lines: no markdown and no colour, so it reads the same in a terminal, a log and a pipe.
+export function renderStatus(report: StatusReport): string[] {
+  const others = report.unlisted > 0 ? `${report.unlisted} other open PR(s) not listed` : "";
+  const lines = [`Sandcastle status for ${terminalText(report.repo)} (queue: ${terminalText(report.scope)})`];
+  if (report.prs.length === 0) {
+    lines.push(`No open Sandcastle pull requests into main.${others === "" ? "" : ` ${others}.`}`);
+  } else {
+    lines.push(`${report.prs.length} open Sandcastle pull request(s) into main${others === "" ? "" : `, ${others}`}`);
+    for (const status of report.prs) lines.push("", ...renderPr(status));
   }
+  lines.push("");
+  if ("unreadable" in report.runs) {
+    lines.push("Sandcastle workflow runs:", `  unknown (${terminalText(report.runs.unreadable)})`);
+  } else if (report.runs.length === 0) {
+    lines.push("No Sandcastle workflow runs.");
+  } else {
+    lines.push(`Sandcastle workflow runs (latest ${report.runs.length}):`, ...report.runs.map(renderRun));
+  }
+  return lines;
 }
 
-function checksText(checks: CheckSummary): string {
-  if (checks.total === 0) return "none reported";
-  const parts: string[] = [];
-  if (checks.running > 0) parts.push(`${checks.running} of ${checks.total} running`);
-  if (checks.red.length > 0) parts.push(`red: ${checks.red.join(", ")}`);
-  return parts.length === 0 ? `all ${checks.total} green` : parts.join(", ");
+// The queue scope status reports on: the default queue when the environment names none, so a bare `pnpm run sandcastle:status`
+// shows what GitHub Actions' scope would do, hand-offs included. A variable that is set is read as the run does, with its errors.
+export function statusScopeFrom(env: Record<string, string | undefined>): QueueScope {
+  const named = (value: string | undefined) => (value ?? "").trim() !== "";
+  if (!named(env.SANDCASTLE_ISSUE) && !named(env.SANDCASTLE_LABEL) && env.GITHUB_ACTIONS !== "true") {
+    return { kind: "label", label: QUEUE_LABEL };
+  }
+  return queueScopeFrom(env);
 }
 
-function yesNo(value: boolean): string {
-  return value ? "yes" : "no";
+// The in-scope issues, read through loadQueue with its label fixes switched off, so reading the queue changes nothing. Each
+// line it logs says so.
+export function statusQueue(
+  scope: QueueScope,
+  queue: QueueGitHub,
+  log: (line: string) => void,
+): { number: number; labels: string[] }[] {
+  const readOnly: QueueGitHub = { ...queue, removeLabel: () => {}, addLabel: () => {} };
+  return loadQueue(scope, readOnly, (line) => log(terminalLine(`${line}${QUEUE_LOG_SUFFIX}`)), new Set(), new Map()).map((issue) => ({
+    number: issue.number,
+    labels: issue.labels,
+  }));
 }
 
-// Whether an owner check failed for the PR: its admission was skipped for
-// want of an answer, an unresolved thread's author couldn't be checked, or an
-// answered thread has a later reply whose author couldn't be. The sweep ends a
-// follow-up run red for the first, and `decide` doesn't count the others, so
-// the entry is incomplete.
-function ownerCheckFailed(status: PullRequestStatus): boolean {
-  return "held" in status && ((status.held.kind === "skipped" && status.held.unknown) || status.threads.unknown > 0 || status.threads.replyUnknown > 0);
-}
-
-// Prints the status and returns the exit code: 1 when the status, a PR's
-// entry or the runs couldn't be read, or an owner check couldn't answer, so a
-// script can tell a partial status from a whole one; 0 otherwise.
+// Collects and prints the report; returns it. Prints nothing when the host's login, the in-scope issues, the open PRs or the repository name can't be read.
 export function statusCommand(
   github: StatusGitHub = liveStatusGitHub,
+  print: (line: string) => void = console.log,
   now: number = Date.now(),
-  out: (text: string) => void = console.log,
-): number {
-  let report: StatusReport;
-  try {
-    report = buildStatus(github, now);
-  } catch (error) {
-    out(`Couldn't read Sandcastle's status: ${messageOf(error)}`);
-    return 1;
-  }
-  out(renderStatus(report));
-  const partial = report.pullRequests.some((status) => "error" in status || ownerCheckFailed(status)) || "error" in report.runs || report.uncheckedIssues.length > 0 || report.foreignMarked.length > 0;
-  return partial ? 1 : 0;
+): StatusReport {
+  const report = collectStatus(github, now);
+  for (const line of renderStatus(report)) print(line);
+  return report;
 }
 
-// A QueueGitHub whose label writes do nothing, so loadQueue's fixes (removing
-// an untrusted sandcastle:ready, restoring a hand-back label a stranger
-// removed) never reach GitHub, while it still returns the labels the sweep
-// would see after them.
-export function withoutLabelWrites(github: QueueGitHub): QueueGitHub {
-  return { ...github, removeLabel: () => {}, addLabel: () => {} };
+// Makes console.error print plain text, so a warning a read prints (a login, gh's own message) can't carry a control or hidden
+// character to the terminal. Takes the console to change, for a test. The arguments are joined as data, never as a format string: a %
+// in GitHub's text takes nothing from the arguments after it.
+export function plainStderr(target: { error: (...data: unknown[]) => void } = console): void {
+  const print = target.error.bind(target);
+  target.error = (...data: unknown[]) => {
+    const items = data.map((item) => (typeof item === "string" ? item : item instanceof Error ? item.message : inspect(item)));
+    print(terminalLine(items.join(" ")));
+  };
 }
 
-// The issues the sweep would see in scope, read through loadQueue with its
-// label writes removed, plus its skip lines for the issues it couldn't check
-// (see uncheckedIssues). Its other lines are dropped: the `↺` ones would claim
-// writes that never happened. A fresh `logged` set keeps loadQueue's
-// once-per-run dedupe from hiding a line.
-export function readInScopeIssues(
-  github: QueueGitHub,
-  scope: QueueScope = activeQueueScope(),
-): { issues: { number: number; labels: string[] }[]; unchecked: string[] } {
-  const unchecked: string[] = [];
-  const kept = loadQueue(scope, withoutLabelWrites(github), (line) => {
-    if (line.includes("couldn't check")) unchecked.push(line);
-  }, new Set());
-  return { issues: kept.map(({ number, labels }) => ({ number, labels })), unchecked };
-}
-
-// The live StatusGitHub: the sweep's own reads, except the in-scope issues
-// (see readInScopeIssues). inScopeIssues keeps the lines it couldn't check
-// for uncheckedIssues, which buildStatus reads right after it.
-let unchecked: string[] = [];
+// The live reads. Only the sweep's reads are taken from liveFollowUpGitHub, none of its writes, and the queue is read with
+// its label fixes off (statusQueue).
 export const liveStatusGitHub: StatusGitHub = {
   hostLogin: () => liveFollowUpGitHub.hostLogin(),
   openPullRequests: () => liveFollowUpGitHub.openPullRequests(),
-  inScopeIssues: () => {
-    const read = readInScopeIssues(liveQueueGitHub());
-    unchecked = read.unchecked;
-    return read.issues;
-  },
-  uncheckedIssues: () => unchecked,
-  isOwner: (login) => liveFollowUpGitHub.isOwner(login),
+  inScopeIssues: () => statusQueue(activeQueueScope(), liveQueueGitHub(), (line) => console.error(terminalLine(line))),
+  followsHandOffs: () => liveFollowUpGitHub.followsHandOffs(),
   pullRequestEvents: (number) => liveFollowUpGitHub.pullRequestEvents(number),
   pullRequestBodyEdits: (number) => liveFollowUpGitHub.pullRequestBodyEdits(number),
-  followsHandOffs: () => liveFollowUpGitHub.followsHandOffs(),
-  passComments: (number) => markerCommentReads(number),
-  workflowRuns: () => sandcastleWorkflowRuns(),
+  pullRequestComments: (number) => liveFollowUpGitHub.pullRequestComments(number),
+  mergeOfMain: (commit) => liveFollowUpGitHub.mergeOfMain(commit),
+  isOwner: liveFollowUpGitHub.isOwner,
+  repositoryOwner: () => liveFollowUpGitHub.repositoryOwner(),
+  reviewThreads: (number) => liveFollowUpGitHub.reviewThreads(number),
+  passesUsed: (number) => followUpPassCount(number),
+  workflowRuns: (limit) => sandcastleWorkflowRuns(limit),
+  repo: () => repoName(),
+  queueScope: () => activeQueueScope(),
 };

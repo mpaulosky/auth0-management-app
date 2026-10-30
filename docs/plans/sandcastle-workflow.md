@@ -36,9 +36,9 @@ so Sandcastle builds its own upgrade.
 | `bug` | Human or host (intake) | The issue is a fix, so its branch is `fix/`. | Human |
 | `sandcastle:follow-up` | The owner, or the session handing a PR off | The follow-up sweep follows up on this hand-opened PR like one of Sandcastle's own (see **Hand-off PRs** in [Phase 1](#phase-1-follow-up-sweep)). | The owner, to take the PR back |
 
-The host creates any missing `sandcastle:*` label at startup, and `review:claude` (colour `8957e5`, "Ask Claude to review this PR") too, through `ensureHostLabels` in
-`lib/github.mts`. `review:claude` isn't in `SANDCASTLE_LABELS`, since that list also decides which labels the queue scope refuses and which ones the follow-up sweep restores.
-Nor is `sandcastle:follow-up` (colour `5319E7`), which `ensureHostLabels` creates too: a person applies it, and the sweep never restores it.
+The host creates any missing `sandcastle:*` label at startup (`ensureLabels` in `lib/github.mts`), `sandcastle:follow-up` (colour `C5DEF5`) too: a person applies that one, and the sweep
+never restores it.
+The host doesn't label its PRs `review:claude`: PR Auto-Merge and `land.sh` add it where Copilot can't review the head (`docs/PROCESS.md`).
 The wayfinder map and its tickets must never carry `Sandcastle`.
 
 `sandcastle:building` exists because a manual `/implement-spec #71` started on 2026-10-07 while Sandcastle was already building #71, and only the run log showed it (#150).
@@ -109,7 +109,6 @@ Decided in [How Sandcastle follows up on an open PR until it can merge](https://
 skipped. A PR is Sandcastle's only when the repository owner opened it (the host publishes with the owner's PAT) and its body carries the `<!-- sandcastle:pr -->` marker the host
 writes when it publishes, so a collaborator's PR on a matching branch is never swept.
 The Copilot-review, CI-completion and Claude-Review-completion triggers only start a run; this check decides which PRs it touches.
-A swept PR that has never carried `review:claude` gets it first (see **Labelling the PR** in [The gate](#the-gate)).
 A PR whose issue carries `sandcastle:building` is skipped too: another run is passing on it or a build is opening it ([#53](https://github.com/mpaulosky/auth0-management-app/issues/53)).
 A full run removes any `sandcastle:building` label it still holds before its sweep, so it never skips a PR of its own.
 
@@ -269,7 +268,8 @@ Instead the host holds the pick back for the rest of the run when it waits on a 
 A hold behind a pick the critique defers, or whose build opens no PR, is released at the end of the round ([#425](https://github.com/mpaulosky/Blazor-Server/issues/425)).
 When a pick's comments can't be read, it's still deferred, and only its comment is skipped, with a warning ([#428](https://github.com/mpaulosky/Blazor-Server/issues/428)).
 The critique then judges what's left, with each pick's `files`.
-It gets the held picks among the unpicked ready issues, those held this round and those whose hold lasts the run, each with a note that it's held, so a pick that depends on one is deferred behind it ([#428](https://github.com/mpaulosky/Blazor-Server/issues/428)).
+It gets the held picks among the unpicked ready issues, those held this round and those whose hold lasts the run, each with a note that it's held, so a pick that depends on one is deferred
+behind it ([#428](https://github.com/mpaulosky/Blazor-Server/issues/428)).
 
 The critique checks one thing: whether the round's parallel set is safe, meaning no file or module overlap between picks, and no pick depending on an API or decision another open issue
 will establish. Its only power is to **defer** a pick.
@@ -363,17 +363,8 @@ hooks off. It never runs git or `gh` in the agent's worktree: git there would ru
 host. The gate already ran in the sandbox, and CI stays the independent check ([model and budget decision](https://github.com/mpaulosky/Blazor-Server/issues/64)). No gate-pass
 marker is written: `.git/config` is read-only in the sandbox, and no hook runs on the host's push. See `.sandcastle/lib/host-safety.mts`.
 
-**Labelling the PR.** A PR the host opens gets `review:claude` straight after it's created, so Claude reviews it without anyone adding the label (`openPullRequest` in
-`lib/github.mts`). A PR the host finds already open for the branch gets the label only if it has never carried it, going by its label events: PR Auto-Merge removes
-`review:claude` once the review cap is reached, and adding it back on every publish would get round that cap. A reused PR that never had it is one whose create GitHub carried out
-but answered with an error, which `publish` retries. No later run reuses the PR of a run that stopped between the create and the label, since the gate holds back an issue
-with an open PR, so the [follow-up sweep](#phase-1-follow-up-sweep) labels it instead. Each round, it adds `review:claude` to every PR it sweeps that doesn't carry the label and
-whose label events have no `labeled` event for it, a PR opened before the host labelled its PRs included. Both use the same check, `hasCarriedReviewLabel` in `lib/github.mts`, so
-a PR that has had the label is never labelled again. A failure to add the label, on publish or in the sweep, or to read the label events of a PR `openPullRequest` reuses,
-only warns, so the PR is still published or followed up. The run report lists the PR under **Pull requests without `review:claude`**, the run ends red once the report is
-written, and the owner adds the label by hand. A failed read in the sweep only warns and lists nothing, since the sweep reads every PR the review cap unlabelled each round, and
-telling the owner to label one by hand would get round that cap. Neither failure is retried within the round; the next round's sweep tries again, and a PR it labels, or finds
-has carried the label, or no longer finds open, leaves the report, so the run ends red only for the open PRs still unlabelled.
+**Labelling the PR.** The host doesn't add `review:claude` to the PRs it opens or sweeps (it did before the Template migration): Claude reviews a PR only once PR Auto-Merge or `land.sh` adds
+the label, and the run never ends red for a PR without it.
 
 A push or `gh pr create` that fails with a GitHub server error (a `5xx` or `Internal Server Error` in git's or gh's output) is retried with backoff, up to
 `PUBLISH_RETRY_ATTEMPTS` attempts in all. Any other failure, such as a push that doesn't fast-forward, isn't retried. When publishing still fails, the issue gets a comment with
@@ -427,7 +418,6 @@ the `Sandcastle` label, and a `Sandcastle` issue that depends on it lists it as 
 `needs-human`) it applies in the run, and after all work is done a final workflow step fails the job when that list is non-empty. GitHub Actions then emails the person who triggered
 the run, and scheduled runs notify the workflow's creator. A crash fails an earlier step, and the job summary tells a hand-back from a crash. So does a round where intake stops
 after too many failed runs or refused batches in a row (#320): the host couldn't run a role at all, so it lists each stop in the report and exits 1 once the report is written.
-A run that left a PR without `review:claude` exits 1 the same way (#51), since Claude never reviews that PR until someone adds the label.
 
 Who gets the email for the other triggers was checked against the runs GitHub attributed in this repository on 2026-10-13 (each run's `triggering_actor`):
 
@@ -457,25 +447,23 @@ chosen key and no value; Sandcastle takes the value from the host's environment.
 login and no-reply address, because Sandcastle copies the host's git identity into the sandbox for the agents' commits.
 
 **Skills:** `lib/skills.mts` mounts the `dotnet-*` skills from `~/.claude/skills`, which a hosted runner doesn't have. The workflow fetches the owner's public
-[dotfiles](https://github.com/mpaulosky/dotfiles) repository (only `Support For New Projects/.claude/skills`, with no token) at a commit pinned in the workflow, like the actions, and
-links that folder to `~/.claude/skills` before it sets up the credential helper. So the run mounts all six skills, the fetch never sends the PAT, and a push to dotfiles changes
-nothing here until the owner moves the pin. The step fails when the pinned commit lacks one of the six.
+[dotfiles](https://github.com/mpaulosky/dotfiles) repository (only `Support For New Projects/.claude/skills`, with no token) at the commit the `dotfiles-sha` line of
+`.github/ci/sandcastle-skills.txt` pins (the file also has one `skill` line per skill), like an action's pin, and links that folder to `~/.claude/skills` before it sets up the credential
+helper. So the run mounts all six skills, the fetch never sends the PAT, and a push to dotfiles changes nothing here until the owner moves the pin. The step fails when the pinned commit
+lacks one of the six.
 
 Triggers:
 
 - `issues: labeled` where the label is exactly `Sandcastle`;
-- `issues` / `pull_request_target: unlabeled` where the label is exactly `sandcastle:needs-info` or `sandcastle:needs-human`. A PR's label events come from
-  `pull_request_target`, not `pull_request`, because GitHub starts no `pull_request` run on a PR with merge conflicts; the job checks out `main` either way. A PR's
-  label event counts only for a same-repo PR into `main`: `pull_request_target` gives a fork's PR the secrets too, and runs the workflow file from the PR's base branch;
+- `issues` / `pull_request: unlabeled` where the label is exactly `sandcastle:needs-info` or `sandcastle:needs-human`, removed by the repository owner;
 - `pull_request_review` submitted by Copilot, and `workflow_run` completed for `Build and Test Suite` or `Claude Review` (the `name:` of `ci.yml` and of
   `claude-review.yml`, since `workflow_run` matches workflow names, not file names), only for same-repo `feature/*` / `fix/*` / `hotfix/*` heads, so a fork never runs with
   secrets. Claude Review is followed by its completion because it posts with `GITHUB_TOKEN`, whose review starts no `pull_request_review` run, so without it a Claude review
   that lands after CI would wait for the next scheduled run;
 - `workflow_dispatch`, and `schedule` every 2 hours as a backstop for blockers cleared by merges and PRs that fall behind `main` (`push: main` deliberately isn't a trigger);
-- with the repository variable `SANDCASTLE_FOLLOW_UP_LABEL` set to `true` ([#58](https://github.com/mpaulosky/auth0-management-app/issues/58)): `pull_request_target: labeled` where the owner
-  adds exactly `sandcastle:follow-up` to a same-repo PR, and the review and `workflow_run` triggers above for `chore/*` heads too, so the host can follow up on hand-opened
-  PRs labelled for it. The host supports the label (see **Hand-off PRs** in [Phase 1](#phase-1-follow-up-sweep)), so the owner can set `SANDCASTLE_FOLLOW_UP_LABEL`.
-  Until then these events end as skipped jobs. The host still decides from the label itself, so a run a `chore/*` PR without it starts sweeps nothing on that PR.
+- `pull_request_target: labeled` where the owner adds exactly `sandcastle:follow-up` to a same-repo PR into `main` ([#58](https://github.com/mpaulosky/auth0-management-app/issues/58)). It
+  starts only the `record-head` job,
+  which records the head the owner labelled and runs none of the host; a later run's sweep reads that record (see **Hand-off PRs** in [Phase 1](#phase-1-follow-up-sweep)).
 
 Event triggers can't filter by label name, so every `labeled` / `unlabeled` event starts the workflow. The job's `if:` checks `github.event.label.name` against the
 exact names above (and the fork and branch conditions), so labels the host applies (`sandcastle:ready`, `bug`) end as a skipped job and never start Sandcastle. For label
@@ -489,16 +477,12 @@ with the write token, and every other event runs the host code checked out from 
 **Overlap:** `concurrency: { group: sandcastle, cancel-in-progress: false }` on the **job**, not the workflow, so a filtered-out event is skipped before it takes the
 pending slot and can't displace a real pending run. One run going and at most one pending in the group. Every run re-reads the whole queue, so collapsed triggers lose nothing.
 
-**Follow-up runs** ([#53](https://github.com/mpaulosky/auth0-management-app/issues/53)): with the repository variable `SANDCASTLE_FOLLOW_UP_JOB` set to `true`, a run started
-by `pull_request_review`, `workflow_run` or `pull_request_target` (the follow-up label, or a hand-back removal on a PR, which re-queues it for the sweep) takes the
-group `sandcastle-follow-up` instead, and the run step sets `SANDCASTLE_MODE=follow-up`. The host then only sweeps and runs follow-up passes, so a PR's review or CI
-result is answered beside a running build rather than after it. A small first job, **Choose the run mode**, carries the event filter and decides the mode once; the Sandcastle
-job's concurrency group and `SANDCASTLE_MODE` both read its output. Computing them separately could disagree: the group is evaluated when the job is queued and a step's `env`
-when it starts, maybe hours later, and the variable can change in between. The host supports the mode, so the owner can set the variable; until then every run takes
-`sandcastle` as before. An empty `SANDCASTLE_MODE` is a full run, and any value but `follow-up` fails the run before it touches git, `gh` or a sandbox
-(`runModeFrom` in `lib/config.mts`).
+**Follow-up runs** ([#53](https://github.com/mpaulosky/auth0-management-app/issues/53)): the Template's workflow has one `sandcastle` job and no mode switch, so a run started by a review or
+a CI completion is a full run and waits behind a running build in the `sandcastle` group. The host still supports `SANDCASTLE_MODE=follow-up` (`runModeFrom` in `lib/config.mts`; any value
+but empty or `follow-up` fails the run before it touches git, `gh` or a sandbox), which only sweeps and runs follow-up passes once: use it for a local run. The `SANDCASTLE_FOLLOW_UP_JOB` and
+`SANDCASTLE_FOLLOW_UP_LABEL` repository variables the earlier workflow read are no longer used and can be deleted.
 
-With the variable set, a full run and a follow-up run can be going at once, and a full run still sweeps at the start of each round, as the backstop for a follow-up event
+A local follow-up run (`SANDCASTLE_MODE=follow-up`) can be going beside a full run, and a full run still sweeps at the start of each round, as the backstop for a follow-up event
 that was dropped or a pass that failed. `sandcastle:building` keeps the two off the same PR. A pass claims it on the PR's issue, or on a hand-off PR itself,
 before it touches the branch and reads the PR again after the claim, a build claims it on its issue, and the sweep skips a PR whose claim is held.
 So neither run updates the branch of, re-asks Copilot on, passes on or pushes to a PR the other is working on, and they can't both count a pass.
@@ -513,13 +497,14 @@ round. Three gaps remain:
   first, `update-branch` gets a 422 on `expected_head_sha`. `updatePullRequestBranch` throws `HeadMovedError` for that refusal and the sweep logs it and skips the PR,
   since the head moved and the other run has it; it isn't a failure, so it doesn't end a follow-up run red. Any other `update-branch` failure still does.
 - **A follow-up event can be dropped.** A follow-up run that finds a PR held by the full run skips it and exits. A review that landed after the full run's pass read its
-  threads then waits for the full run's next round, the next CI completion or the scheduled run, as it did before follow-up runs.
+  threads then waits for the full run's next round, the next CI completion or the scheduled run.
 
-**The run's own check:** a run started by a PR event (`pull_request_review`, `pull_request_target`) reports the `Sandcastle` job as a check on that PR's head (and **Choose the run mode**,
-which finishes before it starts). It runs while the run does, and Fail on hand-backs turns it red when the run hands back anything, even an unrelated issue. So in every mode,
-the sweep and a pass's read of the head's checks leave out each check run of the `Sandcastle` workflow (`SANDCASTLE_WORKFLOW` in `lib/config.mts`, kept in step with the
-workflow's `name:`). They match the workflow, not the check's name, which also drops a run GitHub cancelled while it waited in its concurrency group. A check another
-workflow names `Sandcastle`, a check with no workflow run (code scanning's `CodeQL`) and every status are kept.
+**The run's own check:** a run started by a PR event (`pull_request_review` or `pull_request: unlabeled`) reports the `Sandcastle` job as a check on that PR's head. That job ends with
+its `Fail on hand-backs` step, which turns it red when the run hands back anything, even an unrelated issue. A run the owner starts by adding the `sandcastle:follow-up` label is a
+`pull_request_target` run: its `Sandcastle` job is skipped, and it reports only `Record the approved head`. So in every mode, the sweep and a pass's read of the head's checks leave out
+each check run of the `Sandcastle` workflow (`SANDCASTLE_WORKFLOW` in `lib/config.mts`, kept in step with the workflow's `name:`). They match the workflow, not the check's name, which
+also drops a run GitHub cancelled while it waited in its concurrency group. A check another workflow names `Sandcastle`, a check with no workflow run (code scanning's `CodeQL`) and every
+status are kept.
 
 **Time:** the job has `timeout-minutes: 350`, and no new round starts after 4 hours. A usage or rate-limit error ends the run cleanly like the time budget: it doesn't fail roles or
 bounce issues. The next trigger resumes the work.
@@ -540,8 +525,8 @@ transcripts in `.sandcastle/logs/` are not: any signed-in user can download a pu
 printed the sandbox's Claude credential would publish it. At the end of every run, including one that ended on an
 error, `lib/report.mts` writes the run report to `.sandcastle/logs/summary.md` and appends it to the job summary (`$GITHUB_STEP_SUMMARY`). It says how the run ended (finished,
 stopped on the time budget or usage limit, or crashed) and lists each issue or PR touched and its outcome (published, deferred, handed back, role failed, gate failed, timed
-out, stopped, not published, updated, follow-up pass), each hand-back with a link, the open Sandcastle PRs waiting on unresolved review threads a person opened, each PR it
-couldn't label `review:claude` (when it opened the PR or in the follow-up sweep), and each role's token usage. A run whose report lists a PR without `review:claude`, or an
+out, stopped, not published, updated, follow-up pass), each hand-back with a link, the open Sandcastle PRs waiting on unresolved review threads a person opened,
+and each role's token usage. A run with an
 intake stop, exits 1 once the report is written, so the job ends red. `.sandcastle/logs/handbacks.json` holds the run's hand-backs as an array of
 `{ kind, number, label, reason, url }`, empty when there were none, for the workflow step that ends the run red. There is no run-summary comment on issues or PRs; the only
 comments are the ones the phases above post (intake verdicts, critique deferrals, architect design notes, follow-up pass summaries, build-failure markers and hand-backs).
@@ -554,7 +539,7 @@ comments are the ones the phases above post (intake verdicts, critique deferrals
 .sandcastle/
   main.mts            round loop, early exit, time budget
   status.mts          read-only status: why each open Sandcastle PR is held
-  lib/config.mts      ROLE_AGENTS, labels, limits, queue scope
+  lib/config.mts      labels, limits, queue scope (ROLE_AGENTS, the hooks and the gate values are in lib/repo-config.mts)
   lib/github.mts      gh helpers, labels, marker comments, dependency links
   lib/branches.mts    branch naming and fetching
   lib/gate.mts        blocker gate

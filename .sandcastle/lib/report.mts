@@ -1,11 +1,10 @@
 // The run's report: token usage per role, what became of each issue and PR it
 // touched, its hand-backs and the PRs waiting on people — collected during the
 // run and written at its end to .sandcastle/logs/ and the job summary (see
-// "Observability" in docs/plans/sandcastle-workflow.md).
+// "Observability" in Blazor-Server's docs/plans/sandcastle-workflow.md).
 
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import type { IterationUsage } from "@ai-hero/sandcastle";
-import { REVIEW_LABEL } from "./config.mts";
 
 type Usage = { -readonly [K in keyof IterationUsage]: number };
 
@@ -63,8 +62,7 @@ export type Outcome =
   | "stopped"
   | "not published"
   | "updated"
-  | "follow-up pass"
-  | "follow-up failed";
+  | "follow-up pass";
 
 // `detail` is host-written text only, never raw error output (see the design
 // note's Risks: the summary is public on a public repository).
@@ -92,7 +90,7 @@ export type HandBackEntry = ReportTarget & { label: string; reason: string; url:
 // Every hand-back this run made, so a final workflow step can fail the job
 // when the list isn't empty: the owner's PAT means GitHub never notifies
 // anyone about Sandcastle's own labels or comments (see "Notification: the
-// run ends red" in docs/plans/sandcastle-workflow.md).
+// run ends red" in Blazor-Server's docs/plans/sandcastle-workflow.md).
 export class HandBackReport {
   private readonly entries: HandBackEntry[] = [];
 
@@ -112,7 +110,9 @@ export const handBackReport = new HandBackReport();
 // opened by someone other than the repository owner or a bot (the same test
 // lib/follow-up-pass.mts#threadsForRole uses for "leftForHuman"): an owner's
 // own thread is the follow-up role's to answer, not a person's to wait on.
-export type WaitingPrEntry = { pr: number; threads: number };
+// `answered` counts the bot or owner threads the host has replied to that are
+// still open: they wait on the owner now, so the PR shows here too.
+export type WaitingPrEntry = { pr: number; threads: number; answered?: number };
 
 // Every PR the latest follow-up sweep found waiting on a person, replaced
 // whole each sweep (see WaitingPrReport.replace), so the report shows the
@@ -154,56 +154,11 @@ export class HumanThreadReport {
 // The one report every follow-up pass this run makes records into.
 export const humanThreadReport = new HumanThreadReport();
 
-// A PR the host opened, reused or swept without REVIEW_LABEL because adding it
-// failed, or, for a reused PR, reading whether it ever carried it failed
-// (lib/github.mts#openPullRequest, lib/follow-up.mts#sweepPullRequests, whose
-// failed reads only warn): Claude never reviews it until a person
-// adds the label, and the run log alone is a line nobody reads in an
-// unattended run.
-export type UnlabelledPrEntry = { pr: number; url: string };
-
-// Every such PR this run left, once each, so the run report names them. A
-// later round's sweep that labels the PR, or finds it has carried the label,
-// resolves it, and one that finds it no longer open drops it, so the run ends
-// red only for the open PRs still unlabelled.
-export class UnlabelledPrReport {
-  private readonly entries = new Map<number, UnlabelledPrEntry>();
-
-  record(entry: UnlabelledPrEntry): void {
-    this.entries.set(entry.pr, entry);
-  }
-
-  resolve(pr: number): void {
-    this.entries.delete(pr);
-  }
-
-  // Drops every PR not in `open`: one merged or closed since it was recorded
-  // is never swept again, so nothing else would resolve it.
-  retain(open: ReadonlySet<number>): void {
-    for (const pr of this.entries.keys()) {
-      if (!open.has(pr)) this.entries.delete(pr);
-    }
-  }
-
-  items(): readonly UnlabelledPrEntry[] {
-    return [...this.entries.values()];
-  }
-}
-
-// The one report every failed review-label add records into.
-export const unlabelledPrReport = new UnlabelledPrReport();
-
-// Whether main.mts must exit non-zero for the PRs it left without REVIEW_LABEL:
-// a failed label add ends the run green otherwise, and nobody is notified.
-export function unlabelledPrExitCode(entries: readonly UnlabelledPrEntry[]): number {
-  return entries.length > 0 ? 1 : 0;
-}
-
 // One round where intake (lib/intake.mts#intakeRound) stopped rather than
 // judge every issue: it hit INTAKE_FAILED_RUNS_LIMIT failed runs or
 // INTAKE_REFUSED_BATCHES_LIMIT refused batches in a row, so the issues it
 // hadn't judged yet are left with no verdict and nothing told the owner
-// (#320, the first automatic runs ending green on a missing Docker image).
+// (the first automatic runs ending green on a missing Docker image).
 // `unjudged` are the issue numbers intake never gave a verdict to this
 // round; `firstError` is the message of the first error in the streak that
 // stopped it.
@@ -227,14 +182,14 @@ export class IntakeStopReport {
 export const intakeStopReport = new IntakeStopReport();
 
 // Whether main.mts must exit non-zero: any recorded intake stop means some
-// issues were left silently unjudged (#320), so the run must end red even
+// issues were left silently unjudged, so the run must end red even
 // when nothing else failed, a hand-back included.
 export function intakeStopExitCode(stops: readonly IntakeStopEntry[]): number {
   return stops.length > 0 ? 1 : 0;
 }
 
 // How the run ended, so the summary tells a hand-back from a crash
-// ("Notification: the run ends red" in docs/plans/sandcastle-workflow.md).
+// ("Notification: the run ends red" in Blazor-Server's docs/plans/sandcastle-workflow.md).
 export type RunEnding = { kind: "finished" } | { kind: "stopped"; reason: string } | { kind: "crashed" };
 
 // Everything renderSummary needs to render the run's Markdown report.
@@ -248,16 +203,13 @@ export type SummaryInput = {
   humanThreads: readonly HumanThreadEntry[];
   usage: ReadonlyMap<string, IterationUsage>;
   stops: readonly IntakeStopEntry[];
-  unlabelledPrs: readonly UnlabelledPrEntry[];
 };
 
 // The run's report as Markdown, for .sandcastle/logs/summary.md and (when set)
-// $GITHUB_STEP_SUMMARY. See the design note at .sandcastle/work/81/design.md
-// for the exact shape: queue and ending sentence, a table of every touched
+// $GITHUB_STEP_SUMMARY: the queue and ending sentence, a table of every touched
 // issue and PR with its outcome (plus one row per hand-back), the hand-backs
-// themselves with links, the PRs waiting on a person, any PR left without
-// REVIEW_LABEL, any round where intake stopped (#320), and a token-usage
-// table by role with a total row.
+// themselves with links, the PRs waiting on a person, any round where intake
+// stopped, and a token-usage table by role with a total row.
 export function renderSummary(input: SummaryInput): string {
   const { repo } = input;
   const link = (target: ReportTarget): string =>
@@ -279,7 +231,6 @@ export function renderSummary(input: SummaryInput): string {
     "",
     ...waitingLines(input.waitingPrs, input.humanThreads, link),
     "",
-    ...unlabelledLines(input.unlabelledPrs),
     ...intakeStopLines(input.stops, link),
     "### Token usage by role",
     "",
@@ -339,15 +290,19 @@ function waitingLines(
   humanThreads: readonly HumanThreadEntry[],
   link: (target: ReportTarget) => string,
 ): string[] {
-  const counts = new Map(waitingPrs.map(({ pr, threads }) => [pr, threads]));
+  const counts = new Map(waitingPrs.map(({ pr, threads, answered = 0 }) => [pr, { threads, answered }]));
   const prs = [...new Set([...waitingPrs.map(({ pr }) => pr), ...humanThreads.map(({ pr }) => pr)])];
   if (prs.length === 0) return ["None."];
   return prs.flatMap((pr) => {
-    const threads = counts.get(pr);
-    let count = "";
-    if (threads !== undefined) {
-      count = `: ${threads} unresolved review ${threads === 1 ? "thread" : "threads"} opened by people`;
+    const found = counts.get(pr);
+    const parts: string[] = [];
+    if (found !== undefined && found.threads > 0) {
+      parts.push(`${found.threads} unresolved review ${found.threads === 1 ? "thread" : "threads"} opened by people`);
     }
+    if (found !== undefined && found.answered > 0) {
+      parts.push(`${found.answered} answered ${found.answered === 1 ? "thread" : "threads"} left open for the owner`);
+    }
+    const count = parts.length > 0 ? `: ${parts.join(", ")}` : "";
     return [
       `- ${link({ kind: "pr", number: pr })}${count}`,
       ...humanThreads
@@ -357,23 +312,8 @@ function waitingLines(
   });
 }
 
-// Only a run that left a PR without REVIEW_LABEL gets the section. Each
-// entry carries its PR's URL, so it stays linked when the repository name
-// couldn't be read.
-function unlabelledLines(unlabelledPrs: readonly UnlabelledPrEntry[]): string[] {
-  if (unlabelledPrs.length === 0) return [];
-  return [
-    `### Pull requests without \`${REVIEW_LABEL}\``,
-    "",
-    ...unlabelledPrs.map(
-      ({ pr, url }) => `- [PR #${pr}](${url}): couldn't add \`${REVIEW_LABEL}\`, so add it by hand for Claude to review it`,
-    ),
-    "",
-  ];
-}
-
 // Only a run whose intake stopped gets the section, since it's the reason the
-// run ends red (#320); a run with no stop has nothing to say here.
+// run ends red; a run with no stop has nothing to say here.
 function intakeStopLines(stops: readonly IntakeStopEntry[], link: (target: ReportTarget) => string): string[] {
   if (stops.length === 0) return [];
   return [

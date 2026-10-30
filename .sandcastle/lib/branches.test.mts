@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { branchFor, discardClosedWork, fetchMain, isHandOffBranch, isIssueBranch, parseHeads, prepareBranches, slugFor, type BranchRefs } from "./branches.mts";
+import { branchFor, discardClosedWork, fetchMain, headOfRef, isHandOffBranch, isIssueBranch, parseHeads, prepareBranches, slugFor, type BranchRefs } from "./branches.mts";
 
 // The branch standard, from the script the pre-push hook and CI's Branch name check share.
 const checkBranchName = fileURLToPath(new URL("../../scripts/check-branch-name.sh", import.meta.url));
@@ -90,46 +90,67 @@ describe("isIssueBranch", () => {
   });
 });
 
-// #58: the branches the sweep follows a hand-off PR from are the ones
-// scripts/check-branch-name.sh accepts without --pr.
+// The branches of a pull request handed to Sandcastle with the sandcastle:follow-up label: the same names
+// scripts/check-branch-name.sh lets through, so a name that reaches a shell is as strict as an issue branch's.
 describe("isHandOffBranch", () => {
-  for (const branch of ["chore/tidy-docs", "chore/a", "chore/bump-2-deps", "feature/9-add-search", "fix/12-stop-the-crash", "hotfix/3-patch"]) {
+  for (const branch of ["feature/5-add-search", "fix/12-stop-the-crash", "hotfix/1-patch", "chore/tidy-up", "chore/a", "chore/bump-v2-deps", "feature/314-x"]) {
     it(`accepts ${branch}`, () => {
       assert.equal(isHandOffBranch(branch), true);
     });
   }
 
-  // A chore slug starts with a letter, so it can't pass for an issue number.
-  // dev, preview and dependabot/* are not branches a person hands off, and a
-  // branch name reaches a shell in the sandbox.
   for (const branch of [
-    "main",
-    "dev",
-    "preview",
-    "dependabot/npm_and_yarn/x",
-    "chore/9-x",
+    "chore/1-x",
     "chore/",
-    "chore/Tidy",
-    "chore/a--b",
-    "chore/$(touch-x)",
-    "chore/a;rm",
-    "chore/a b",
-    "feature/tidy",
-    "feature/9-Add",
-    "feature/9-$(x)",
+    "chore/Tidy-Up",
+    "chore/tidy--up",
+    "chore/tidy-up-",
+    "Feature/5-add-search",
+    "feature/5",
+    "feature/x-add-search",
+    "feature/5-Add-Search",
+    "claude/x",
+    "dependabot/npm_and_yarn/x",
     "docs/release-notes",
-    "claude/session-1",
+    "docs/backfill-blog-posts",
+    "main",
+    "feature/5-add-search\n",
+    "fix/4-$(touch-x)",
+    "fix/4-add;rm",
+    "fix/4-add search",
+    "fix/4-add-search/more",
+    "xfix/4-add-search",
     "",
+    " ",
   ]) {
-    it(`rejects ${JSON.stringify(branch)}`, () => {
+    it(`refuses ${JSON.stringify(branch)}`, () => {
       assert.equal(isHandOffBranch(branch), false);
     });
   }
 
-  it("agrees with scripts/check-branch-name.sh on every name above", () => {
-    const names = ["chore/tidy-docs", "chore/9-x", "chore/$(x)", "feature/9-add-search", "feature/tidy", "dev", "dependabot/npm/x", "hotfix/3-patch"];
-    for (const name of names) {
-      assert.equal(isHandOffBranch(name), passesBranchStandard(name), name);
+  it("accepts exactly the names scripts/check-branch-name.sh exits 0 for, over a corpus of good and bad names", () => {
+    const corpus = [
+      "feature/5-add-search", "fix/12-a-b", "hotfix/1-x", "chore/tidy-up", "chore/1-x", "chore/", "feature/5-", "feature/5",
+      "Feature/5-x", "claude/x", "dependabot/x", "docs/release-notes", "main", "feature/5-x\n", "fix/4-$(x)", "fix/4-a b", "",
+      "feature/0-zero", "hotfix/007-bond", "chore/a-1-b", "chore/a_b", "fix/9-A",
+      "chore/a\t", "chore/a\r", "feature/5-x ", "chore/ ",
+    ];
+
+    for (const branch of corpus) assert.equal(isHandOffBranch(branch), passesBranchStandard(branch), JSON.stringify(branch));
+  });
+
+  // Not in the corpus above: bash's [a-z] and [0-9] take letters and digits of other scripts in some locales, so the
+  // script's answer depends on the machine. A hand-off branch stays ASCII, whatever the script says.
+  for (const branch of ["fix/4-é", "feature/٣-x", "fix/4-ａ", "chore/é", "chore/a\u00a0b"]) {
+    it(`refuses ${JSON.stringify(branch)}, whatever the locale's [a-z] takes`, () => {
+      assert.equal(isHandOffBranch(branch), false);
+    });
+  }
+
+  it("accepts every issue branch isIssueBranch accepts, since the branch standard does", () => {
+    for (const branch of ["feature/4-add-search", "fix/4-stop-the-crash", "hotfix/4-stop-the-crash"]) {
+      assert.ok(isIssueBranch(branch, 4));
+      assert.equal(isHandOffBranch(branch), true, branch);
     }
   });
 });
@@ -201,7 +222,38 @@ describe("parseHeads", () => {
   });
 });
 
-// A BranchRefs stub for discardClosedWork (#77). Each ref's current commit
+describe("headOfRef", () => {
+  it("reads the commit on the branch's own line", () => {
+    assert.equal(headOfRef("abc123\trefs/heads/fix/4-foo\n", "fix/4-foo"), "abc123");
+  });
+
+  it("skips a ref that only matches by its tail, even when it sorts first", () => {
+    const output = "bad111\trefs/heads/a/refs/heads/fix/4-foo\nabc123\trefs/heads/fix/4-foo\n";
+
+    assert.equal(headOfRef(output, "fix/4-foo"), "abc123");
+  });
+
+  it("skips a ref that only matches by its tail when it sorts after the real one", () => {
+    const output = "abc123\trefs/heads/fix/4-foo\nbad111\trefs/heads/z/refs/heads/fix/4-foo\n";
+
+    assert.equal(headOfRef(output, "fix/4-foo"), "abc123");
+  });
+
+  it("reads lines that end in a carriage return", () => {
+    assert.equal(headOfRef("abc123\trefs/heads/fix/4-foo\r\n", "fix/4-foo"), "abc123");
+  });
+
+  it("returns undefined for a line with no commit before the ref", () => {
+    assert.equal(headOfRef("\trefs/heads/fix/4-foo\n", "fix/4-foo"), undefined);
+  });
+
+  it("returns undefined when only a tail match exists, or nothing", () => {
+    assert.equal(headOfRef("bad111\trefs/heads/a/refs/heads/fix/4-foo\n", "fix/4-foo"), undefined);
+    assert.equal(headOfRef("", "fix/4-foo"), undefined);
+  });
+});
+
+// A BranchRefs stub for discardClosedWork. Each ref's current commit
 // (local, tracking, and origin's real branch) and whether it contains
 // closedHead are configurable independently, and every call is recorded in
 // `calls` so a test can check the order of operations.

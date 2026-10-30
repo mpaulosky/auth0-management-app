@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Sandbox, SandboxRunOptions } from "@ai-hero/sandcastle";
-import type { execFileSync } from "node:child_process";
+import { spawnSync, type execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   buildIssue,
   createCheckedSandbox,
@@ -10,13 +12,17 @@ import {
   latestDesignNote,
   isGitHubServerError,
   isWorkflowPushRejection,
-  LEGACY_REFERENCES,
+  liveHostIdentity,
   PR_BODY_LIMIT,
   publicErrorText,
+  prTitle,
   publish,
+  remoteBranchIsOnOrigin,
+  remoteMainIs,
+  retryOnServerError,
   UncountedStopError,
   type BuildHost,
-  type CheckedSandboxHost,
+  type HostIdentity,
   workflowFilesFrom,
   workflowLogArgs,
 } from "./build.mts";
@@ -29,9 +35,17 @@ import {
   PUBLISH_RETRY_ATTEMPTS,
   type OptionalRole,
 } from "./config.mts";
+import { TamperedWorktreeError } from "./errors.mts";
+import { gitSandboxFake } from "./git-sandbox-fake.mts";
 import { RunLimits } from "./limits.mts";
-import { breakReferences } from "./plain-text.mts";
+import { PR_BODY_RULES } from "./prompts.mts";
 import type { SecretMatch } from "./scan.mts";
+import { GATE_COMMAND, GATE_SCRIPT } from "./repo-config.mts";
+import { withUiRole } from "./ui-role-fixture.mts";
+
+// These tests name the Template's gate command, whatever this repo's
+// GATE_COMMAND is: the fake sandbox reports the configured one as the default.
+const asDefaultGate = (command: string) => (command === `${GATE_COMMAND} 2>&1` ? "scripts/gate.sh 2>&1" : command);
 
 const issue = { number: 69, title: "Run the gate", body: "", labels: ["Sandcastle"], comments: [], roles: [] as OptionalRole[] };
 
@@ -49,7 +63,7 @@ const sampleSecretMatch: SecretMatch = {
   kind: { type: "pattern", shape: "sk-ant-" },
 };
 
-// A pr-body.md with the three headings the reviewer must write (#335).
+// A pr-body.md with the three headings the reviewer must write.
 const validPrBody = "## Why\n\nBecause.\n\n## What changed\n\nAdded X.\n\n## Verification\n\nRan the tests.";
 
 // A host whose sandbox records each role run and gate run in `steps`, and
@@ -65,6 +79,7 @@ function host(
     failWith = {},
     unfinished = [],
     leaksSecret,
+    leaksOnlyInMergedMain,
     worktreeProblems = [],
     publishError,
     designNote,
@@ -75,6 +90,19 @@ function host(
     mergeExitCode = 0,
     abortExitCode = 0,
     latestMainError,
+    remoteMain,
+    remoteMainError,
+    mainWorkflowFiles = [],
+    pushRefusesWorkflowChanges = true,
+    branchOnOrigin = false,
+    createBranchError,
+    deleteBranchError,
+    baseExecError,
+    baseIsAncestor = true,
+    gateOutput,
+    gateScriptChanged = "",
+    checkFiles = "",
+    checkFilesError,
   }: {
     ahead?: number | number[];
     statuses?: string[];
@@ -82,6 +110,10 @@ function host(
     failWith?: Record<string, Error>;
     unfinished?: string[];
     leaksSecret?: SecretMatch;
+    // A match that sits only in the commits main gained since `base`, so
+    // leaksSecret returns it unless the scan excludes the merged main
+    // commit's history, as the live scan does.
+    leaksOnlyInMergedMain?: SecretMatch;
     worktreeProblems?: string[];
     publishError?: string;
     // What latestDesignNote returns for the architect's prompt: the body of
@@ -93,10 +125,12 @@ function host(
     designFile?: string;
     // The content .sandcastle/work/{n}/pr-body.md holds in the sandbox once
     // the reviewer has run: its Why, What changed and Verification sections,
-    // read back before publish() is called (#335). A valid one by default, as
+    // read back before publish() is called. A valid one by default, as
     // a reviewer that finished writes, so a test that pins the log isn't
     // handed the fallback's line.
     prBodyFile?: string;
+    // What every gate run prints, instead of "gate output, exit <n>".
+    gateOutput?: string;
     // The commit latestMain() resolves origin/main to just before checkpoint
     // 2, whether the branch already contains it, how `git merge` of it and
     // `git merge --abort` exit, and an error latestMain() throws instead (a
@@ -106,6 +140,33 @@ function host(
     mergeExitCode?: number;
     abortExitCode?: number;
     latestMainError?: string;
+    // What the remote says main is when buildIssue asks (isRemoteMain), for
+    // the check that the merged main commit is really GitHub's: the
+    // latestMain commit by default, and an error it throws instead.
+    remoteMain?: string;
+    remoteMainError?: string;
+    // The workflow files `<branch head>..<latest main>` touches: what
+    // workflowFiles returns when asked about the range ending at latestMain.
+    // Empty by default, as when main hasn't changed a workflow.
+    mainWorkflowFiles?: string[];
+    // Whether the push token lacks the Workflows permission, as in Actions
+    // (the default); false is a local `Sandcastle:local` run.
+    pushRefusesWorkflowChanges?: boolean;
+    // Whether origin already has the issue's branch (an earlier round pushed
+    // it), and an error creating it at `base` throws.
+    branchOnOrigin?: boolean;
+    createBranchError?: string;
+    deleteBranchError?: string;
+    baseExecError?: string;
+    // Whether `base` is an ancestor of the commit the gate passed on; false
+    // when an earlier round's branch was built on an older main.
+    baseIsAncestor?: boolean;
+    // What `git diff -z` prints for the gate script when it differs from base's, and
+    // for the files under CHECK_PATHS that do.
+    gateScriptChanged?: string;
+    checkFiles?: string;
+    // An error listing the files under CHECK_PATHS throws instead.
+    checkFilesError?: string;
   } = {},
 ) {
   const steps: string[] = [];
@@ -128,7 +189,11 @@ function host(
   const aheadBases: string[] = [];
   const scanned: string[] = [];
   const scannedBases: string[] = [];
+  const scannedExclusions: (string | undefined)[] = [];
+  const listedExclusions: (string | undefined)[] = [];
   const mainChecks: string[] = [];
+  const baseChecks: string[] = [];
+  const workflowFileCalls: { from: string; to: string }[] = [];
   const pushed: { branch: string; commit: string }[] = [];
   // Each command on .sandcastle/work/ (the design note), with how many role
   // runs came before it.
@@ -149,7 +214,8 @@ function host(
         completionSignal: unfinished.includes(role) ? undefined : "<promise>COMPLETE</promise>",
       };
     },
-    exec: async (command: string) => {
+    exec: async (rawCommand: string) => {
+      const command = asDefaultGate(rawCommand);
       if (command.startsWith("git status")) {
         const stdout = worktreeStatuses.shift() ?? "";
         return { stdout, stderr: "", exitCode: 0 };
@@ -157,9 +223,27 @@ function host(
       if (command === "git rev-parse HEAD") {
         return { stdout: `${head()}\n`, stderr: "", exitCode: 0 };
       }
+      if (command.startsWith(`git merge-base --is-ancestor '${base}'`)) {
+        baseChecks.push(command);
+        if (baseExecError !== undefined) throw new Error(baseExecError);
+        return { stdout: "", stderr: "", exitCode: baseIsAncestor ? 0 : 1 };
+      }
       if (command.startsWith("git merge-base --is-ancestor")) {
         mainChecks.push(command);
         return { stdout: "", stderr: "", exitCode: containsMain ? 0 : 1 };
+      }
+      if (command.startsWith("git --no-replace-objects") && command.includes(" cat-file -e ")) {
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+      if (command.startsWith("git --no-replace-objects") && command.includes(" merge-base ")) {
+        return { stdout: `${"e".repeat(40)}\n`, stderr: "", exitCode: 0 };
+      }
+      if (command.startsWith("git --no-replace-objects") && command.includes(" diff ")) {
+        // The gate guard asks about the gate script alone, the PR body's note about CHECK_PATHS.
+        const forGuard = command.split(" -- ")[1]?.replace(" 2>/dev/null", "") === `'${GATE_SCRIPT}'`;
+        if (forGuard) gateGuardChecks.push(command);
+        if (!forGuard && checkFilesError !== undefined) throw new Error(checkFilesError);
+        return { stdout: forGuard ? gateScriptChanged : checkFiles, stderr: "", exitCode: 0 };
       }
       if (command.startsWith("git merge --abort")) {
         steps.push("merge abort");
@@ -187,7 +271,7 @@ function host(
       steps.push(`gate: ${command}`);
       const exitCode = gateExitCodes.shift();
       if (exitCode === undefined) throw new Error("the gate ran more often than the test expected");
-      return { stdout: `gate output, exit ${exitCode}\n`, stderr: "", exitCode };
+      return { stdout: gateOutput ?? `gate output, exit ${exitCode}\n`, stderr: "", exitCode };
     },
     close: async () => {
       steps.push("close");
@@ -197,13 +281,27 @@ function host(
   } as unknown as Sandbox;
   const buildingCalls: number[] = [];
   const designNoteCalls: number[] = [];
+  const gateGuardChecks: string[] = [];
+  const publishedCheckChanges: (readonly string[])[] = [];
   const publishCalls: { reviewed: boolean; docsFailed: boolean }[] = [];
   // The prBody argument buildMarkedIssue passed to host.publish, one entry
   // per call, kept apart from publishCalls so existing assertions on that
-  // shape don't have to change (#335).
+  // shape don't have to change.
   const publishedPrBodies: (string | undefined)[] = [];
   const startFromMainCalls: { issueNumber: number; branch: string; base: string }[] = [];
   const handBackWorkflowChangeCalls: { issueNumber: number; branch: string; detail: string; change: { head: string; files: string[] } }[] = [];
+  const moveToLocalCalls: {
+    issueNumber: number;
+    branch: string;
+    detail: string;
+    change: { head: string; files: string[] };
+    createdAtBase: boolean;
+  }[] = [];
+  const deletedBranches: { branch: string; commit: string }[] = [];
+  const createdBranches: { branch: string; commit: string }[] = [];
+  // "create-branch", "publish", "delete-branch" and "move-to-local" in the order the host did them, kept apart
+  // from `steps` so the existing assertions on its exact list don't change.
+  const publishEvents: string[] = [];
   const buildHost: BuildHost = {
     createSandbox: async () => {
       order.push("create");
@@ -243,16 +341,19 @@ function host(
       return designNote;
     },
     log: (line) => void logs.push(line),
-    leaksSecret: (scanBase, commit) => {
+    leaksSecret: (scanBase, commit, mergedMain) => {
       scannedBases.push(scanBase);
       scanned.push(commit);
-      return leaksSecret;
+      scannedExclusions.push(mergedMain);
+      return leaksSecret ?? (mergedMain === undefined ? leaksOnlyInMergedMain : undefined);
     },
-    publish: async (_issue, publishedBranch, commit, reviewed, docsFailed, prBody) => {
+    publish: async (_issue, publishedBranch, commit, reviewed, docsFailed, prBody, checkChanges = []) => {
       if (publishError) throw new Error(publishError);
       pushed.push({ branch: publishedBranch, commit });
+      publishEvents.push("publish");
       publishCalls.push({ reviewed, docsFailed });
       publishedPrBodies.push(prBody);
+      publishedCheckChanges.push(checkChanges);
       steps.push(`publish${reviewed ? "" : " unreviewed"}${docsFailed ? " docs-failed" : ""}`);
       return "https://github.com/o/r/pull/1";
     },
@@ -260,18 +361,46 @@ function host(
       if (latestMainError !== undefined) throw new Error(latestMainError);
       return latestMain;
     },
+    isRemoteMain: (commit) => {
+      if (remoteMainError !== undefined) throw new Error(remoteMainError);
+      return commit === (remoteMain ?? latestMain);
+    },
     worktreeProblems: () => worktreeProblems,
     publicError: (error) => publicErrorText(String(error instanceof Error ? error.message : error), () => false),
     limits: new RunLimits(),
-    workflowFiles: (from, to) => [`.github/workflows/${from.slice(0, 4)}-${to.slice(0, 4)}.yml`],
+    pushRefusesWorkflowChanges,
+    workflowFiles: (from, to, mergedMain) => {
+      workflowFileCalls.push({ from, to });
+      // The range ending at main is the sync check's; any other range
+      // is the base..gated one the hand-back lists, which leaves out the main
+      // commit syncWithMain merged.
+      if (to === latestMain) return mainWorkflowFiles;
+      listedExclusions.push(mergedMain);
+      return [`.github/workflows/${from.slice(0, 4)}-${to.slice(0, 4)}.yml`];
+    },
     handBackWorkflowChange: (issueNumber, failureBranch, detail, change) => {
       handBackWorkflowChangeCalls.push({ issueNumber, branch: failureBranch, detail, change });
+    },
+    remoteBranchExists: () => branchOnOrigin,
+    createBranchAt: (createdBranch, commit) => {
+      if (createBranchError !== undefined) throw new Error(createBranchError);
+      createdBranches.push({ branch: createdBranch, commit });
+      publishEvents.push("create-branch");
+    },
+    moveToLocal: (issueNumber, failureBranch, detail, change, createdAtBase) => {
+      publishEvents.push("move-to-local");
+      moveToLocalCalls.push({ issueNumber, branch: failureBranch, detail, change, createdAtBase });
+    },
+    deleteBranchAt: (deletedBranch, commit) => {
+      if (deleteBranchError !== undefined) throw new Error(deleteBranchError);
+      publishEvents.push("delete-branch");
+      deletedBranches.push({ branch: deletedBranch, commit });
     },
   };
   return {
     steps, runs, logs, comments, recordBuildFailureCalls, buildHost, aheadBranches, aheadBases, scanned, scannedBases, pushed, head,
-    order, buildingCalls, designNoteCalls, publishCalls, publishedPrBodies, workCommands, startFromMainCalls, handBackWorkflowChangeCalls,
-    mainChecks,
+    order, buildingCalls, designNoteCalls, publishCalls, publishedPrBodies, publishedCheckChanges, gateGuardChecks, workCommands, startFromMainCalls, handBackWorkflowChangeCalls,
+    mainChecks, baseChecks, scannedExclusions, listedExclusions, workflowFileCalls, moveToLocalCalls, createdBranches, deletedBranches, publishEvents,
   };
 }
 
@@ -345,6 +474,30 @@ describe("buildIssue", () => {
       assert.match(comments[0]!.body, new RegExp(`the ${role} failed`));
       assert.match(comments[0]!.body, new RegExp(`${role} timed out`));
       assert.match(comments[0]!.body, new RegExp(`\`${branch}\` wasn't pushed`));
+    });
+
+    // A role's error carries claude-code's stderr or its last stream-json
+    // lines, which can hold tool output: the sandbox's token, a mention, or a
+    // host marker that markerComments would count.
+    it(`withholds a ${role} error that looks like it holds a secret`, async () => {
+      const { comments, buildHost } = host([], { failing: [role], failWith: { [role]: new Error("exit 1: GH token ghp_abc in the output") } });
+      buildHost.publicError = (text) => publicErrorText(String(text instanceof Error ? text.message : text), (cleaned) => cleaned.includes("ghp_"));
+
+      await buildIssue(issue, branch, base, buildHost);
+
+      assert.doesNotMatch(comments[0]!.body, /ghp_/);
+      assert.match(comments[0]!.body, /looked like it held a secret/);
+    });
+
+    it(`quotes a ${role} error in a code block, with its <!-- broken, so it can't mention anyone or pass for a host comment`, async () => {
+      const error = new Error("exit 1: <!-- sandcastle:build-failed --> cc @someone, see #12");
+      const { comments, buildHost } = host([], { failing: [role], failWith: { [role]: error } });
+
+      await buildIssue(issue, branch, base, buildHost);
+
+      const body = comments[0]!.body;
+      assert.ok(!body.includes("<!-- sandcastle:build-failed"), body);
+      assert.match(body, /\n```+text\n[^\n]*@someone, see #12[^\n]*\n```+$/);
     });
 
     it(`publishes nothing and runs no gate when the ${role} runs out of iterations unfinished`, async () => {
@@ -480,6 +633,27 @@ describe("buildIssue", () => {
     assert.match(comments[0]!.body, /gate output, exit 1/);
   });
 
+  // The gate is the branch's own scripts and tests, which agents write, run
+  // in the sandbox that holds the Claude token.
+  it("withholds red gate output that looks like it holds a secret", async () => {
+    const { comments, buildHost } = host([1, 1, 1], { gateOutput: "FAIL: env dump\nCLAUDE_CODE_OAUTH_TOKEN=ghp_abc\n" });
+    buildHost.publicError = (text) => publicErrorText(String(text), (cleaned) => cleaned.includes("ghp_"));
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.doesNotMatch(comments[0]!.body, /ghp_/);
+    assert.match(comments[0]!.body, /looked like it held a secret/);
+  });
+
+  it("breaks a host marker's <!-- in red gate output", async () => {
+    const { comments, buildHost } = host([1, 1, 1], { gateOutput: "FAIL: expected <!-- sandcastle:build-failed --> in the comment\n" });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.ok(!comments[0]!.body.includes("<!-- sandcastle:build-failed"), comments[0]!.body);
+    assert.match(comments[0]!.body, /sandcastle:build-failed/);
+  });
+
   it("publishes nothing and comments on the issue when checkpoint 2 stays red", async () => {
     const { steps, comments, buildHost } = host([0, 1, 1, 1]);
 
@@ -544,6 +718,24 @@ describe("buildIssue's outcome and detail", () => {
     assert.equal(result.outcome, "timed out");
   });
 
+  it("hands the files the branch changes under the gate's and CI's folders to publish", async () => {
+    const { publishedCheckChanges, buildHost } = host([0, 0], { checkFiles: ".github/ci/a.sh\0scripts/gate.sh\0" });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(publishedCheckChanges, [[".github/ci/a.sh", "scripts/gate.sh"]]);
+  });
+
+  it("still publishes when listing the files under the gate's and CI's folders throws", async () => {
+    const { publishedCheckChanges, logs, buildHost } = host([0, 0], { checkFilesError: "container died" });
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(result.outcome, "published");
+    assert.deepEqual(publishedCheckChanges, [[]]);
+    assert.ok(logs.some((line) => line.includes("can't be listed")), logs.join("\n"));
+  });
+
   it("is gate failed, naming the checkpoint, when a checkpoint stays red past the gate-fixer's attempts", async () => {
     const { buildHost } = host([1, 1, 1]);
 
@@ -551,6 +743,17 @@ describe("buildIssue's outcome and detail", () => {
 
     assert.equal(result.outcome, "gate failed");
     assert.match(result.detail ?? "", /checkpoint 1/);
+  });
+
+  it("fails the gate without running it when a commit of the branch changes the gate script", async () => {
+    const { steps, gateGuardChecks, buildHost } = host([], { gateScriptChanged: `${GATE_SCRIPT}\0` });
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(result.outcome, "gate failed");
+    assert.ok(gateGuardChecks.length > 0);
+    assert.ok(gateGuardChecks.some((command) => command.includes(`'${base}' 'HEAD'`)), gateGuardChecks.join("\n"));
+    assert.ok(!steps.some((step) => step.startsWith("gate:")), steps.join("\n"));
   });
 
   it("is not published, naming the secret, when a commit holds one of the sandbox's secrets", async () => {
@@ -625,7 +828,7 @@ describe("buildIssue publishing", () => {
     assert.match(logged, /\b3\b/);
     assert.match(result.detail ?? "", /src\/example\.ts/);
     assert.match(result.detail ?? "", /\b3\b/);
-    // The public comment on the issue stays as it is: no path or line number (#324).
+    // The public comment on the issue stays as it is: no path or line number.
     assert.equal(comments.length, 1);
     assert.doesNotMatch(comments[0]!.body, /src\/example\.ts/);
   });
@@ -666,6 +869,20 @@ describe("buildIssue publishing", () => {
 
     assert.equal(failed.publishFailed, true);
     assert.equal(nothingToPublish.publishFailed, false);
+  });
+
+  it("says so on the issue, and stops the round, when the sandbox was left in place for a tampered worktree", async () => {
+    const { comments, buildHost } = host([0, 0]);
+    const tampered: BuildHost = {
+      ...buildHost,
+      createSandbox: async () => {
+        throw new TamperedWorktreeError("setting the identity failed; left /work/tree in place", "/work/tree");
+      },
+    };
+
+    await assert.rejects(buildIssue(issue, branch, base, tampered), TamperedWorktreeError);
+    assert.equal(comments.length, 1);
+    assert.match(comments[0]!.body, /no longer points at this repository/);
   });
 
   it("closes the sandbox when its worktree still points at this repository", async () => {
@@ -727,6 +944,16 @@ describe("buildIssue syncing with main before publishing", () => {
 
     assert.ok(!steps.some((step) => step.startsWith("merge")));
     assert.equal(mainChecks.length, 1);
+  });
+
+  it("leaves the merged main out of the gate guard only once GitHub says it is main", async () => {
+    const trusted = host([0, 0], { latestMain: newerMain, containsMain: false });
+    await buildIssue(issue, branch, base, trusted.buildHost);
+    const untrusted = host([0, 0], { latestMain: newerMain, containsMain: false, remoteMain: "9".repeat(40) });
+    await buildIssue(issue, branch, base, untrusted.buildHost);
+
+    assert.ok(trusted.gateGuardChecks.some((command) => command.includes(`'${newerMain}'`)), trusted.gateGuardChecks.join("\n"));
+    assert.ok(!untrusted.gateGuardChecks.some((command) => command.includes(`'${newerMain}'`)), untrusted.gateGuardChecks.join("\n"));
   });
 
   it("aborts a merge that conflicts and publishes the reviewed commit, leaving the conflict to the follow-up pass", async () => {
@@ -792,6 +1019,248 @@ describe("buildIssue syncing with main before publishing", () => {
     assert.deepEqual(comments, []);
   });
 
+  // After the merge, `gated` holds the commits main gained since
+  // `base`, which aren't the branch's work.
+  it("leaves the main commit it merged out of the secret scan", async () => {
+    const { scanned, scannedBases, scannedExclusions, head, buildHost } = host([0, 0], { latestMain: newerMain, containsMain: false });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(scanned, [head()]);
+    assert.deepEqual(scannedBases, [base]);
+    assert.deepEqual(scannedExclusions, [newerMain]);
+  });
+
+  it("publishes when a token-shaped string is only in main's newly merged commits", async () => {
+    const { pushed, comments, logs, head, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      leaksOnlyInMergedMain: sampleSecretMatch,
+    });
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(result.outcome, "published");
+    assert.deepEqual(pushed, [{ branch, commit: head() }]);
+    assert.deepEqual(comments, []);
+    assert.ok(!logs.some((line) => line.includes("holds a secret")));
+  });
+
+  it("still doesn't publish when a token-shaped string is in the branch's own commits, with main merged in", async () => {
+    const { pushed, comments, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      leaksSecret: sampleSecretMatch,
+    });
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(result.outcome, "not published");
+    assert.deepEqual(pushed, []);
+    assert.equal(comments.length, 1);
+  });
+
+  it("leaves the main commit it merged out of the workflow listing for a refused push", async () => {
+    const { listedExclusions, handBackWorkflowChangeCalls, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      publishError:
+        "git push failed:\n ! [remote rejected] (refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission)",
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(handBackWorkflowChangeCalls.length, 1);
+    assert.deepEqual(listedExclusions, [newerMain]);
+  });
+
+  it("excludes no main commit from the scan or the listing when GitHub's main isn't the merged commit", async () => {
+    const { scannedExclusions, listedExclusions, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      remoteMain: "f".repeat(40),
+      publishError: "refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml`",
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(scannedExclusions, [undefined]);
+    assert.deepEqual(listedExclusions, [undefined]);
+  });
+
+  it("blocks a token-shaped string in main's commits when GitHub's main can't be asked", async () => {
+    const { pushed, scannedExclusions, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      remoteMainError: "could not resolve host",
+      leaksOnlyInMergedMain: sampleSecretMatch,
+    });
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(result.outcome, "not published");
+    assert.deepEqual(pushed, []);
+    assert.deepEqual(scannedExclusions, [undefined]);
+  });
+
+  it("excludes no main commit from the scan or the listing when the merge conflicted", async () => {
+    const { scannedExclusions, listedExclusions, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      mergeExitCode: 1,
+      publishError: "refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml`",
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(scannedExclusions, [undefined]);
+    assert.deepEqual(listedExclusions, [undefined]);
+  });
+
+  it("excludes no main commit from the scan when the merged tree failed the gate and the branch went back to the reviewed commit", async () => {
+    const { scannedExclusions, buildHost } = host([0, 1, 0], { latestMain: newerMain, containsMain: false });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(scannedExclusions, [undefined]);
+  });
+
+  it("excludes no main commit from the scan when the branch already contains main or fetching main failed", async () => {
+    const contained = host([0, 0], { latestMain: newerMain });
+    const failedFetch = host([0, 0], { latestMainError: "could not resolve host" });
+
+    await buildIssue(issue, branch, base, contained.buildHost);
+    await buildIssue(issue, branch, base, failedFetch.buildHost);
+
+    assert.deepEqual(contained.scannedExclusions, [undefined]);
+    assert.deepEqual(failedFetch.scannedExclusions, [undefined]);
+  });
+
+  // Main's own workflow change would ride into the branch on the merge
+  // commit, and the push of it is refused for lack of Workflows permission,
+  // handing the issue back for a change the issue never made.
+  it("doesn't merge main in when the branch head..latest main touches .github/workflows/, and publishes the gated head", async () => {
+    const { steps, mainChecks, logs, pushed, head, workflowFileCalls, handBackWorkflowChangeCalls, comments, recordBuildFailureCalls, buildHost } =
+      host([0, 0], {
+        latestMain: newerMain,
+        containsMain: false,
+        mainWorkflowFiles: [".github/workflows/ci.yml"],
+      });
+    const reviewed = (3).toString(16).padStart(40, "0");
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.ok(!steps.some((step) => step.startsWith("merge")), steps.join(", "));
+    assert.equal(result.outcome, "published");
+    assert.equal(result.publishFailed, false);
+    // tester, backend and reviewer each committed once, and nothing merged.
+    assert.equal(head(), reviewed);
+    assert.deepEqual(pushed, [{ branch, commit: reviewed }]);
+    assert.deepEqual(handBackWorkflowChangeCalls, []);
+    assert.deepEqual(comments, []);
+    assert.deepEqual(recordBuildFailureCalls, []);
+    // Main is checked for the workflow change from the branch's head, the
+    // range the issue names.
+    assert.ok(
+      workflowFileCalls.some((call) => call.from === reviewed && call.to === newerMain),
+      JSON.stringify(workflowFileCalls),
+    );
+    assert.ok(mainChecks.length <= 1);
+    assert.ok(!logs.some((line) => line.includes("merged main in")), logs.join("\n"));
+  });
+
+  it("still merges main in, whatever main changed under .github/workflows/, when the push token can push workflow changes", async () => {
+    const { steps, workflowFileCalls, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      mainWorkflowFiles: [".github/workflows/ci.yml"],
+      pushRefusesWorkflowChanges: false,
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.ok(steps.includes(`merge '${newerMain}'`), steps.join(", "));
+    assert.ok(!workflowFileCalls.some((call) => call.to === newerMain), JSON.stringify(workflowFileCalls));
+  });
+
+  it("gates the branch as it is at checkpoint 2 when it leaves main's workflow change unmerged", async () => {
+    const { steps, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      mainWorkflowFiles: [".github/workflows/release.yml"],
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(steps, [
+      "tester",
+      "backend",
+      "gate: scripts/gate.sh 2>&1",
+      "reviewer",
+      "gate: scripts/gate.sh 2>&1",
+      "publish",
+      "close",
+    ]);
+  });
+
+  it("still merges main in when the branch head..latest main touches no workflow file", async () => {
+    const { steps, workflowFileCalls, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      mainWorkflowFiles: [],
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.ok(steps.includes(`merge '${newerMain}'`), steps.join(", "));
+    assert.ok(workflowFileCalls.some((call) => call.to === newerMain));
+  });
+
+  it("still hands the issue back for the branch's own workflow change when main is merged in", async () => {
+    const { handBackWorkflowChangeCalls, steps, comments, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      publishError:
+        "git push --quiet origin abc:refs/heads/x failed:\n ! [remote rejected] abc -> x (refusing to allow a GitHub App to " +
+        "create or update workflow `.github/workflows/ci.yml` without `workflows` permission)",
+    });
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.ok(steps.includes(`merge '${newerMain}'`), steps.join(", "));
+    assert.equal(handBackWorkflowChangeCalls.length, 1);
+    const { head, files } = handBackWorkflowChangeCalls[0]!.change;
+    assert.deepEqual(files, [`.github/workflows/${base.slice(0, 4)}-${head.slice(0, 4)}.yml`]);
+    assert.deepEqual(comments, []);
+    assert.equal(result.publishFailed, true);
+  });
+
+  // On a branch origin already has, the push is an update judged against the
+  // branch's own tip, so main's workflow change isn't what GitHub refuses.
+  it("hands the issue back for the branch's own workflow change, listing only its files, when main's workflow change is left unmerged", async () => {
+    const { handBackWorkflowChangeCalls, steps, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      branchOnOrigin: true,
+      mainWorkflowFiles: [".github/workflows/release.yml"],
+      publishError:
+        "git push --quiet origin abc:refs/heads/x failed:\n ! [remote rejected] abc -> x (refusing to allow a GitHub App to " +
+        "create or update workflow `.github/workflows/ci.yml` without `workflows` permission)",
+    });
+    const reviewed = (3).toString(16).padStart(40, "0");
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.ok(!steps.some((step) => step.startsWith("merge")), steps.join(", "));
+    assert.equal(handBackWorkflowChangeCalls.length, 1);
+    // The files and head are the branch's own: base..reviewed head, with no
+    // file of main's.
+    const { head, files } = handBackWorkflowChangeCalls[0]!.change;
+    assert.equal(head, reviewed);
+    assert.deepEqual(files, [`.github/workflows/${base.slice(0, 4)}-${reviewed.slice(0, 4)}.yml`]);
+    assert.equal(result.publishFailed, true);
+  });
+
   it("still publishes, without merging, when fetching main fails", async () => {
     const { steps, logs, buildHost } = host([0, 0], { latestMainError: "could not resolve host" });
 
@@ -801,9 +1270,26 @@ describe("buildIssue syncing with main before publishing", () => {
     assert.equal(result.outcome, "published");
     assert.ok(logs.some((line) => line.includes("fetching main failed")));
   });
+
+  it("still publishes, without merging, when main's workflow changes can't be listed", async () => {
+    const { steps, logs, pushed, buildHost } = host([0, 0], { latestMain: newerMain, containsMain: false });
+    const listWorkflows = buildHost.workflowFiles;
+    buildHost.workflowFiles = (from, to) => {
+      if (to === newerMain) throw new Error("git log failed");
+      return listWorkflows(from, to);
+    };
+    const reviewed = (3).toString(16).padStart(40, "0");
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.ok(!steps.some((step) => step.startsWith("merge")), steps.join(", "));
+    assert.equal(result.outcome, "published");
+    assert.deepEqual(pushed, [{ branch, commit: reviewed }]);
+    assert.ok(logs.some((line) => line.includes("can't be listed")), logs.join("\n"));
+  });
 });
 
-// #147: a role run that hits Claude's usage limit, or a build the time
+// A role run that hits Claude's usage limit, or a build the time
 // budget has already stopped, must end the build uncounted rather than
 // treating it as a failed attempt or publishing unreviewed work.
 describe("buildIssue and the usage limit", () => {
@@ -867,7 +1353,7 @@ describe("buildIssue and the usage limit", () => {
   });
 });
 
-// #147: a push GitHub refuses because it touches .github/workflows/** without
+// A push GitHub refuses because it touches .github/workflows/** without
 // Workflows permission needs a person, not a retry and not a generic
 // publish-failure comment.
 describe("buildIssue publishing a workflow file", () => {
@@ -907,12 +1393,460 @@ describe("buildIssue publishing a workflow file", () => {
   });
 });
 
-// Covers issue #72 ("Add architect, UI developer and scribe roles picked by
-// the planner"): the build order is
+// GitHub judges the push of a branch it doesn't have yet against main's
+// current tip, so a build cut before main changed a workflow "changes" that
+// workflow back, and the push is refused. The host creates the branch at `base`
+// first, then pushes the build's commits as an update to it.
+describe("buildIssue publishing a new branch after main changed a workflow", () => {
+  // The commit origin/main has moved on to since the round started.
+  const newerMain = "a".repeat(40);
+  const mainChangedWorkflow = {
+    latestMain: newerMain,
+    containsMain: false,
+    mainWorkflowFiles: [".github/workflows/claude-review.yml"],
+  };
+  const refusal =
+    "git push --quiet origin abc:refs/heads/x failed:\n ! [remote rejected] abc -> x (refusing to allow a Personal Access Token to " +
+    "create or update workflow `.github/workflows/claude-review.yml` without `workflow` scope)";
+
+  it("creates the branch at base before pushing the build's commits to it, when main changed a workflow since base", async () => {
+    const { createdBranches, publishEvents, pushed, workflowFileCalls, head, buildHost } = host([0, 0], mainChangedWorkflow);
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(createdBranches, [{ branch, commit: base }]);
+    assert.deepEqual(publishEvents, ["create-branch", "publish"]);
+    assert.deepEqual(pushed, [{ branch, commit: head() }]);
+    assert.equal(result.outcome, "published");
+    // The check asks about base..latest main, the range GitHub judges a new branch by.
+    assert.ok(
+      workflowFileCalls.some((call) => call.from === base && call.to === newerMain),
+      JSON.stringify(workflowFileCalls),
+    );
+  });
+
+  it("publishes as today, creating no branch first, when main changed no workflow since base", async () => {
+    const { createdBranches, publishEvents, pushed, head, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      mainWorkflowFiles: [],
+    });
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(createdBranches, []);
+    assert.deepEqual(publishEvents, ["publish"]);
+    assert.deepEqual(pushed, [{ branch, commit: head() }]);
+    assert.equal(result.outcome, "published");
+  });
+
+  it("publishes as today when main is still the commit the build started from", async () => {
+    const { createdBranches, publishEvents, buildHost } = host([0, 0]);
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(createdBranches, []);
+    assert.deepEqual(publishEvents, ["publish"]);
+  });
+
+  it("creates no branch when base isn't an ancestor of the commit the gate passed on, since the push would not fast-forward", async () => {
+    const { createdBranches, publishEvents, baseChecks, head, buildHost } = host([0, 0], {
+      ...mainChangedWorkflow,
+      baseIsAncestor: false,
+    });
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(baseChecks.length, 1);
+    assert.equal(baseChecks[0], `git merge-base --is-ancestor '${base}' '${head()}'`);
+    assert.deepEqual(createdBranches, []);
+    assert.deepEqual(publishEvents, ["publish"]);
+    assert.equal(result.outcome, "published");
+  });
+
+  it("hands the issue back, not to Sandcastle:local, when base isn't an ancestor and the push is refused", async () => {
+    const { moveToLocalCalls, handBackWorkflowChangeCalls, buildHost } = host([0, 0], {
+      ...mainChangedWorkflow,
+      baseIsAncestor: false,
+      publishError: refusal,
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(moveToLocalCalls, []);
+    assert.equal(handBackWorkflowChangeCalls.length, 1);
+  });
+
+  it("creates no branch when origin already has it, since the push is then an update", async () => {
+    const { createdBranches, publishEvents, buildHost } = host([0, 0], { ...mainChangedWorkflow, branchOnOrigin: true });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(createdBranches, []);
+    assert.deepEqual(publishEvents, ["publish"]);
+  });
+
+  it("creates no branch in a local run, whose push token can push a workflow change", async () => {
+    const { createdBranches, workflowFileCalls, publishEvents, buildHost } = host([0, 0], {
+      ...mainChangedWorkflow,
+      pushRefusesWorkflowChanges: false,
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(createdBranches, []);
+    assert.deepEqual(publishEvents, ["publish"]);
+    assert.ok(!workflowFileCalls.some((call) => call.from === base && call.to === newerMain), JSON.stringify(workflowFileCalls));
+  });
+
+  it("publishes as today when main's workflow files since base can't be listed", async () => {
+    const { createdBranches, publishEvents, buildHost } = host([0, 0], mainChangedWorkflow);
+    const listWorkflows = buildHost.workflowFiles;
+    buildHost.workflowFiles = (from, to, mergedMain) => {
+      if (from === base && to === newerMain) throw new Error("git log failed");
+      return listWorkflows(from, to, mergedMain);
+    };
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(createdBranches, []);
+    assert.deepEqual(publishEvents, ["publish"]);
+    assert.equal(result.outcome, "published");
+  });
+
+  it("publishes as today when origin can't be asked whether it has the branch", async () => {
+    const { createdBranches, publishEvents, buildHost } = host([0, 0], mainChangedWorkflow);
+    buildHost.remoteBranchExists = () => {
+      throw new Error("git ls-remote failed");
+    };
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(createdBranches, []);
+    assert.deepEqual(publishEvents, ["publish"]);
+    assert.equal(result.outcome, "published");
+  });
+
+  it("still pushes the build's commits when creating the branch at base fails", async () => {
+    const { pushed, head, buildHost } = host([0, 0], { ...mainChangedWorkflow, createBranchError: "git push failed" });
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(pushed, [{ branch, commit: head() }]);
+    assert.equal(result.outcome, "published");
+  });
+
+  it("moves the issue to Sandcastle:local when creating the branch failed and the push is then refused", async () => {
+    const { moveToLocalCalls, handBackWorkflowChangeCalls, buildHost } = host([0, 0], {
+      ...mainChangedWorkflow,
+      createBranchError: "git push failed",
+      publishError: refusal,
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(moveToLocalCalls.length, 1);
+    assert.deepEqual(handBackWorkflowChangeCalls, []);
+  });
+
+  it("moves the issue to Sandcastle:local, not to needs-human, when the push is still refused after the branch was created", async () => {
+    const { moveToLocalCalls, handBackWorkflowChangeCalls, comments, recordBuildFailureCalls, createdBranches, buildHost } = host(
+      [0, 0],
+      { ...mainChangedWorkflow, publishError: refusal },
+    );
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(createdBranches.length, 1);
+    assert.equal(moveToLocalCalls.length, 1);
+    assert.equal(moveToLocalCalls[0]!.issueNumber, issue.number);
+    assert.equal(moveToLocalCalls[0]!.branch, branch);
+    assert.match(moveToLocalCalls[0]!.detail, /refusing to allow/);
+    // The head and files are the build's own: base..the commit the gate passed.
+    const { head, files } = moveToLocalCalls[0]!.change;
+    assert.notEqual(head, base);
+    assert.deepEqual(files, [`.github/workflows/${base.slice(0, 4)}-${head.slice(0, 4)}.yml`]);
+    assert.deepEqual(handBackWorkflowChangeCalls, []);
+    assert.deepEqual(comments, []);
+    assert.deepEqual(recordBuildFailureCalls, []);
+    assert.equal(result.prUrl, undefined);
+    assert.equal(result.publishFailed, true);
+    assert.equal(result.outcome, "not published");
+  });
+
+  it("deletes the branch it created at base, before moving the issue, when the push is still refused", async () => {
+    const { deletedBranches, publishEvents, buildHost } = host([0, 0], { ...mainChangedWorkflow, publishError: refusal });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(deletedBranches, [{ branch, commit: base }]);
+    assert.deepEqual(publishEvents, ["create-branch", "delete-branch", "move-to-local"]);
+  });
+
+  it("still moves the issue to Sandcastle:local when deleting the stray branch fails", async () => {
+    const { moveToLocalCalls, buildHost } = host([0, 0], {
+      ...mainChangedWorkflow,
+      publishError: refusal,
+      deleteBranchError: "git push failed",
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(moveToLocalCalls.length, 1);
+  });
+
+  it("deletes no branch when creating it at base failed, since none is there", async () => {
+    const { deletedBranches, moveToLocalCalls, buildHost } = host([0, 0], {
+      ...mainChangedWorkflow,
+      createBranchError: "git push failed",
+      publishError: refusal,
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(deletedBranches, []);
+    assert.equal(moveToLocalCalls[0]!.createdAtBase, false);
+  });
+
+  it("tells the move whether the branch was created at base", async () => {
+    const { moveToLocalCalls, buildHost } = host([0, 0], { ...mainChangedWorkflow, publishError: refusal });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(moveToLocalCalls[0]!.createdAtBase, true);
+  });
+
+  it("deletes no branch when the publish fails for any other reason, since the push may have landed", async () => {
+    const { deletedBranches, buildHost } = host([0, 0], { ...mainChangedWorkflow, publishError: "HTTP 502 from gh pr create" });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(deletedBranches, []);
+  });
+
+  it("publishes as today when checking that base is an ancestor throws", async () => {
+    const { createdBranches, publishEvents, buildHost } = host([0, 0], { ...mainChangedWorkflow, baseExecError: "container died" });
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(createdBranches, []);
+    assert.deepEqual(publishEvents, ["publish"]);
+    assert.equal(result.outcome, "published");
+  });
+
+  it("still hands the issue back for a refused push when no branch was created first", async () => {
+    const { moveToLocalCalls, handBackWorkflowChangeCalls, buildHost } = host([0, 0], {
+      latestMain: newerMain,
+      containsMain: false,
+      mainWorkflowFiles: [],
+      publishError: refusal,
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.deepEqual(moveToLocalCalls, []);
+    assert.equal(handBackWorkflowChangeCalls.length, 1);
+  });
+
+  it("moves the issue to Sandcastle:local when the push of a new branch is refused only for main's workflow change", async () => {
+    // The refused push leaves a local branch on the old main that the next round would reuse
+    // and could never push, so the issue can't stay in the queue for it.
+    const { moveToLocalCalls, handBackWorkflowChangeCalls, buildHost } = host([0, 0], {
+      ...mainChangedWorkflow,
+      createBranchError: "git push failed",
+      publishError: refusal,
+    });
+    buildHost.workflowFiles = (_from, to) => (to === newerMain ? mainChangedWorkflow.mainWorkflowFiles : []);
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(moveToLocalCalls.length, 1);
+    assert.equal(moveToLocalCalls[0]!.createdAtBase, false);
+    assert.deepEqual(handBackWorkflowChangeCalls, []);
+    assert.equal(result.publishFailed, true);
+    assert.equal(result.outcome, "not published");
+  });
+
+  it("moves the issue to Sandcastle:local when the branch was created at base, even if the build touches no workflow", async () => {
+    const { moveToLocalCalls, buildHost } = host([0, 0], { ...mainChangedWorkflow, publishError: refusal });
+    buildHost.workflowFiles = (_from, to) => (to === newerMain ? mainChangedWorkflow.mainWorkflowFiles : []);
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(moveToLocalCalls.length, 1);
+  });
+
+  it("moves the issue to Sandcastle:local when the build's own workflow files can't be listed", async () => {
+    const { moveToLocalCalls, buildHost } = host([0, 0], {
+      ...mainChangedWorkflow,
+      createBranchError: "git push failed",
+      publishError: refusal,
+    });
+    buildHost.workflowFiles = (_from, to) => {
+      if (to === newerMain) return mainChangedWorkflow.mainWorkflowFiles;
+      throw new Error("git diff failed");
+    };
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(moveToLocalCalls.length, 1);
+  });
+
+  it("moves the issue to Sandcastle:local when the build itself changes a workflow and the branch wasn't created", async () => {
+    const { moveToLocalCalls, buildHost } = host([0, 0], {
+      ...mainChangedWorkflow,
+      createBranchError: "git push failed",
+      publishError: refusal,
+    });
+
+    await buildIssue(issue, branch, base, buildHost);
+
+    assert.equal(moveToLocalCalls.length, 1);
+  });
+
+  it("reports in the run's detail that moving the issue failed, rather than that it moved", async () => {
+    const { buildHost } = host([0, 0], { ...mainChangedWorkflow, publishError: refusal });
+    buildHost.moveToLocal = () => {
+      throw new Error("gh issue edit failed: HTTP 502");
+    };
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.match(result.detail, /moving it to Sandcastle:local failed/);
+  });
+
+  it("reports in the run's detail that the issue moved when the move worked", async () => {
+    const { buildHost } = host([0, 0], { ...mainChangedWorkflow, publishError: refusal });
+
+    const result = await buildIssue(issue, branch, base, buildHost);
+
+    assert.match(result.detail, /so it moved to Sandcastle:local/);
+  });
+
+  it("still resolves when moving the issue to Sandcastle:local itself fails", async () => {
+    const { buildHost } = host([0, 0], { ...mainChangedWorkflow, publishError: refusal });
+    buildHost.moveToLocal = () => {
+      throw new Error("gh issue edit failed: HTTP 502");
+    };
+
+    await assert.doesNotReject(() => buildIssue(issue, branch, base, buildHost));
+  });
+});
+
+describe("buildIssue ui role", () => {
+  it("runs the UI developer after the backend developer and before checkpoint 1, when the plan picks it", async () => {
+    await withUiRole(true, async () => {
+      const { steps, buildHost } = host([0, 0]);
+
+      await buildIssue(withRoles(["ui"]), branch, base, buildHost);
+
+      assert.deepEqual(steps, [
+        "tester",
+        "backend",
+        "ui",
+        "gate: scripts/gate.sh 2>&1",
+        "reviewer",
+        "gate: scripts/gate.sh 2>&1",
+        "publish",
+        "close",
+      ]);
+    });
+  });
+
+  it("runs every optional role in build order when the plan picks them all", async () => {
+    await withUiRole(true, async () => {
+      const { steps, buildHost } = host([0, 0]);
+
+      await buildIssue(withRoles(["architect", "ui", "scribe"]), branch, base, buildHost);
+
+      assert.deepEqual(steps.filter((step) => !step.startsWith("gate:")), ["architect", "tester", "backend", "ui", "scribe", "reviewer", "publish", "close"]);
+    });
+  });
+
+  it("tells the backend developer the UI developer follows, and that it is the last developer run otherwise", async () => {
+    await withUiRole(true, async () => {
+      const withUi = host([0, 0]);
+      await buildIssue(withRoles(["ui"]), branch, base, withUi.buildHost);
+      const without = host([0, 0]);
+      await buildIssue(withRoles([]), branch, base, without.buildHost);
+
+      assert.match(String(withUi.runs.find((run) => run.name === "backend")?.promptArgs?.UI_DEVELOPER), /UI developer runs after you/);
+      assert.match(String(without.runs.find((run) => run.name === "backend")?.promptArgs?.UI_DEVELOPER), /last developer run/);
+    });
+  });
+
+  it("runs the UI developer from roles/ui.md with the issue's prompt arguments and the shared rules", async () => {
+    await withUiRole(true, async () => {
+      const { runs, buildHost } = host([0, 0]);
+
+      await buildIssue(withRoles(["ui"]), branch, base, buildHost);
+
+      const run = runs.find((options) => options.name === "ui")!;
+      assert.equal(run.promptFile, "./.sandcastle/roles/ui.md");
+      assert.equal(run.promptArgs?.TASK_ID, "69");
+      assert.equal(run.promptArgs?.BRANCH, branch);
+      assert.ok(run.promptArgs?.SHARED_RULES);
+    });
+  });
+
+  it("skips the UI developer, and tells the backend developer it is the last developer run, when the plan names ui in a repo that hasn't opted in", async () => {
+    await withUiRole(false, async () => {
+      const { steps, runs, buildHost } = host([0, 0]);
+
+      const result = await buildIssue(withRoles(["ui"]), branch, base, buildHost);
+
+      assert.ok(!steps.includes("ui"));
+      assert.equal(result.prUrl, "https://github.com/o/r/pull/1");
+      assert.match(String(runs.find((run) => run.name === "backend")?.promptArgs?.UI_DEVELOPER), /last developer run/);
+    });
+  });
+
+  it("publishes nothing and comments on the issue when the UI developer runs out of iterations unfinished", async () => {
+    await withUiRole(true, async () => {
+      const { steps, comments, recordBuildFailureCalls, buildHost } = host([0, 0], { unfinished: ["ui"] });
+
+      const result = await buildIssue(withRoles(["ui"]), branch, base, buildHost);
+
+      assert.ok(!steps.includes("publish"));
+      assert.equal(result.prUrl, undefined);
+      assert.equal(recordBuildFailureCalls.length, 1);
+      assert.match(comments[0]!.body, /ui ran out of iterations/);
+    });
+  });
+
+  it("stops the build, without publishing, and counts a failed attempt when the UI developer fails", async () => {
+    await withUiRole(true, async () => {
+      const { steps, recordBuildFailureCalls, buildHost } = host([0, 0], { failing: ["ui"] });
+
+      const result = await buildIssue(withRoles(["ui"]), branch, base, buildHost);
+
+      assert.ok(!steps.includes("publish"));
+      assert.equal(result.prUrl, undefined);
+      assert.equal(recordBuildFailureCalls.length, 1);
+    });
+  });
+
+  it("rethrows a usage-limit stop from the UI developer instead of counting a failed attempt", async () => {
+    await withUiRole(true, async () => {
+      const stop = new UncountedStopError("usage limit reached");
+      const { recordBuildFailureCalls, buildHost } = host([0, 0], { failing: ["ui"], failWith: { ui: stop } });
+
+      await assert.rejects(
+        () => buildIssue(withRoles(["ui"]), branch, base, buildHost),
+        (error: unknown) => error === stop,
+      );
+
+      assert.deepEqual(recordBuildFailureCalls, []);
+    });
+  });
+});
+
+// Covers Blazor-Server#72 ("Add architect, UI developer and scribe roles
+// picked by the planner"): the build order is
 // [architect] → tester → backend → [ui] → gate 1 → [scribe] → reviewer → gate 2 → publish,
 // with each bracketed role run only when the planner picked it (issue.roles).
 describe("buildIssue optional roles", () => {
-  it("runs tester, backend, scribe and reviewer, and no architect or UI developer, when the plan picks only the scribe", async () => {
+  it("runs tester, backend, scribe and reviewer, and no architect, when the plan picks only the scribe", async () => {
     const { steps, logs, buildHost } = host([0, 0]);
 
     const result = await buildIssue(withRoles(["scribe"]), branch, base, buildHost);
@@ -929,19 +1863,17 @@ describe("buildIssue optional roles", () => {
     ]);
     assert.equal(result.prUrl, "https://github.com/o/r/pull/1");
     assert.ok(!logs.some((line) => line.includes("architect")));
-    assert.ok(!logs.some((line) => line.includes(" ui ") || line.endsWith(" ui finished")));
   });
 
-  it("runs the architect before the tester, the UI developer after the backend and before checkpoint 1, and the scribe after checkpoint 1 and before the reviewer, when the plan picks every optional role", async () => {
+  it("runs the architect before the tester and the scribe after checkpoint 1 and before the reviewer, when the plan picks every optional role", async () => {
     const { steps, buildHost } = host([0, 0]);
 
-    await buildIssue(withRoles(["architect", "ui", "scribe"]), branch, base, buildHost);
+    await buildIssue(withRoles(["architect", "scribe"]), branch, base, buildHost);
 
     assert.deepEqual(steps, [
       "architect",
       "tester",
       "backend",
-      "ui",
       "gate: scripts/gate.sh 2>&1",
       "scribe",
       "reviewer",
@@ -951,7 +1883,7 @@ describe("buildIssue optional roles", () => {
     ]);
   });
 
-  it("runs neither the architect, the UI developer nor the scribe when the plan picks none of them", async () => {
+  it("runs neither the architect nor the scribe when the plan picks none of them", async () => {
     const { steps, buildHost } = host([0, 0]);
 
     await buildIssue(withRoles([]), branch, base, buildHost);
@@ -967,7 +1899,7 @@ describe("buildIssue optional roles", () => {
     ]);
   });
 
-  for (const role of ["architect", "ui"] as const) {
+  for (const role of ["architect"] as const) {
     // gateExitCodes has enough green answers for the whole old pipeline, so a
     // ${role} that's wrongly left out of the build still reaches publish
     // instead of exhausting the gate stub and failing for an unrelated reason.
@@ -1003,16 +1935,6 @@ describe("buildIssue optional roles", () => {
     });
   }
 
-  it("tells the backend developer whether the UI developer runs after it", async () => {
-    for (const [roles, expected] of [[["ui"], /UI developer runs after you/], [[], /last developer run/]] as const) {
-      const { runs, buildHost } = host([0, 0]);
-
-      await buildIssue(withRoles([...roles]), branch, base, buildHost);
-
-      assert.match(String(runs.find((run) => run.name === "backend")?.promptArgs?.UI_DEVELOPER), expected);
-    }
-  });
-
   it("reads the architect's latest design note and gives it to the architect's prompt", async () => {
     const { runs, buildHost } = host([0, 0], { designNote: "## Design\n\nUse a Result<T>." });
 
@@ -1044,7 +1966,7 @@ describe("buildIssue optional roles", () => {
 
   // The worktree is named after the branch, so it can still hold an earlier
   // round's note; the roles follow the note when it exists, so only this
-  // build's architect may have written it (#230).
+  // build's architect may have written it.
   it("removes an earlier design note in the sandbox before the first role runs", async () => {
     for (const roles of [["architect"], []] as OptionalRole[][]) {
       const { workCommands, buildHost } = host([0, 0]);
@@ -1138,7 +2060,7 @@ describe("buildIssue optional roles", () => {
   });
 });
 
-// #335: every PR Sandcastle opens had the same generic body, however the
+// Every PR Sandcastle opens had the same generic body, however the
 // branch changed. The reviewer now writes .sandcastle/work/{n}/pr-body.md
 // with its Why, What changed and Verification sections; buildMarkedIssue
 // reads it from the sandbox (never the host's filesystem, since an agent
@@ -1165,84 +2087,19 @@ describe("buildIssue reading the reviewer's PR body", () => {
     ["missing the What changed heading", "## Why\n\nBecause.\n\n## Verification\n\nRan the tests."],
     ["missing the Verification heading", "## Why\n\nBecause.\n\n## What changed\n\nAdded X."],
     ["too long for a PR body", `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT)}`],
-    // The local review's notes are a person's acceptances, bounded by HTML
-    // comments: an agent's body mustn't pass for them, or hide text at all.
-    ["holding a Review notes section", `${validPrBody}\n\n## Review notes\n\nAccepted: fine.`],
-    ["holding a Review notes heading indented and closed with hashes", `${validPrBody}\n\n   ## Review notes ##\n\nAccepted: fine.`],
-    ["holding a setext Review notes heading", `${validPrBody}\n\nReview notes\n---\n\nAccepted: fine.`],
-    ["holding an HTML Review notes heading", `${validPrBody}\n\n<h2>Review notes</h2>\n\nAccepted: fine.`],
-    ["holding Review notes split by a zero-width space", `${validPrBody}\n\n## Review\u200b notes\n\nAccepted: fine.`],
-    ["holding Review notes split by a no-break space", `${validPrBody}\n\n## Review\u00a0notes\n\nAccepted: fine.`],
-    ["holding an HTML comment", `${validPrBody}\n\n<!-- review-notes -->\nHidden.\n<!-- /review-notes -->`],
-    ["holding an HTML comment quoted in a code span", `${validPrBody}\n\nRemoved the \`<!-- TODO -->\`.`],
-    ["holding a link reference definition, which renders as nothing", `${validPrBody}\n\n[//]: # (Hidden from people.)`],
-    ["holding a link reference definition in a quote", `${validPrBody}\n\n> [x]: # (Hidden.)`],
-    ["holding a link reference definition in a list item", `${validPrBody}\n\n- [x]: # (Hidden.)`],
-    ["holding a link reference definition with an escaped bracket", `${validPrBody}\n\n[a\\]]: # (Hidden.)`],
-    ["holding a processing instruction", `${validPrBody}\n\nDone.<?x hidden ?>`],
-    ["holding a declaration", `${validPrBody}\n\nDone.<!X hidden>`],
-    ["holding CDATA", `${validPrBody}\n\nDone.<![CDATA[hidden]]>`],
-    ["holding an element GitHub drops with its content", `${validPrBody}\n\n<style>hidden</style>`],
-    ["holding Review notes in fullwidth letters", `${validPrBody}\n\n## \uff32\uff45\uff56\uff49\uff45\uff57 \uff4e\uff4f\uff54\uff45\uff53`],
-    ["holding Review notes with emphasis inside a word", `${validPrBody}\n\n## Re*view* **notes**`],
-    ["holding Review notes with a character reference", `${validPrBody}\n\n## Review&#32;notes`],
-    ["holding Review notes with an invisible format character", `${validPrBody}\n\n## Review\u200e\u034f notes`],
-    ["holding Review notes between a stray < and >", `${validPrBody}\n\n< x\n\n## Review notes\n\ny >`],
-    ["holding Review notes in an attribute", `${validPrBody}\n\n<img alt="Review notes" src="x.png">`],
-    ["holding Review notes as an image's alt text", `${validPrBody}\n\n![Review notes](x.png)`],
-    ["holding Review notes as a link's title", `${validPrBody}\n\n[x](https://example.com "Review notes")`],
-    ["holding Review notes with an invisible Hangul filler", `${validPrBody}\n\n## Review\u3164notes`],
-    ["holding Review notes with a dotted capital I", `${validPrBody}\n\n## Rev\u0130ew notes`],
-    ["holding Review notes with a reference lacking its semicolon", `${validPrBody}\n\n## Review&#32notes`],
-    ["holding Review notes in look-alike Cyrillic letters", `${validPrBody}\n\n## R\u0435view n\u043et\u0435s`],
-    ["holding Review notes after a < that starts no tag", `${validPrBody}\n\n<x\n\n## Review notes\n\ny >`],
-    ["holding Review notes after a < and a comma", `${validPrBody}\n\nSee <x Review, notes> here.`],
-    ["holding Review notes in an autolink", `${validPrBody}\n\n<https://example.com/Review-notes>`],
-    ["holding Review notes in an attribute holding a <", `${validPrBody}\n\n<img alt="<Review notes>" src="x.png">`],
-    ["holding Review notes as valueless attributes", `${validPrBody}\n\n<x Review notes>`],
-    ["holding Review notes split by an anchor", `${validPrBody}\n\nRe<a href="u">view notes</a>`],
-    ["holding Review notes split by a span", `${validPrBody}\n\n## Rev<span class="x">iew notes`],
-    ["holding Review notes in Greek capitals", `${validPrBody}\n\n## R\u0395VI\u0395W \u039dOTES`],
-    ["holding Review notes in Latin small capitals", `${validPrBody}\n\n## \u0280\u1d07\u1d20\u026a\u1d07\u1d21 \u0274\u1d0f\u1d1b\u1d07\ua731`],
-    ["holding Review notes spelt with a named reference lacking its semicolon", `${validPrBody}\n\n<div>Review&nbspnotes</div>`],
-    ["holding a soft-hyphen reference lacking its semicolon", `${validPrBody}\n\n<div>Review&shy notes</div>`],
-    ["exactly one character over the limit", `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT - validPrBody.length - 1)}`],
-    ["under the limit, but over it once its references are broken", `${validPrBody}\n\n${"#1 ".repeat(Math.floor((PR_BODY_LIMIT - validPrBody.length - 2) / 3))}`],
-    ["holding a tag-shaped Review notes in a code span", `${validPrBody}\n\nUses \`<Review notes>\` here.`],
-    ["holding an escaped tag-shaped Review notes", `${validPrBody}\n\n\\<Review notes>`],
-    ["holding a tag-shaped Review notes in a fence", `${validPrBody}\n\n\`\`\`\n<Review notes>\n\`\`\``],
-    ["holding a tag-shaped Review notes with a no-break space", `${validPrBody}\n\n<Review\u00a0notes>`],
-    ["holding Review notes finished by an image's alt", `${validPrBody}\n\n## Review <img alt="notes" src="x.png">`],
-    ["holding Review notes started by an image's alt", `${validPrBody}\n\nRev<img alt="iew notes" src="x.png">`],
-    ["holding Review notes in two images' alts", `${validPrBody}\n\n<img alt="Review " src="a"><img alt="notes" src="b">`],
-    ["holding Review notes round a quoted value with a blank line", `${validPrBody}\n\nRevie<w _="\n\n">notes`],
-    ["holding Review notes in Lisu letters", `${validPrBody}\n\n## \ua4e3\ua4f0\ua4e6\ua4f2\ua4f0\ua4ea \ua4e0\ua4f3\ua4d4\ua4f0\ua4e2`],
-    ["holding Review notes in Cherokee and Latin letters", `${validPrBody}\n\n## \u13a1\u13ac\u13d9\u13a5\u13ac\u13b3 notes`],
-    ["holding a Greek word", `${validPrBody}\n\nThe \u0394 case.`],
-    ["holding a CJK word", `${validPrBody}\n\n\u691c\u8a0e.`],
-    ["holding an upper-case legacy reference without its semicolon", `${validPrBody}\n\n<div>Review&NBSPnotes</div>`],
-    ["holding a two-letter legacy reference without its semicolon", `${validPrBody}\n\nUses &lt here.`],
-    ["holding an upper-case two-letter reference without its semicolon", `${validPrBody}\n\nUses &AMP here.`],
-    ["holding a legacy name at the start of a longer word", `${validPrBody}\n\nSee &notes.`],
-    ["holding Review notes finished by an alt after a title", `${validPrBody}\n\n## Review <img title="x" alt="notes" src="missing.png">`],
-    ["holding Review notes round a tag with a no-break space in a value", `${validPrBody}\n\nRe<a href=x\u00a0>view notes</a>`],
-    ["holding Review notes in an HTML block with a tag only a browser reads", `${validPrBody}\n\n<div>\nRev<x_>iew notes\n</div>`],
-    ["holding Review notes round a real tag and a code span", `${validPrBody}\n\nRe<b>view</b> \`<notes>\``],
-    ["holding Review notes across a blockquote's line", `${validPrBody}\n\n> Re<b\n> x>view notes`],
-    ["holding a micro-look-alike symbol, the estimated sign", `${validPrBody}\n\nR\u212Eview notes`],
-    ["holding a Latin letter outside the table, a small iota", `${validPrBody}\n\nRev\u0269ew notes`],
-    ["holding an inverted exclamation mark", `${validPrBody}\n\nRev\u00a1ew notes`],
-    ["holding a no-break space", `${validPrBody}\n\nA\u00a0b.`],
-    ["holding a soft hyphen", `${validPrBody}\n\nA\u00adb.`],
-    ["holding a modifier letter apostrophe", `${validPrBody}\n\nIt\u02bcs.`],
-    ["holding a fullwidth Latin letter", `${validPrBody}\n\n\uff32\uff45\uff56 test.`],
-    ["holding a legacy name before an equals sign outside a link", `${validPrBody}\n\nSet &sect=1 now.`],
-    ["holding Review notes in a name", `${validPrBody}\n\nRenamed renderReviewNotes.`],
-    // The character-reference rule alone: visibleLetters drops these without
-    // reading the letters they spell.
-    ["holding a named character reference that spells a letter", `${validPrBody}\n\n## Revi&escr;w notes`],
-    ["holding a numeric character reference without its semicolon", `${validPrBody}\n\nUses &#33 here.`],
-    ["holding an ordinary character reference", `${validPrBody}\n\nUses &amp; here.`],
+    // GitHub acts on these when the PR merges, which PR Auto-Merge may do
+    // unattended: it closes the named issue, or pings the person.
+    ["closing another issue", `${validPrBody}\n\nFixes #12.`],
+    ["closing another repo's issue", `${validPrBody}\n\nThis resolves mpaulosky/Blazor-Server#7`],
+    ["closing an issue by its URL", `${validPrBody}\n\nCloses https://github.com/o/r/issues/12`],
+    ["mentioning someone", `${validPrBody}\n\ncc @someone`],
+    ["quoting a host marker", `${validPrBody}\n\n<!-- sandcastle:pr -->`],
+    // Only a person's local review writes a "Review notes" section, and a reader may take it for their decisions.
+    ["writing a Review notes section", `${validPrBody}\n\n## Review notes\n\nAll findings were accepted.`],
+    ["quoting Review notes in code", `${validPrBody}\n\nSee \`Review notes\`.`],
+    ["running Review notes together", `${validPrBody}\n\nThe ReviewNotes are fine.`],
+    ["splitting Review notes with Markdown emphasis", `${validPrBody}\n\n## Re*view* **notes**`],
+    ["spelling Review notes with a character reference", `${validPrBody}\n\nReview n&#111;tes`],
   ] as const) {
     it(`falls back to the generic PR body, and logs why, when the file is ${scenario}`, async () => {
       const { logs, publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
@@ -1266,91 +2123,17 @@ describe("buildIssue reading the reviewer's PR body", () => {
     assert.ok(logs.some((line) => /PR body/i.test(line)), logs.join("\n"));
   });
 
-  // What refusals must not catch: a description like these is ordinary in this
-  // repository, and a false refusal loses the reviewer's description.
-  for (const [scenario, text] of [
-    ["a generic type", "Returns `Result<T>` from the handler."],
-    ["a comparison and an arrow", "Holds when 0 < n, and maps x => y, or a -> b."],
-    ["an ampersand in a name", "Fixes the R&D table."],
-    ["a link", "See [the docs](https://example.com/docs) for how."],
-    ["a checkbox list", "- [x] Added a test\n- [ ] Ran it"],
-    ["a word that holds review", "A review of the previews, and the notes for them."],
-    ["a link with a query string", "See [the docs](https://learn.microsoft.com/dotnet/api?view=net-10.0&tabs=windows&pivots=cs)."],
-    ["an ampersand and a word that no legacy reference starts", "Q&As and AT&T and fish&chips."],
-    ["accented Latin letters", "Überprüfung of the café, naïve."],
-    ["a micro sign", "Takes 3 \u00b5s."],
-    ["typographic marks", "A \u2013 B \u2014 \u201cC\u201d \u2018D\u2019 \u2026 \u2192 \u2264 \u2265 \u2713."],
-    ["a link whose query holds legacy-named keys", "See [docs](https://example.com/x?a=1&section=b&region=us&param=x&notify=1&center=2)."],
-    ["a bare URL whose query holds a legacy-named key", "See https://example.com/x?a=1&section=b."],
-    ["an autolink whose query holds a legacy-named key", "See <https://example.com/x?a=1&region=us>."],
-    ["a fenced code block with an operator", "```csharp\nvar a = b < c;\n```"],
-  ] as const) {
-    it(`publishes the reviewer's description when it holds ${scenario}`, async () => {
-      const prBodyFile = `${validPrBody}\n\n${text}`;
-      const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
-
-      await buildIssue(issue, branch, base, buildHost);
-
-      assert.equal(publishedPrBodies.at(-1), prBodyFile);
-    });
-  }
-
-  // The legacy names HTML decodes without a semicolon (the spec's list),
-  // written out here rather than read from the constant, so a dropped or
-  // mistyped name fails.
-  const legacyNames = [
-    "AElig", "AMP", "Aacute", "Acirc", "Agrave", "Aring", "Atilde", "Auml", "COPY", "Ccedil", "ETH", "Eacute", "Ecirc", "Egrave", "Euml", "GT",
-    "Iacute", "Icirc", "Igrave", "Iuml", "LT", "Ntilde", "Oacute", "Ocirc", "Ograve", "Oslash", "Otilde", "Ouml", "QUOT", "REG", "THORN",
-    "Uacute", "Ucirc", "Ugrave", "Uuml", "Yacute", "aacute", "acirc", "acute", "aelig", "agrave", "amp", "aring", "atilde", "auml", "brvbar",
-    "ccedil", "cedil", "cent", "copy", "curren", "deg", "divide", "eacute", "ecirc", "egrave", "eth", "euml", "frac12", "frac14", "frac34",
-    "gt", "iacute", "icirc", "iexcl", "igrave", "iquest", "iuml", "laquo", "lt", "macr", "micro", "middot", "nbsp", "not", "ntilde", "oacute",
-    "ocirc", "ograve", "ordf", "ordm", "oslash", "otilde", "ouml", "para", "plusmn", "pound", "quot", "raquo", "reg", "sect", "shy", "sup1",
-    "sup2", "sup3", "szlig", "thorn", "times", "uacute", "ucirc", "ugrave", "uml", "uuml", "yacute", "yen", "yuml",
-  ];
-
-  it("lists exactly the legacy character references HTML decodes without a semicolon", () => {
-    assert.deepEqual([...LEGACY_REFERENCES].sort(), [...legacyNames].sort());
-  });
-
-  for (const name of legacyNames) {
-    it(`falls back to the generic PR body when the file holds &${name} without its semicolon`, async () => {
-      const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile: `${validPrBody}\n\nUses &${name}x here.` });
-
-      await buildIssue(issue, branch, base, buildHost);
-
-      assert.equal(publishedPrBodies.at(-1), undefined);
-    });
-  }
-
-  it("falls back to the generic PR body when the file spells a letter of the phrase with a reference", async () => {
-    const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile: `${validPrBody}\n\nReview n&ordmtes.` });
+  it("runs the reviewer from review-prompt.md with PR_BODY_RULES, and every run that reads that prompt gets it", async () => {
+    const { runs, buildHost } = host([0, 0]);
 
     await buildIssue(issue, branch, base, buildHost);
 
-    assert.equal(publishedPrBodies.at(-1), undefined);
-  });
-
-  it("publishes a description of exactly the limit", async () => {
-    const prBodyFile = `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT - validPrBody.length - 2)}`;
-    assert.equal(prBodyFile.length, PR_BODY_LIMIT);
-    const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
-
-    await buildIssue(issue, branch, base, buildHost);
-
-    assert.equal(publishedPrBodies.at(-1), prBodyFile);
-  });
-
-  // R75: the body went out as written, so a closing keyword would close
-  // another issue and a mention would notify someone.
-  it("publishes the reviewer's description with its mentions and issue references broken, so it closes and notifies no one", async () => {
-    const prBodyFile = `${validPrBody}\n\nCloses #5, thanks @someone and @org/team, see mpaulosky/other#7, GH-9 and https://github.com/mpaulosky/other/issues/9.`;
-    const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile });
-
-    await buildIssue(issue, branch, base, buildHost);
-
-    const published = publishedPrBodies.at(-1);
-    assert.equal(published, breakReferences(prBodyFile));
-    assert.doesNotMatch(published!, /@[A-Za-z0-9]|#\d|GH-\d|github\.com/i);
+    const reviews = runs.filter((run) => run.promptFile === "./.sandcastle/review-prompt.md");
+    assert.deepEqual(reviews.map((run) => run.name), ["reviewer"]);
+    assert.equal(reviews[0]!.promptArgs?.PR_BODY_RULES, PR_BODY_RULES);
+    assert.equal(reviews[0]!.promptArgs?.TASK_ID, String(issue.number));
+    assert.equal(reviews[0]!.promptArgs?.BRANCH, branch);
+    assert.ok(reviews[0]!.promptArgs?.SHARED_RULES);
   });
 
   it("removes an earlier round's pr-body.md before any role runs, so its description never goes out with this round's change", async () => {
@@ -1388,7 +2171,7 @@ describe("buildIssue marking the issue as building", () => {
     assert.deepEqual(order.slice(-2), ["close", "unmark"]);
   });
 
-  // #77: a closed-without-merging PR's old work must be discarded before a
+  // A closed-without-merging PR's old work must be discarded before a
   // fresh sandbox is created from the branch, but only once the issue is
   // marked (so a second run can't race to delete the same refs).
   it("calls startFromMain with the issue, branch and base after marking the issue and before creating its sandbox", async () => {
@@ -1499,7 +2282,7 @@ describe("buildIssue marking the issue as building", () => {
     // (see config.test.mts) must outlast.
     const { runs, buildHost } = host([1, 1, 0, 1, 1, 0]);
 
-    const result = await buildIssue(withRoles(["architect", "ui", "scribe"]), branch, base, buildHost);
+    const result = await withUiRole(true, () => buildIssue(withRoles(["architect", "ui", "scribe"]), branch, base, buildHost));
 
     const roles = runs.map((run) => run.name!);
     const others = roles.filter((role) => role !== "gate-fixer");
@@ -1518,8 +2301,51 @@ describe("buildIssue marking the issue as building", () => {
   });
 });
 
+describe("prTitle", () => {
+  const titled = (title: string, labels: string[] = []) => prTitle({ number: 69, title, labels });
+
+  it("keeps a title that already follows the commit format", () => {
+    assert.equal(titled("fix(baseline): Say to push the fix first"), "fix(baseline): Say to push the fix first");
+    assert.equal(titled("feat!: Drop the old queue"), "feat!: Drop the old queue");
+  });
+
+  it("gives a title with no prefix feat:, or fix: for a bug", () => {
+    assert.equal(titled("Add dark mode toggle", ["Sandcastle"]), "feat: Add dark mode toggle");
+    assert.equal(titled("Search crashes on empty input", ["bug", "Sandcastle"]), "fix: Search crashes on empty input");
+  });
+
+  it("capitalises the summary and drops a final period", () => {
+    assert.equal(titled("add dark mode toggle."), "feat: Add dark mode toggle");
+    assert.equal(titled("fix(ui): handle the empty list."), "fix(ui): Handle the empty list");
+  });
+
+  it("keeps a summary that starts with a digit, a backtick or a bracket, which the title check allows", () => {
+    assert.equal(titled("404 on the login page"), "feat: 404 on the login page");
+    assert.equal(titled("`gate.sh` hangs on Windows"), "feat: `gate.sh` hangs on Windows");
+    assert.equal(titled("[ui] Broken toggle", ["bug"]), "fix: [ui] Broken toggle");
+  });
+
+  it("falls back to the issue number when nothing is left of the title to make a summary", () => {
+    assert.equal(titled("..."), "feat: Issue #69");
+    assert.equal(titled("   ", ["bug"]), "fix: Issue #69");
+  });
+
+  // dotfiles has no scripts/check-pr-title.sh of its own, so the test waits for a repo that does.
+  const script = join(import.meta.dirname, "..", "..", "scripts", "check-pr-title.sh");
+  it("always gives a title scripts/check-pr-title.sh accepts", { skip: !existsSync(script) }, () => {
+    for (const title of ["Add dark mode toggle", "fix: lower case.", "docs(x): ok", "...", "404 errors", "[x] y", "feat!: breaking"]) {
+      const result = spawnSync("bash", [script, prTitle({ number: 7, title, labels: [] })], { encoding: "utf8" });
+      assert.equal(result.status, 0, `${title}: ${result.stdout}`);
+    }
+  });
+
+  it("doesn't double a prefix the title has, and squeezes stray spaces", () => {
+    assert.equal(titled("  chore:   Bump   the pins "), "chore: Bump the pins");
+  });
+});
+
 describe("publish", () => {
-  // git's output for the Internal Server Error that #149 reports: a transient
+  // git's output for a GitHub Internal Server Error: a transient
   // GitHub failure that's worth retrying.
   const serverError =
     "git push --quiet origin abc:refs/heads/x failed:\nremote: Internal Server Error\nremote: (request ID A83C:231712:11AADA:1D38A9:6AC6797C)";
@@ -1550,7 +2376,7 @@ describe("publish", () => {
     const { push, calls } = flaky(2, serverError);
     const { delays, wait } = recordedWaits();
 
-    const prUrl = await publish(issue, branch, "a".repeat(40), true, false, undefined, push, () => "https://github.com/o/r/pull/1", wait);
+    const prUrl = await publish(issue, branch, "a".repeat(40), true, false, undefined, [], push, () => "https://github.com/o/r/pull/1", wait);
 
     assert.equal(prUrl, "https://github.com/o/r/pull/1");
     assert.equal(calls(), 3);
@@ -1568,7 +2394,7 @@ describe("publish", () => {
     };
     const { wait } = recordedWaits();
 
-    const prUrl = await publish(issue, branch, "a".repeat(40), true, false, undefined, push, createPullRequest, wait);
+    const prUrl = await publish(issue, branch, "a".repeat(40), true, false, undefined, [], push, createPullRequest, wait);
 
     assert.equal(prUrl, "https://github.com/o/r/pull/2");
     assert.equal(pushCalls(), 1);
@@ -1580,7 +2406,7 @@ describe("publish", () => {
     const { wait } = recordedWaits();
 
     await assert.rejects(
-      () => publish(issue, branch, "a".repeat(40), true, false, undefined, push, neverCreatePr, wait),
+      () => publish(issue, branch, "a".repeat(40), true, false, undefined, [], push, neverCreatePr, wait),
       (error: unknown) => error instanceof Error && error.message === nonFastForward,
     );
     assert.equal(calls(), 1);
@@ -1590,12 +2416,12 @@ describe("publish", () => {
     const { push, calls } = flaky(Infinity, serverError);
     const { wait } = recordedWaits();
 
-    await assert.rejects(() => publish(issue, branch, "a".repeat(40), true, false, undefined, push, neverCreatePr, wait));
+    await assert.rejects(() => publish(issue, branch, "a".repeat(40), true, false, undefined, [], push, neverCreatePr, wait));
     assert.equal(calls(), PUBLISH_RETRY_ATTEMPTS);
   });
 
   // Covers "A scribe failure still publishes the PR, and its body says the
-  // documentation step failed" from issue #72.
+  // documentation step failed".
   it("says the documentation step failed in the PR body when docsFailed is true", async () => {
     let body = "";
     const createPullRequest = (_branch: string, _title: string, prBody: string): string => {
@@ -1603,7 +2429,7 @@ describe("publish", () => {
       return "https://github.com/o/r/pull/1";
     };
 
-    await publish(issue, branch, "a".repeat(40), true, true, undefined, () => {}, createPullRequest, async () => {});
+    await publish(issue, branch, "a".repeat(40), true, true, undefined, [], () => {}, createPullRequest, async () => {});
 
     assert.match(body, /documentation step failed/i);
   });
@@ -1615,14 +2441,58 @@ describe("publish", () => {
       return "https://github.com/o/r/pull/1";
     };
 
-    await publish(issue, branch, "a".repeat(40), true, false, undefined, () => {}, createPullRequest, async () => {});
+    await publish(issue, branch, "a".repeat(40), true, false, undefined, [], () => {}, createPullRequest, async () => {});
 
     assert.doesNotMatch(body, /documentation/i);
   });
 
-  // #77: the follow-up sweep (lib/follow-up.mts#isSandcastlePullRequest) only
+  // The follow-up sweep (lib/follow-up.mts#isSandcastlePullRequest) only
   // ever acts on a PR whose body carries this marker, so every PR the host
   // publishes from now on must carry it.
+  it("opens the PR under a title that passes the PR title check", async () => {
+    let title = "";
+    const createPullRequest = (_branch: string, prTitleText: string): string => {
+      title = prTitleText;
+      return "https://github.com/o/r/pull/1";
+    };
+
+    await publish({ ...issue, title: "run the gate." }, branch, "a".repeat(40), true, false, undefined, [], () => {}, createPullRequest, async () => {});
+
+    assert.equal(title, "feat: Run the gate");
+  });
+
+  it("lists the files the branch changes under the gate's and CI's folders in the PR body", async () => {
+    let body = "";
+    const createPullRequest = (_branch: string, _title: string, prText: string): string => {
+      body = prText;
+      return "https://github.com/o/r/pull/1";
+    };
+
+    await publish(issue, branch, "a".repeat(40), true, false, undefined, [".github/ci/test.sh", "scripts/gate.sh"], () => {}, createPullRequest, async () => {});
+
+    assert.match(body, /changes files the gate and CI run/);
+    assert.match(body, /```text\n\.github\/ci\/test\.sh\nscripts\/gate\.sh\n```/);
+  });
+
+  it("keeps a file name from closing an issue or mentioning anyone, by listing the names in a fence", async () => {
+    let body = "";
+    const createPullRequest = (_branch: string, _title: string, prText: string): string => {
+      body = prText;
+      return "https://github.com/o/r/pull/1";
+    };
+
+    await publish(issue, branch, "a".repeat(40), true, false, undefined, ["scripts/a` closes #12 `b.sh", "scripts/@someone.sh"], () => {}, createPullRequest, async () => {});
+
+    const fenced = /(`{3,})text\n([\s\S]*?)\n\1$/.exec(body);
+    assert.ok(fenced, body);
+    assert.match(fenced[2]!, /closes #12/);
+    assert.doesNotMatch(body.slice(0, fenced.index), /closes #12|@someone/);
+  });
+
+  it("adds no such note when the branch leaves those folders alone", async () => {
+    assert.doesNotMatch(await publishedBody(true, false, undefined), /gate and CI run/);
+  });
+
   it("carries PR_MARKER in the body, so the follow-up sweep recognises a PR the host published", async () => {
     let body = "";
     const createPullRequest = (_branch: string, _title: string, prBody: string): string => {
@@ -1630,12 +2500,12 @@ describe("publish", () => {
       return "https://github.com/o/r/pull/1";
     };
 
-    await publish(issue, branch, "a".repeat(40), true, false, undefined, () => {}, createPullRequest, async () => {});
+    await publish(issue, branch, "a".repeat(40), true, false, undefined, [], () => {}, createPullRequest, async () => {});
 
     assert.ok(body.includes(PR_MARKER), body);
   });
 
-  // #335: every PR Sandcastle opens had the same generic body. The reviewer
+  // Every PR Sandcastle opens had the same generic body. The reviewer
   // now writes a pr-body.md with Why, What changed and Verification
   // sections, read and validated before publish() is called, so a valid
   // `prBody` replaces the generic note entirely.
@@ -1648,7 +2518,7 @@ describe("publish", () => {
       captured = prText;
       return "https://github.com/o/r/pull/1";
     };
-    await publish(issue, branch, "a".repeat(40), reviewed, docsFailed, body, () => {}, createPullRequest, async () => {});
+    await publish(issue, branch, "a".repeat(40), reviewed, docsFailed, body, [], () => {}, createPullRequest, async () => {});
     return captured;
   }
 
@@ -1717,7 +2587,7 @@ describe("isGitHubServerError", () => {
   });
 });
 
-// #147: a push GitHub refused because it touches .github/workflows/** without
+// A push GitHub refused because it touches .github/workflows/** without
 // Workflows permission must hand the issue back, not be treated as a
 // transient server error or a generic publish failure.
 describe("isWorkflowPushRejection", () => {
@@ -1782,7 +2652,7 @@ describe("publicErrorText", () => {
 // The architect's design note as the host posts it and reads it back
 // (lib/build.mts). The host finds its own comments by marker substring
 // (markerComments), so a note quoting a marker, as one for a change to
-// Sandcastle itself would, mustn't pass for a host comment (#228).
+// Sandcastle itself would, mustn't pass for a host comment.
 describe("designComment", () => {
   const note = `## Design\n\nOn failure, post ${BUILD_FAILED_MARKER} and keep ${DESIGN_MARKER} last.\n\n\`\`\`\`ts\nconst x = 1;\n\`\`\`\`\n\ncc @someone, see #12`;
 
@@ -1800,7 +2670,7 @@ describe("designComment", () => {
     assert.match(body, /^`````markdown\n[\s\S]*\n`````$/m);
   });
 
-  // Breaking a <!-- adds a character, so the cut is measured after it (#230).
+  // Breaking a <!-- adds a character, so the cut is measured after it.
   it("stays under GitHub's comment limit for a note full of <!--", () => {
     const body = designComment("<!--".repeat(16_000), "feature/3-add-a-thing", ".sandcastle/work/3/design.md");
 
@@ -1828,7 +2698,7 @@ describe("designNoteIn", () => {
     assert.equal(designNoteIn(designComment(note, "feature/3-add-a-thing", ".sandcastle/work/3/design.md")), note);
   });
 
-  // GitHub stores a comment edited on github.com with CRLF line endings (#230).
+  // GitHub stores a comment edited on github.com with CRLF line endings.
   it("reads back a design comment edited on github.com, with CRLF line endings", () => {
     const note = "## Design\n\nUse a Result<T>.";
     const edited = designComment(note, "feature/3-add-a-thing", ".sandcastle/work/3/design.md").replace(/\n/g, "\r\n");
@@ -1843,7 +2713,7 @@ describe("designNoteIn", () => {
 
 // The live lookup a re-run's architect prompt comes from. Anyone can comment
 // on a public issue, so only the host's own design comments may reach the
-// prompt, past the ownerApproved filtering every other prompt gets (#230).
+// prompt, past the ownerApproved filtering every other prompt gets.
 describe("latestDesignNote", () => {
   // A gh stub answering markerComments' three reads: the comments, the
   // label timeline (no events) and the issue's creation time.
@@ -1883,6 +2753,92 @@ describe("workflowLogArgs", () => {
   });
 });
 
+// Main's commits merged in after `base` aren't the branch's work.
+describe("workflowLogArgs with a merged main commit", () => {
+  it("excludes the history of the main commit that was merged in", () => {
+    assert.deepEqual(workflowLogArgs("origin/main", "abc123", "def456"), [
+      "log", "--name-only", "--format=", "origin/main..abc123", "^def456", "--", ".github/workflows/",
+    ]);
+  });
+});
+
+describe("remoteMainIs", () => {
+  const sha = "a".repeat(40);
+
+  it("asks origin for refs/heads/main and compares the commit it names", () => {
+    const asked: string[][] = [];
+    const run = (...args: string[]) => {
+      asked.push(args);
+      return `${sha}\trefs/heads/main\n`;
+    };
+
+    assert.equal(remoteMainIs(sha, run), true);
+    assert.equal(remoteMainIs("b".repeat(40), run), false);
+    assert.deepEqual(asked[0], ["ls-remote", "origin", "refs/heads/main"]);
+  });
+
+  it("is false when origin names no main", () => {
+    assert.equal(remoteMainIs(sha, () => ""), false);
+  });
+
+  it("takes the line whose ref is exactly refs/heads/main, not a branch that matches by its tail", () => {
+    const other = "c".repeat(40);
+    const run = () => `${other}\trefs/heads/a/refs/heads/main\n${sha}\trefs/heads/main\n`;
+
+    assert.equal(remoteMainIs(sha, run), true);
+    assert.equal(remoteMainIs(other, run), false);
+  });
+
+  it("is false for a commit main has moved past, without fetching or reading ancestry from the local .git", () => {
+    const tip = "d".repeat(40);
+    const asked: string[][] = [];
+    const run = (...args: string[]) => {
+      asked.push(args);
+      return args[0] === "ls-remote" ? `${tip}\trefs/heads/main\n` : "";
+    };
+
+    assert.equal(remoteMainIs(sha, run), false);
+    assert.deepEqual(asked, [["ls-remote", "origin", "refs/heads/main"]]);
+  });
+});
+
+describe("remoteBranchIsOnOrigin", () => {
+  const branch = "fix/253-publish";
+
+  it("asks origin for the branch's ref and is true when it names it", () => {
+    const asked: string[][] = [];
+    const run = (...args: string[]) => {
+      asked.push(args);
+      return `${"a".repeat(40)}\trefs/heads/${branch}\n`;
+    };
+
+    assert.equal(remoteBranchIsOnOrigin(branch, run), true);
+    assert.deepEqual(asked, [["ls-remote", "origin", `refs/heads/${branch}`]]);
+  });
+
+  it("is false when origin has no such branch", () => {
+    assert.equal(remoteBranchIsOnOrigin(branch, () => ""), false);
+  });
+
+  it("is false when the branch's line names no commit", () => {
+    assert.equal(remoteBranchIsOnOrigin(branch, () => `\trefs/heads/${branch}\n`), false);
+  });
+
+  it("is false when only a branch that matches by its tail exists", () => {
+    const run = () => `${"c".repeat(40)}\trefs/heads/a/refs/heads/${branch}\n`;
+
+    assert.equal(remoteBranchIsOnOrigin(branch, run), false);
+  });
+
+  it("throws when origin can't be asked", () => {
+    const run = (): string => {
+      throw new Error("git ls-remote failed");
+    };
+
+    assert.throws(() => remoteBranchIsOnOrigin(branch, run), /ls-remote failed/);
+  });
+});
+
 describe("workflowFilesFrom", () => {
   it("names each file once, in first-seen order, without blank lines", () => {
     const output = "\n.github/workflows/ci.yml\n\n.github/workflows/release.yml\n.github/workflows/ci.yml\n";
@@ -1891,152 +2847,334 @@ describe("workflowFilesFrom", () => {
   });
 });
 
-// A sandbox whose `git merge` fails the way git does without a committer
-// identity (#419) until both `git config --global user.name` and `user.email`
-// have run in it. Every exec lands in `execCalls`, in order.
-function identityCheckingSandbox() {
-  const execCalls: string[] = [];
-  const config = new Map<string, string>();
-  const sandbox = {
-    worktreePath: "/worktree",
-    exec: async (command: string) => {
-      execCalls.push(command);
-      const set = /^git config --global (user\.name|user\.email) (.*)$/.exec(command);
-      if (set !== null) {
-        config.set(set[1]!, set[2]!);
-        return { stdout: "", stderr: "", exitCode: 0 };
-      }
-      if (command.startsWith("git merge ")) {
-        if (config.has("user.name") && config.has("user.email")) return { stdout: "Merge made\n", stderr: "", exitCode: 0 };
-        return {
-          stdout: "",
-          stderr: "Committer identity unknown\nfatal: unable to auto-detect email address (got 'agent@sandbox.(none)')",
-          exitCode: 128,
-        };
-      }
-      return { stdout: "", stderr: "", exitCode: 0 };
-    },
-  } as unknown as Sandbox;
-  return { sandbox, execCalls };
-}
+describe("createCheckedSandbox's git identity", () => {
+  const MERGE = "git merge --no-edit -m 'Merge main into feature' main";
 
-function checkedSandboxHost(
-  sandbox: Sandbox,
-  identity: { name: string | undefined; email: string | undefined },
-  worktreeProblems: string[] = [],
-): CheckedSandboxHost {
-  return { createSandbox: async () => sandbox, gitIdentity: () => identity, worktreeProblems: () => worktreeProblems };
-}
+  // The sandbox createCheckedSandbox hands over, made over a scratch git
+  // repository whose global config has no identity, as a fresh sandbox's hasn't.
+  async function sandboxFor(identity: HostIdentity) {
+    const fake = gitSandboxFake();
+    const sandbox = await createCheckedSandbox("feature", fake.create, () => identity);
+    return { fake, sandbox };
+  }
 
-describe("createCheckedSandbox", () => {
+  // Acceptance criterion: "A test pins that a sandbox from
+  // `createCheckedSandbox` gets the host's identity before the host's first
+  // `git merge`."
+  it("gives the sandbox the host's identity, so the host's first git merge can commit", async (t) => {
+    const { fake, sandbox } = await sandboxFor({ name: "Host Person", email: "host@example.com" });
+    t.after(() => fake.cleanup());
+
+    const merge = await sandbox.exec(MERGE);
+
+    assert.equal(merge.exitCode, 0, `${merge.stdout}\n${merge.stderr}`);
+    assert.equal(fake.headIdentity(), "Host Person <host@example.com>|Host Person <host@example.com>");
+  });
+
   // Acceptance criterion: "`createCheckedSandbox` sets the host's `git config
   // user.name` and `user.email` in the sandbox (`git config --global`)."
-  it("sets the host's git user.name and user.email in the sandbox with git config --global", async () => {
-    const { sandbox, execCalls } = identityCheckingSandbox();
+  it("sets the host's user.name and user.email as the sandbox's global git config", async (t) => {
+    const { fake, sandbox } = await sandboxFor({ name: "Host Person", email: "host@example.com" });
+    t.after(() => fake.cleanup());
 
-    await createCheckedSandbox("fix/419-identity", checkedSandboxHost(sandbox, { name: "Ada Lovelace", email: "ada@example.com" }));
-
-    assert.ok(execCalls.includes("git config --global user.name 'Ada Lovelace'"), execCalls.join("\n"));
-    assert.ok(execCalls.includes("git config --global user.email 'ada@example.com'"), execCalls.join("\n"));
+    assert.equal((await sandbox.exec("git config --global user.name")).stdout.trim(), "Host Person");
+    assert.equal((await sandbox.exec("git config --global user.email")).stdout.trim(), "host@example.com");
   });
 
-  it("quotes a host name with a single quote as one shell word", async () => {
-    const { sandbox, execCalls } = identityCheckingSandbox();
+  it("sets the identity before the sandbox is handed over, ahead of any command the caller runs", async (t) => {
+    const { fake, sandbox } = await sandboxFor({ name: "Host Person", email: "host@example.com" });
+    t.after(() => fake.cleanup());
+    const setUp = [...fake.execs];
 
-    await createCheckedSandbox("fix/419-identity", checkedSandboxHost(sandbox, { name: "Ada O'Neil", email: "ada@example.com" }));
+    await sandbox.exec(MERGE);
 
-    assert.ok(execCalls.includes("git config --global user.name 'Ada O'\\''Neil'"), execCalls.join("\n"));
+    assert.ok(setUp.some((command) => /git config --global user\.name/.test(command)), setUp.join("\n"));
+    assert.ok(setUp.some((command) => /git config --global user\.email/.test(command)), setUp.join("\n"));
+    assert.ok(!setUp.some((command) => command.startsWith("git merge")), setUp.join("\n"));
   });
 
-  // Acceptance criterion: "A test pins that a sandbox from `createCheckedSandbox`
-  // gets the host's identity before the host's first `git merge`."
-  it("gives the sandbox the host's identity before the host's first git merge, so the merge isn't refused for it", async () => {
-    const { sandbox, execCalls } = identityCheckingSandbox();
+  it("keeps a name with quotes and spaces intact", async (t) => {
+    const name = `Host "Quoted" O'Neil`;
+    const { fake, sandbox } = await sandboxFor({ name, email: "host@example.com" });
+    t.after(() => fake.cleanup());
 
-    const created = await createCheckedSandbox("fix/419-identity", checkedSandboxHost(sandbox, { name: "Ada Lovelace", email: "ada@example.com" }));
-    const merge = await created.exec("git merge --no-edit -m 'Merge main into fix/419-identity' 'abc123'");
-
-    assert.equal(merge.exitCode, 0, merge.stderr);
-    const mergeIndex = execCalls.findIndex((call) => call.startsWith("git merge "));
-    assert.ok(execCalls.findIndex((call) => call.startsWith("git config --global user.name")) < mergeIndex);
-    assert.ok(execCalls.findIndex((call) => call.startsWith("git config --global user.email")) < mergeIndex);
+    assert.equal((await sandbox.exec("git config --global user.name")).stdout.trim(), name);
   });
 
-  // Acceptance criterion: "If the host has neither, the sandbox is left as it is."
-  it("leaves the sandbox as it is when the host has neither a git user.name nor a user.email", async () => {
-    const { sandbox, execCalls } = identityCheckingSandbox();
+  // Acceptance criterion: "If the host has neither, the sandbox is left as it
+  // is."
+  it("leaves the sandbox as it is when the host has neither a name nor an email", async (t) => {
+    const fake = gitSandboxFake();
+    t.after(() => fake.cleanup());
+    const before = fake.globalConfig();
 
-    await createCheckedSandbox("fix/419-identity", checkedSandboxHost(sandbox, { name: undefined, email: undefined }));
+    await createCheckedSandbox("feature", fake.create, () => ({}));
 
-    assert.deepEqual(execCalls, []);
+    assert.deepEqual(fake.execs.filter((command) => /user\.(name|email)/.test(command)), []);
+    assert.equal(fake.globalConfig(), before);
   });
 
-  // A CI runner often has user.email configured but not user.name.
-  it("sets only the email when the host has a git user.email but no user.name", async () => {
-    const { sandbox, execCalls } = identityCheckingSandbox();
+  it("sets only the email when the host has an email and no name", async (t) => {
+    const { fake, sandbox } = await sandboxFor({ email: "host@example.com" });
+    t.after(() => fake.cleanup());
 
-    await createCheckedSandbox("fix/419-identity", checkedSandboxHost(sandbox, { name: undefined, email: "ada@example.com" }));
-
-    assert.deepEqual(execCalls, ["git config --global user.email 'ada@example.com'"]);
+    assert.equal((await sandbox.exec("git config --global user.email")).stdout.trim(), "host@example.com");
+    assert.equal((await sandbox.exec("git config --global user.name")).exitCode, 1);
   });
 
-  it("sets only the name when the host has a git user.name but no user.email", async () => {
-    const { sandbox, execCalls } = identityCheckingSandbox();
+  it("sets only the name when the host has a name and no email", async (t) => {
+    const { fake, sandbox } = await sandboxFor({ name: "Host Person" });
+    t.after(() => fake.cleanup());
 
-    await createCheckedSandbox("fix/419-identity", checkedSandboxHost(sandbox, { name: "Ada Lovelace", email: undefined }));
-
-    assert.deepEqual(execCalls, ["git config --global user.name 'Ada Lovelace'"]);
+    assert.equal((await sandbox.exec("git config --global user.name")).stdout.trim(), "Host Person");
+    assert.equal((await sandbox.exec("git config --global user.email")).exitCode, 1);
   });
 
-  it("leaves the worktree and its sandbox in place, without closing it, when setting the identity fails and the worktree no longer points at this repository", async () => {
+  it("closes the sandbox and rejects when setting the identity fails", async () => {
     let closed = 0;
     const sandbox = {
-      worktreePath: "/worktree",
-      exec: async () => ({ stdout: "", stderr: "error: could not lock config file", exitCode: 255 }),
+      exec: async () => ({ stdout: "", stderr: "could not lock config file", exitCode: 255 }),
       close: async () => {
-        closed++;
+        closed += 1;
+        return {};
+      },
+    } as unknown as Sandbox;
+
+    await assert.rejects(
+      createCheckedSandbox("feature", async () => sandbox, () => ({ name: "Host Person" }), () => []),
+      /setting the sandbox's git user\.name failed: could not lock config file/,
+    );
+    assert.equal(closed, 1);
+  });
+
+  it("leaves the sandbox in place and reports the problems when setting the identity fails in a tampered worktree", async () => {
+    let closed = 0;
+    const sandbox = {
+      worktreePath: "/work/tree",
+      exec: async () => ({ stdout: "", stderr: "could not lock config file", exitCode: 255 }),
+      close: async () => {
+        closed += 1;
+        return {};
+      },
+    } as unknown as Sandbox;
+    const checked: string[] = [];
+
+    await assert.rejects(
+      createCheckedSandbox(
+        "feature",
+        async () => sandbox,
+        () => ({ name: "Host Person" }),
+        (worktreePath) => {
+          checked.push(worktreePath);
+          return worktreePath === "/work/tree" ? ["its .git doesn't point into this repository"] : [];
+        },
+      ),
+      (error: unknown) =>
+        error instanceof TamperedWorktreeError &&
+        error.worktreePath === "/work/tree" &&
+        /could not lock config file.*left \/work\/tree.*doesn't point into this repository/s.test(error.message),
+    );
+    assert.equal(closed, 0);
+    assert.ok(checked.includes("/work/tree"));
+  });
+
+  it("leaves the sandbox in place, and keeps the identity error, when checking the worktree throws", async () => {
+    let closed = 0;
+    const sandbox = {
+      worktreePath: "/work/tree",
+      exec: async () => ({ stdout: "", stderr: "could not lock config file", exitCode: 255 }),
+      close: async () => {
+        closed += 1;
+        return {};
       },
     } as unknown as Sandbox;
 
     await assert.rejects(
       createCheckedSandbox(
-        "fix/419-identity",
-        checkedSandboxHost(sandbox, { name: "Ada Lovelace", email: "ada@example.com" }, ["/worktree/.git doesn't point into /repo/.git/worktrees"]),
+        "feature",
+        async () => sandbox,
+        () => ({ name: "Host Person" }),
+        (worktreePath) => {
+          if (worktreePath === "/work/tree") throw new Error("git rev-parse failed");
+          return [];
+        },
       ),
-      /setting git user\.name in the sandbox failed/,
+      (error: unknown) =>
+        error instanceof TamperedWorktreeError && /could not lock config file.*checking the worktree failed: git rev-parse failed/s.test(error.message),
     );
     assert.equal(closed, 0);
   });
+});
 
-  it("throws the error that setting the identity failed with, not the one from closing the sandbox", async () => {
-    const sandbox = {
-      worktreePath: "/worktree",
-      exec: async () => ({ stdout: "", stderr: "error: could not lock config file", exitCode: 255 }),
-      close: async () => {
-        throw new Error("close blew up");
-      },
-    } as unknown as Sandbox;
+describe("liveHostIdentity", () => {
+  it("reads the host's user.name and user.email with git config", () => {
+    const calls: string[][] = [];
+    const values: Record<string, string> = { "user.name": "Host Person", "user.email": "host@example.com" };
+    const identity = liveHostIdentity((...args) => {
+      calls.push(args);
+      return values[args[1] ?? ""] ?? "";
+    });
 
-    await assert.rejects(
-      createCheckedSandbox("fix/419-identity", checkedSandboxHost(sandbox, { name: "Ada Lovelace", email: "ada@example.com" })),
-      /setting git user\.name in the sandbox failed: error: could not lock config file/,
-    );
+    assert.deepEqual(identity, { name: "Host Person", email: "host@example.com" });
+    assert.deepEqual(calls, [["config", "user.name"], ["config", "user.email"]]);
   });
 
-  it("closes the sandbox and throws when setting the host's identity in it fails, rather than hand it over", async () => {
-    let closed = 0;
-    const sandbox = {
-      worktreePath: "/worktree",
-      exec: async () => ({ stdout: "", stderr: "error: could not lock config file", exitCode: 255 }),
-      close: async () => {
-        closed++;
-      },
-    } as unknown as Sandbox;
+  it("leaves out a key git config fails on, as it does for one that isn't set", () => {
+    const identity = liveHostIdentity((...args) => {
+      if (args[1] === "user.name") throw new Error("git config user.name failed");
+      return "host@example.com";
+    });
 
-    await assert.rejects(
-      createCheckedSandbox("fix/419-identity", checkedSandboxHost(sandbox, { name: "Ada Lovelace", email: "ada@example.com" })),
-      /setting git user\.name in the sandbox failed: error: could not lock config file/,
+    assert.deepEqual(identity, { name: undefined, email: "host@example.com" });
+  });
+
+  it("leaves out a key git config reads as empty", () => {
+    assert.deepEqual(liveHostIdentity(() => ""), { name: undefined, email: undefined });
+  });
+});
+
+// What the host prints through console.error is terminal text (ADR 0010; mpaulosky/dotfiles#347): a failed gh or git command's message
+// carries gh's stderr, a title or a branch name, so a control, bidi, zero-width or tag character in it must not reach the terminal as it is.
+describe("build's console.error lines", () => {
+  // What terminalText must never leave in the text below (the same set as status.test.mts's).
+  const HIDDEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Noncharacter_Code_Point}\p{Default_Ignorable_Code_Point}\p{Variation_Selector}\u034f\u115f\u1160\u2800\u3164\uffa0\u{F0000}-\u{10FFFF}]/u;
+  const HOSTILE = "boom\u001b[2K\nheld:     settled: all clear\r\u202e\u200b\u{E0041}";
+
+  // The lines `step` prints through console.error.
+  async function printed(step: () => Promise<unknown>): Promise<string[]> {
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (...data: unknown[]) => void lines.push(data.map(String).join(" "));
+    try {
+      await step();
+    } catch {
+      // buildIssue rethrows some failures; the lines are what's checked.
+    } finally {
+      console.error = original;
+    }
+    return lines;
+  }
+
+  it("prints the retry notice for a GitHub server error as terminal text", async () => {
+    const error = new Error(`gh pr create failed:\nHTTP 502 ${HOSTILE}`);
+    let attempts = 0;
+
+    const lines = await printed(() =>
+      retryOnServerError(() => {
+        attempts += 1;
+        if (attempts === 1) throw error;
+        return "done";
+      }, async () => {}),
     );
-    assert.equal(closed, 1);
+
+    const notice = lines.find((line) => line.includes("GitHub server error"));
+    assert.ok(notice, lines.join("\n"));
+    assert.ok(notice.includes("held: settled: all clear"), notice);
+    assert.doesNotMatch(notice, HIDDEN, JSON.stringify(notice));
+  });
+
+  it("prints a failed hand-back for a workflow change as terminal text", async () => {
+    const { buildHost } = host([0, 0], {
+      latestMain: "b".repeat(40),
+      containsMain: false,
+      publishError:
+        "git push failed:\n ! [remote rejected] (refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission)",
+    });
+    buildHost.handBackWorkflowChange = () => {
+      throw new Error(`gh issue comment failed:\n${HOSTILE}`);
+    };
+
+    const lines = await printed(() => buildIssue(issue, branch, base, buildHost));
+
+    const line = lines.find((candidate) => /handing it back for its workflow change failed/.test(candidate));
+    assert.ok(line, lines.join("\n"));
+    assert.ok(line.includes("held: settled: all clear"), line);
+    assert.doesNotMatch(line, HIDDEN, JSON.stringify(line));
+  });
+
+  const failures: { name: string; option: Record<string, string | string[] | boolean>; says: RegExp }[] = [
+    { name: "a failed publish", option: { publishError: `git push failed:\n${HOSTILE}` }, says: /publishing .* failed/ },
+    { name: "a failed fetch of main", option: { latestMainError: HOSTILE }, says: /fetching main failed/ },
+    { name: "a failed question to GitHub about main", option: { latestMain: "a".repeat(40), containsMain: false, remoteMainError: HOSTILE }, says: /asking GitHub for main failed/ },
+    { name: "a failed listing of the gate's and CI's files", option: { checkFilesError: HOSTILE }, says: /changes under the gate's and CI's folders failed/ },
+    { name: "a tampered worktree's problems", option: { worktreeProblems: [HOSTILE] }, says: /left .* in place/ },
+  ];
+  for (const { name, option, says } of failures) {
+    it(`prints ${name} as terminal text`, async () => {
+      const { buildHost } = host([0, 0], option);
+
+      const lines = await printed(() => buildIssue(issue, branch, base, buildHost));
+
+      const line = lines.find((candidate) => says.test(candidate));
+      assert.ok(line, lines.join("\n"));
+      assert.ok(line.includes("held: settled: all clear"), line);
+      assert.doesNotMatch(line, HIDDEN, JSON.stringify(line));
+    });
+  }
+});
+
+// The Seed review-prompt.md says what the host refuses in a PR description
+// through PR_BODY_RULES (lib/prompts.mts), so each refusal in
+// reviewerPrBody (lib/build.mts) must be named there, or the reviewer writes
+// text the host drops and the PR gets the generic body unnoticed.
+describe("PR_BODY_RULES against what the host refuses in the reviewer's PR body", () => {
+  // `group` is the `problem =` branch in reviewerPrBody that refuses the body.
+  // The last branch covers three conditions, so it has three rows. The
+  // completeness guard below counts the groups, so adding a branch to
+  // reviewerPrBody fails it until a probe and wording are added here.
+  const probes: { group: number; refusal: string; body: string; mentioned: RegExp[] }[] = [
+    { group: 1, refusal: "an empty description", body: "", mentioned: [/empty/i] },
+    {
+      group: 2,
+      refusal: "a description without a heading",
+      body: "## Why\n\nBecause.\n\n## What changed\n\nAdded X.",
+      mentioned: [/## Why/, /## What changed/, /## Verification/],
+    },
+    { group: 3, refusal: "a description over the limit", body: `${validPrBody}\n\n${"x".repeat(PR_BODY_LIMIT)}`, mentioned: [/60,?000/] },
+    { group: 4, refusal: "a secret or token", body: `${validPrBody}\n\nUses the token ghp_abc.`, mentioned: [/secret|token/i] },
+    { group: 5, refusal: "the words Review notes", body: `${validPrBody}\n\n## Review notes\n\nAll findings were accepted.`, mentioned: [/Review notes/] },
+    { group: 6, refusal: "a closing keyword", body: `${validPrBody}\n\nFixes #12.`, mentioned: [/closing keyword|Closes|Fixes/] },
+    { group: 6, refusal: "an @mention", body: `${validPrBody}\n\ncc @someone`, mentioned: [/`@name`/] },
+    {
+      group: 6,
+      refusal: "an @ inside a multi-word code span",
+      body: `${validPrBody}\n\nInstall it with \`npm install @types/node\`.`,
+      mentioned: [/directly after an opening backtick/, /longer code span/],
+    },
+    { group: 6, refusal: "an HTML comment", body: `${validPrBody}\n\n<!-- sandcastle:pr -->`, mentioned: [/<!--/] },
+  ];
+
+  for (const { refusal, body, mentioned } of probes) {
+    it(`names ${refusal} in the fragment, and the host refuses it`, async () => {
+      const { publishedPrBodies, buildHost } = host([0, 0], { prBodyFile: body });
+      buildHost.publicError = (text) => publicErrorText(String(text), (cleaned) => cleaned.includes("ghp_"));
+
+      await buildIssue(issue, branch, base, buildHost);
+
+      assert.equal(publishedPrBodies.at(-1), undefined, `the host should refuse ${refusal}`);
+      for (const pattern of mentioned) {
+        assert.match(PR_BODY_RULES, pattern, `PR_BODY_RULES doesn't name ${refusal}`);
+      }
+    });
+  }
+
+  it("gives the same length limit as PR_BODY_LIMIT", () => {
+    const numbers = [...PR_BODY_RULES.matchAll(/\d{1,3}(?:,\d{3})+|\d{4,}/g)].map((match) => Number(match[0].replaceAll(",", "")));
+
+    assert.ok(numbers.includes(PR_BODY_LIMIT), `PR_BODY_RULES names ${numbers.join(", ") || "no limit"}, not ${PR_BODY_LIMIT}`);
+  });
+
+  it("covers every refusal reviewerPrBody makes", () => {
+    const source = readFileSync(new URL("./build.mts", import.meta.url), "utf8");
+    const start = source.indexOf("async function reviewerPrBody()");
+    const end = source.indexOf("\n  }\n", start);
+    const refusals = start === -1 || end === -1 ? [] : source.slice(start, end).match(/\bproblem = /g) ?? [];
+
+    assert.ok(refusals.length > 0, "found no `problem =` in reviewerPrBody: if the function moved, point this guard at it");
+    assert.equal(
+      refusals.length,
+      new Set(probes.map((probe) => probe.group)).size,
+      "reviewerPrBody has a refusal the probes and PR_BODY_RULES don't cover: add a probe and wording",
+    );
   });
 });

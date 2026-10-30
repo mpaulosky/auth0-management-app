@@ -1,6 +1,6 @@
-// The .NET skills live in the host user's ~/.claude/skills, not in the repo,
-// and the sandbox only sees the worktree. So each one is bind-mounted, read
-// only, into the sandbox user's ~/.claude/skills. A skill there is usually a
+// A skill the roles use from the host user's ~/.claude/skills, rather than
+// from the repo, is bind-mounted, read only, into the sandbox user's
+// ~/.claude/skills, since the sandbox only sees the worktree. A skill there is usually a
 // symlink into a dotfiles checkout, which a mount of the folder wouldn't
 // follow, so each skill's real path is mounted on its own.
 //
@@ -14,20 +14,10 @@
 
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, posix } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { protectedGitMounts, repoGitDir, type ReadOnlyMount } from "./host-safety.mts";
-
-// The skills the tester and backend role prompts (roles/tester.md and
-// roles/backend.md) tell the agent to use.
-export const SANDBOX_SKILLS = [
-  "dotnet-tdd",
-  "dotnet-add-testing",
-  "dotnet-xunit",
-  "dotnet-testing-strategy",
-  "dotnet-project-analysis",
-  "dotnet-inspect",
-] as const;
+import { protectedGitMounts, protectedRecordMounts, repoGitDir, type ReadOnlyMount } from "./host-safety.mts";
+import { SANDBOX_SKILLS } from "./repo-config.mts";
 
 export type SkillMount = ReadOnlyMount;
 
@@ -57,7 +47,7 @@ export function skillMounts(
 export type SandboxHost<TProvider> = {
   skillsDir: string;
   // The read-only mounts over the shared .git directory's config, hooks and
-  // review folder.
+  // review folder, and over the main checkout's .security folder.
   gitMounts(): ReadOnlyMount[];
   docker(options: { mounts: ReadOnlyMount[]; env: Record<string, string> }): TProvider;
   log(message: string): void;
@@ -135,7 +125,7 @@ export function makeAgentSandbox<TProvider>(
 
 export const agentSandbox = makeAgentSandbox({
   skillsDir: join(homedir(), ".claude", "skills"),
-  gitMounts: () => protectedGitMounts(repoGitDir()),
+  gitMounts: () => [...protectedGitMounts(repoGitDir()), ...protectedRecordMounts(dirname(repoGitDir()))],
   docker,
   log: console.log,
 });

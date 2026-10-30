@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for scripts/check-git-hooks.sh, the Claude Code SessionStart hook that
-# warns when core.hooksPath isn't .github/hooks, and for the places that wire
-# it in: .claude/settings.json, .github/ci/gate-checks.sh and CLAUDE.md.
+# warns when core.hooksPath isn't .github/hooks. Wiring it in (.claude/settings.json)
+# is each repo's own.
 # Usage: scripts/tests/check-git-hooks.test.sh
 set -uo pipefail
 
@@ -66,18 +66,6 @@ new_repo() {
 # and hookSpecificOutput.additionalContext.
 has_warning_json() {
   python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d.get("systemMessage") and d["hookSpecificOutput"].get("additionalContext") else 1)' "$1" > /dev/null 2>&1
-}
-
-# session_start_commands <settings.json>: the SessionStart hook commands, one per line.
-session_start_commands() {
-  python3 -I -c '
-import json, sys
-d = json.load(open(sys.argv[1]))
-for group in d.get("hooks", {}).get("SessionStart", []):
-    for h in group.get("hooks", []):
-        if h.get("type") == "command":
-            print(h.get("command", ""))
-' "$1" 2> /dev/null
 }
 
 # expect_warning <label> <dir>: exit 0 and a warning that says the pre-push
@@ -191,45 +179,10 @@ expect_silent "outside a git repository exits 0 without output" "$WORK/not-a-rep
 mkdir -p "$WORK/no-git-bin"
 expect_silent "git missing exits 0 without output" "$(new_repo no-git)" "$WORK/no-git-bin"
 
-# --- the places that wire the hook in ---
-
-settings="$ROOT/.claude/settings.json"
-if [[ -f "$settings" ]] && python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$settings" > /dev/null 2>&1; then
-  commands="$(session_start_commands "$settings")"
-  if [[ "$commands" == *"scripts/check-git-hooks.sh"* ]]; then
-    pass ".claude/settings.json registers a SessionStart hook that runs scripts/check-git-hooks.sh"
-  else
-    fail ".claude/settings.json registers a SessionStart hook that runs scripts/check-git-hooks.sh" "SessionStart commands: $commands"
-  fi
-else
-  fail ".claude/settings.json registers a SessionStart hook that runs scripts/check-git-hooks.sh" "missing or not valid JSON"
-fi
-
 if [[ -x "$SCRIPT" ]]; then
   pass "scripts/check-git-hooks.sh is executable"
 else
   fail "scripts/check-git-hooks.sh is executable"
-fi
-
-# gate-checks.sh must rerun this test when the script or the test changes.
-gate_checks="$ROOT/.github/ci/gate-checks.sh"
-if grep -q 'changed .*scripts/check-git-hooks\.sh' "$gate_checks" \
-  && grep -q 'changed .*scripts/tests/check-git-hooks\.test\.sh' "$gate_checks" \
-  && grep -q 'bash scripts/tests/check-git-hooks\.test\.sh' "$gate_checks"; then
-  pass ".github/ci/gate-checks.sh runs this test when the script or the test changes"
-else
-  fail ".github/ci/gate-checks.sh runs this test when the script or the test changes" \
-    "want 'changed' on both paths and a 'bash scripts/tests/check-git-hooks.test.sh' call"
-fi
-
-# CLAUDE.md's Commands section carries the rule about claiming the gate passed.
-# The paragraph wraps, so join its lines before matching.
-commands_section="$(awk '/^## Commands/{on=1; next} /^## /{on=0} on' "$ROOT/CLAUDE.md" | tr '\n' ' ')"
-if grep -qiE "(don't|do not|never) (report|claim|say)[^.]*pre-push gate[^.]*(passed|passes)[^.]*unless[^.]*All gates passed[^.]*scripts/gate\.sh" <<< "$commands_section"; then
-  pass "CLAUDE.md (Commands) says not to report the pre-push gate as passed unless 'All gates passed' was seen"
-else
-  fail "CLAUDE.md (Commands) says not to report the pre-push gate as passed unless 'All gates passed' was seen" \
-    "want one sentence like \"Don't report the pre-push gate as passed unless the hook's 'All gates passed' line was seen, or scripts/gate.sh was run by hand and passed.\""
 fi
 
 echo

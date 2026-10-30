@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { HIDDEN_ELEMENTS } from "./build.mts";
-import { SANDBOX_SKILLS } from "./skills.mts";
+import type { SandcastleIssue } from "./github.mts";
+import {
+  architectPromptArgs,
+  backendPromptArgs,
+  critiquePromptArgs,
+  followUpPromptArgs,
+  gateFixerPromptArgs,
+  intakePromptArgs,
+  issuePromptArgs,
+  plannerPromptArgs,
+  reviewerPromptArgs,
+} from "./prompts.mts";
+import { SANDBOX_SKILLS } from "./repo-config.mts";
 
 const sandcastleFile = (path: string) => new URL(`../${path}`, import.meta.url);
 const read = (path: string) => readFileSync(sandcastleFile(path), "utf8");
@@ -202,21 +213,15 @@ describe("every prompt", () => {
 });
 
 // #58: the follow-up role and the gate-fixer also work on a hand-off PR that
-// has no issue, so their prompts name the brief and its source, not "the issue".
+// has no issue, so their prompts name the brief, not "the issue".
 describe("pass role prompts' brief", () => {
-  const args = { BRIEF_SOURCE: "The branch implements issue 3", ISSUE_TITLE: "Add a thing" };
-
   for (const role of ["follow-up", "gate-fixer"]) {
-    it(`opens the ${role}'s brief with the brief's source and the title`, () => {
+    it(`opens the ${role}'s brief with the issue number and the title`, () => {
       const prompt = read(`roles/${role}.md`);
 
       assert.match(prompt, /^# THE BRIEF$/m);
       assert.doesNotMatch(prompt, /^# THE ISSUE$/m);
-      assert.ok(prompt.includes("{{BRIEF_SOURCE}}: {{ISSUE_TITLE}}"));
-      assert.equal(
-        prompt.split("\n").find((line) => line.includes("{{BRIEF_SOURCE}}"))!.replace("{{BRIEF_SOURCE}}", args.BRIEF_SOURCE).replace("{{ISSUE_TITLE}}", args.ISSUE_TITLE),
-        "The branch implements issue 3: Add a thing",
-      );
+      assert.ok(prompt.includes("The branch implements #{{TASK_ID}}: {{ISSUE_TITLE}}"));
     });
 
     it(`wraps the ${role}'s brief and its comments in <brief> tags`, () => {
@@ -271,12 +276,42 @@ describe("prompt shell expansions", () => {
   }
 });
 
-// The host refuses a reviewer's PR body for these elements, and the prompt is
-// what tells the reviewer, so it names each one.
-describe("the reviewer prompt's refusals", () => {
-  for (const element of HIDDEN_ELEMENTS) {
-    it(`names the ${element} element the host refuses`, () => {
-      assert.ok(read("review-prompt.md").includes(`<${element}>`));
+// Sandcastle refuses a placeholder with no value, so a prompt that names one its prompt arguments don't supply fails every run of
+// that role. Each prompt is read with the arguments the host passes it; the only name the host adds on its own is SHARED_RULES
+// (lib/agents.mts#withSharedRules).
+describe("every prompt's placeholders", () => {
+  const branch = "feature/3-add-a-thing";
+  const issue: SandcastleIssue = { number: 3, title: "Add a thing", body: "Body", labels: ["Sandcastle"], comments: [] };
+  const hostAdded = new Set(["SHARED_RULES"]);
+  const argsOf: Record<string, Record<string, unknown>> = {
+    "roles/architect.md": architectPromptArgs(issue, branch, undefined),
+    "roles/backend.md": backendPromptArgs(issue, branch, true),
+    "roles/follow-up.md": followUpPromptArgs(issue, branch, 7, [], "Already contains main."),
+    "roles/gate-fixer.md": gateFixerPromptArgs(issue, branch, 2, "gate output"),
+    "roles/scribe.md": issuePromptArgs(issue, branch),
+    "roles/tester.md": issuePromptArgs(issue, branch),
+    "roles/ui.md": issuePromptArgs(issue, branch),
+    "review-prompt.md": reviewerPromptArgs(issue, branch),
+    "intake-prompt.md": intakePromptArgs([issue]),
+    "plan-prompt.md": plannerPromptArgs([issue]),
+    "critique-prompt.md": critiquePromptArgs([issue], [], []),
+  };
+
+  it("has an entry for every role prompt", () => {
+    const roles = readdirSync(sandcastleFile("roles"))
+      .filter((name) => name.endsWith(".md") && name !== "shared-rules.md")
+      .map((name) => `roles/${name}`);
+
+    for (const role of roles) assert.ok(role in argsOf, `${role} has no prompt arguments in this test`);
+  });
+
+  for (const [file, args] of Object.entries(argsOf)) {
+    it(`gives ${file} a value for every {{NAME}} it names`, () => {
+      const names = [...read(file).matchAll(/\{\{([A-Z_]+)\}\}/g)].map((match) => match[1]!);
+
+      for (const name of names) {
+        assert.ok(name in args || hostAdded.has(name), `${file} names {{${name}}}, which its prompt arguments don't supply`);
+      }
     });
   }
 });

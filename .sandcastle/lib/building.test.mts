@@ -10,8 +10,11 @@ import {
   labelIsStale,
   releaseAllBuildingLabels,
   releaseBuildingLabel,
+  claimPullRequestBuildingLabel,
+  releasePullRequestBuildingLabel,
   type BuildingGitHub,
   type BuildingLabels,
+  type PullRequestBuildingLabels,
 } from "./building.mts";
 
 const labeled = (createdAt: string): TimelineLabelEvent => ({ event: "labeled", label: BUILDING_LABEL, createdAt });
@@ -55,6 +58,8 @@ describe("clearStaleBuildingLabels", () => {
       issuesWithLabel: () => Object.keys(timelines).map(Number),
       labelTimeline: (issueNumber) => timelines[issueNumber] ?? [],
       removeLabel: (issueNumber) => void removed.push(issueNumber),
+      pullRequestsWithLabel: () => [],
+      removePullRequestLabel: () => {},
     };
   }
 
@@ -109,11 +114,88 @@ describe("clearStaleBuildingLabels", () => {
         return [labeled("2026-10-10T00:00:00Z")];
       },
       removeLabel: () => {},
+      pullRequestsWithLabel: () => [],
+      removePullRequestLabel: () => {},
     };
 
     clearStaleBuildingLabels(gh, BUILDING_LABEL, BUILDING_LABEL_MAX_AGE_MS, now);
 
     assert.deepEqual(read, [42]);
+  });
+});
+
+// A hand-off pull request (lib/follow-up.mts#sweepSubject) carries the claim itself, so a crashed run can leave
+// sandcastle:building on a PR as well as on an issue.
+describe("clearStaleBuildingLabels and pull requests", () => {
+  const now = Date.parse("2026-10-10T12:00:00Z");
+
+  function github(issues: Record<number, TimelineLabelEvent[]>, pullRequests: Record<number, TimelineLabelEvent[]>) {
+    const removedIssues: number[] = [];
+    const removedPullRequests: number[] = [];
+    const listed: string[] = [];
+    const gh: BuildingGitHub = {
+      issuesWithLabel: () => Object.keys(issues).map(Number),
+      labelTimeline: (number) => issues[number] ?? pullRequests[number] ?? [],
+      removeLabel: (number) => void removedIssues.push(number),
+      pullRequestsWithLabel: (label) => {
+        listed.push(label);
+        return Object.keys(pullRequests).map(Number);
+      },
+      removePullRequestLabel: (number) => void removedPullRequests.push(number),
+    };
+    return { gh, removedIssues, removedPullRequests, listed };
+  }
+
+  it("removes the label from an open pull request whose most recent labeling is older than the max age", () => {
+    const { gh, removedIssues, removedPullRequests, listed } = github({}, { 70: [labeled("2026-10-10T05:00:00Z")] });
+
+    const cleared = clearStaleBuildingLabels(gh, BUILDING_LABEL, BUILDING_LABEL_MAX_AGE_MS, now);
+
+    assert.deepEqual(removedPullRequests, [70]);
+    assert.deepEqual(removedIssues, []);
+    assert.deepEqual(listed, [BUILDING_LABEL]);
+    assert.deepEqual(cleared, [70]);
+  });
+
+  it("removes a stale label from a pull request with the pull request's call, never the issue's", () => {
+    const { gh, removedIssues } = github({}, { 70: [labeled("2026-10-10T05:00:00Z")] });
+
+    clearStaleBuildingLabels(gh, BUILDING_LABEL, BUILDING_LABEL_MAX_AGE_MS, now);
+
+    assert.deepEqual(removedIssues, []);
+  });
+
+  it("keeps the label on a pull request a live run labelled recently", () => {
+    const { gh, removedPullRequests } = github({}, { 70: [labeled("2026-10-10T11:00:00Z")] });
+
+    const cleared = clearStaleBuildingLabels(gh, BUILDING_LABEL, BUILDING_LABEL_MAX_AGE_MS, now);
+
+    assert.deepEqual(removedPullRequests, []);
+    assert.deepEqual(cleared, []);
+  });
+
+  it("clears the stale ones among issues and pull requests together, and only those", () => {
+    const { gh, removedIssues, removedPullRequests } = github(
+      { 42: [labeled("2026-10-10T05:00:00Z")], 43: [labeled("2026-10-10T11:30:00Z")] },
+      { 70: [labeled("2026-10-10T04:00:00Z")], 71: [labeled("2026-10-10T11:45:00Z")] },
+    );
+
+    const cleared = clearStaleBuildingLabels(gh, BUILDING_LABEL, BUILDING_LABEL_MAX_AGE_MS, now);
+
+    assert.deepEqual(removedIssues, [42]);
+    assert.deepEqual(removedPullRequests, [70]);
+    assert.deepEqual(cleared.toSorted((a, b) => a - b), [42, 70]);
+  });
+
+  it("lets a pull request's timeline that can't be read throw, removing nothing from it", () => {
+    const { gh, removedPullRequests } = github({}, { 70: [] });
+    gh.labelTimeline = () => {
+      throw new Error("gh api failed:\nHTTP 502: Bad Gateway");
+    };
+
+    assert.throws(() => clearStaleBuildingLabels(gh, BUILDING_LABEL, BUILDING_LABEL_MAX_AGE_MS, now), /502/);
+
+    assert.deepEqual(removedPullRequests, []);
   });
 });
 
@@ -283,6 +365,161 @@ describe("releaseAllBuildingLabels", () => {
   });
 });
 
+// A PullRequestBuildingLabels stub over an in-memory label list per pull request, recording every call, as labelStub
+// does for issues.
+function pullRequestLabelStub(labels: Record<number, string[]> = {}, failRemove: number[] = [], failAdd: number[] = []) {
+  const calls: string[] = [];
+  const github: PullRequestBuildingLabels = {
+    labels: (pr) => {
+      calls.push(`labels PR #${pr}`);
+      return [...(labels[pr] ?? [])];
+    },
+    addLabel: (pr, label) => {
+      calls.push(`add PR #${pr}`);
+      (labels[pr] ??= []).push(label);
+      if (failAdd.includes(pr)) throw new Error("gh pr edit failed:\nHTTP 502: Bad Gateway");
+    },
+    removeLabel: (pr, label) => {
+      calls.push(`remove PR #${pr}`);
+      if (failRemove.includes(pr)) throw new Error("gh pr edit failed:\nHTTP 502: Bad Gateway");
+      labels[pr] = (labels[pr] ?? []).filter((name) => name !== label);
+    },
+  };
+  return { calls, github, labels };
+}
+
+describe("claimPullRequestBuildingLabel", () => {
+  it("adds the label to a pull request that doesn't carry it and remembers the pull request", () => {
+    const { calls, github, labels } = pullRequestLabelStub({ 70: ["sandcastle:follow-up"] });
+    const marked = new Map<number, number>();
+
+    const claimed = claimPullRequestBuildingLabel(70, github, marked, now);
+
+    assert.equal(claimed, true);
+    assert.equal(marked.get(70), now);
+    assert.deepEqual(calls, ["labels PR #70", "add PR #70"]);
+    assert.deepEqual(labels[70], ["sandcastle:follow-up", BUILDING_LABEL]);
+  });
+
+  it("leaves a pull request another run already marked, in any case, without adding the label or remembering it", () => {
+    const { calls, github } = pullRequestLabelStub({ 70: ["Sandcastle:Building"] });
+    const marked = new Map<number, number>();
+
+    const claimed = claimPullRequestBuildingLabel(70, github, marked);
+
+    assert.equal(claimed, false);
+    assert.deepEqual(calls, ["labels PR #70"]);
+    assert.deepEqual([...marked.keys()], []);
+  });
+
+  it("removes a label the failed add may have applied, forgets the pull request and rethrows", () => {
+    const { calls, github, labels } = pullRequestLabelStub({ 70: [] }, [], [70]);
+    const marked = new Map<number, number>();
+
+    assert.throws(() => claimPullRequestBuildingLabel(70, github, marked), /502/);
+
+    assert.deepEqual(calls, ["labels PR #70", "add PR #70", "remove PR #70"]);
+    assert.deepEqual(labels[70], []);
+    assert.deepEqual([...marked.keys()], []);
+  });
+
+  it("keeps remembering the pull request when the failed add's label can't be removed either", () => {
+    const { github } = pullRequestLabelStub({ 70: [] }, [70], [70]);
+    const marked = new Map<number, number>();
+
+    assert.throws(() => claimPullRequestBuildingLabel(70, github, marked), /502/);
+
+    assert.deepEqual([...marked.keys()], [70]);
+  });
+});
+
+describe("releasePullRequestBuildingLabel", () => {
+  it("removes the label and forgets the pull request", () => {
+    const { github, labels } = pullRequestLabelStub({ 70: [BUILDING_LABEL] });
+    const marked = new Map([[70, claimedAt]]);
+
+    releasePullRequestBuildingLabel(70, github, marked);
+
+    assert.deepEqual(labels[70], []);
+    assert.deepEqual([...marked.keys()], []);
+  });
+
+  it("keeps remembering the pull request when the label can't be removed", () => {
+    const { github } = pullRequestLabelStub({ 70: [BUILDING_LABEL] }, [70]);
+    const marked = new Map([[70, claimedAt]]);
+
+    assert.throws(() => releasePullRequestBuildingLabel(70, github, marked), /502/);
+
+    assert.deepEqual([...marked.keys()], [70]);
+  });
+});
+
+describe("releaseAllBuildingLabels and pull requests", () => {
+  const release = (
+    issues: ReturnType<typeof labelStub>,
+    markedIssues: Map<number, number>,
+    pullRequests: ReturnType<typeof pullRequestLabelStub>,
+    markedPullRequests: Map<number, number>,
+    warn: (message: string) => void = () => {},
+    at: number = now,
+  ) => releaseAllBuildingLabels(issues.github, markedIssues, warn, at, BUILDING_LABEL_MAX_AGE_MS, pullRequests.github, markedPullRequests);
+
+  it("removes the label from every pull request this run still holds, with the pull request's call, and returns them", () => {
+    const issues = labelStub({ 150: [BUILDING_LABEL] });
+    const pullRequests = pullRequestLabelStub({ 70: [BUILDING_LABEL], 71: [BUILDING_LABEL] });
+    const markedPullRequests = new Map([[70, claimedAt], [71, claimedAt]]);
+
+    const released = release(issues, new Map([[150, claimedAt]]), pullRequests, markedPullRequests);
+
+    assert.deepEqual(released.toSorted((a, b) => a - b), [70, 71, 150]);
+    assert.deepEqual(pullRequests.labels, { 70: [], 71: [] });
+    assert.deepEqual(issues.labels, { 150: [] });
+    assert.deepEqual([...markedPullRequests.keys()], []);
+    assert.ok(!issues.calls.some((call) => call.includes("#70") || call.includes("#71")), issues.calls.join(", "));
+  });
+
+  it("forgets, without removing, a pull request's label this run claimed more than the max age ago, and reports it", () => {
+    const issues = labelStub();
+    const pullRequests = pullRequestLabelStub({ 70: [BUILDING_LABEL] });
+    const markedPullRequests = new Map([[70, now - BUILDING_LABEL_MAX_AGE_MS - 1]]);
+    const warnings: string[] = [];
+
+    const released = release(issues, new Map(), pullRequests, markedPullRequests, (message) => warnings.push(message));
+
+    assert.deepEqual(released, []);
+    assert.deepEqual(pullRequests.calls, []);
+    assert.deepEqual([...markedPullRequests.keys()], []);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /#70/);
+  });
+
+  it("carries on past a pull request whose label can't be removed, reports it, and tries it again on a later call", () => {
+    const failRemove = [70];
+    const issues = labelStub({ 150: [BUILDING_LABEL] });
+    const pullRequests = pullRequestLabelStub({ 70: [BUILDING_LABEL] }, failRemove);
+    const markedPullRequests = new Map([[70, claimedAt]]);
+    const warnings: string[] = [];
+
+    const first = release(issues, new Map([[150, claimedAt]]), pullRequests, markedPullRequests, (message) => warnings.push(message));
+    failRemove.length = 0;
+    const second = release(issues, new Map(), pullRequests, markedPullRequests);
+
+    assert.deepEqual(first, [150]);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /#70/);
+    assert.deepEqual(second, [70]);
+    assert.deepEqual(pullRequests.labels[70], []);
+  });
+
+  it("still releases only issues when the run holds no pull request, with the pull request arguments left out", () => {
+    const issues = labelStub({ 150: [BUILDING_LABEL] });
+
+    const released = releaseAllBuildingLabels(issues.github, new Map([[150, claimedAt]]), () => {}, now);
+
+    assert.deepEqual(released, [150]);
+  });
+});
+
 describe("installBuildingLabelRelease", () => {
   // A process stub that records the handlers installed and the exit code.
   function processStub() {
@@ -331,10 +568,10 @@ describe("main.mts's sandcastle:building wiring", () => {
     return index;
   };
 
-  it("installs the release on exit and clears stale labels after ensureHostLabels, before the first round", () => {
+  it("installs the release on exit and clears stale labels after ensureLabels, before the first round", () => {
     const loop = at("for (let iteration = 1;");
 
-    assert.ok(at("ensureHostLabels();") < at("clearStaleBuildingLabels()"));
+    assert.ok(at("ensureLabels();") < at("clearStaleBuildingLabels()"));
     assert.ok(at("installBuildingLabelRelease(") < loop);
     assert.ok(at("clearStaleBuildingLabels()") < loop);
   });
@@ -348,106 +585,5 @@ describe("main.mts's sandcastle:building wiring", () => {
 
     assert.ok(release > loop, "main.mts doesn't release labels inside the round loop");
     assert.ok(release < at("gateIssues()"));
-  });
-
-  // #53: the sweep skips a PR whose issue is labelled sandcastle:building, so
-  // a label this run still holds must go before the sweep, or the run would
-  // skip its own PR for the round.
-  it("releases the labels the run still holds before the round's follow-up sweep", () => {
-    const loop = at("for (let iteration = 1;");
-    const release = main.indexOf("releaseAllBuildingLabels()", loop);
-    const sweep = main.indexOf("followUpPhase(", loop);
-
-    assert.ok(release > loop, "main.mts doesn't release labels inside the round loop");
-    assert.ok(release < sweep, "main.mts releases the run's building labels after the follow-up sweep, not before it");
-  });
-});
-
-// #58: a follow-up pass on a hand-off PR claims sandcastle:building on the PR
-// itself. Issue and PR numbers share one namespace, so the claim, the release
-// and the stale-label sweep need no kind.
-describe("sandcastle:building on a pull request", () => {
-  const labels = (labelsByNumber: Record<number, string[]> = {}) => {
-    const added: number[] = [];
-    const removed: number[] = [];
-    const github: BuildingLabels = {
-      issueLabels: (number) => labelsByNumber[number] ?? [],
-      addLabel: (number) => void added.push(number),
-      removeLabel: (number) => void removed.push(number),
-    };
-    return { github, added, removed };
-  };
-
-  it("claims a PR's number like an issue's, remembering it for release", () => {
-    const { github, added } = labels();
-    const marked = new Map<number, number>();
-
-    const claimed = claimBuildingLabel(58, github, marked, 1_000);
-
-    assert.equal(claimed, true);
-    assert.deepEqual(added, [58]);
-    assert.deepEqual([...marked], [[58, 1_000]]);
-  });
-
-  it("leaves a PR another run already claimed to that run", () => {
-    const { github, added } = labels({ 58: [BUILDING_LABEL] });
-    const marked = new Map<number, number>();
-
-    assert.equal(claimBuildingLabel(58, github, marked), false);
-    assert.deepEqual(added, []);
-    assert.equal(marked.size, 0);
-  });
-
-  it("releases a PR this run still holds at the start of the next round", () => {
-    const { github, removed } = labels();
-    const marked = new Map<number, number>([[58, 1_000]]);
-
-    const released = releaseAllBuildingLabels(github, marked, () => {}, 2_000);
-
-    assert.deepEqual(released, [58]);
-    assert.deepEqual(removed, [58]);
-    assert.equal(marked.size, 0);
-  });
-
-  it("clears a crashed run's stale claim on a PR, found among the open issues and PRs carrying the label", () => {
-    const removed: number[] = [];
-    const github: BuildingGitHub = {
-      issuesWithLabel: () => [58],
-      labelTimeline: () => [labeled("2026-10-10T00:00:00Z")],
-      removeLabel: (number) => void removed.push(number),
-    };
-
-    const cleared = clearStaleBuildingLabels(github, BUILDING_LABEL, BUILDING_LABEL_MAX_AGE_MS, Date.parse("2026-10-10T12:00:00Z"));
-
-    assert.deepEqual(cleared, [58]);
-    assert.deepEqual(removed, [58]);
-  });
-});
-
-// gh issue edit refuses a PR number and gh issue list leaves PRs out, so the
-// live wiring goes through the REST labels endpoints, which serve both. Read
-// as source, like main.mts's wiring above, since the live objects call gh.
-describe("building.mts' live wiring", () => {
-  const source = readFileSync(new URL("./building.mts", import.meta.url), "utf8");
-  const live = (name: string) => {
-    const start = source.indexOf(`export const ${name}`);
-    return source.slice(start, source.indexOf("};", start));
-  };
-
-  it("claims, reads and releases labels through the REST helpers, which cover PRs", () => {
-    const wiring = live("liveBuildingLabels");
-
-    assert.match(wiring, /labelsOn\(/);
-    assert.match(wiring, /addLabelOn\(/);
-    assert.match(wiring, /removeLabelFrom\(/);
-    assert.doesNotMatch(wiring, /addIssueLabel|removeIssueLabel|issueLabels\(/);
-  });
-
-  it("finds and clears stale claims through the REST helpers, so a PR's is found too", () => {
-    const wiring = live("liveBuildingGitHub");
-
-    assert.match(wiring, /openNumbersWithLabel\(/);
-    assert.match(wiring, /removeLabelFrom\(/);
-    assert.doesNotMatch(wiring, /issuesWithLabel\(|removeIssueLabel/);
   });
 });

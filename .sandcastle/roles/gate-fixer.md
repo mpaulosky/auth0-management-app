@@ -12,7 +12,7 @@ The host ran the gate itself, and its exit code is what counts. Here is its outp
 
 # THE BRIEF
 
-{{BRIEF_SOURCE}}: {{ISSUE_TITLE}}
+The branch implements #{{TASK_ID}}: {{ISSUE_TITLE}}
 
 <brief>
 
