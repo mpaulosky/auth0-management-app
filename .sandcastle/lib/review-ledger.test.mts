@@ -15,11 +15,11 @@ import {
   ledgerDir,
   main,
   mergeBase,
-  NOT_OWNED,
   OWNED_PATHS,
   latestLedger,
   readLedger,
   recordReview,
+  repoSlugProblem,
   takenIds,
   renderAdvisories,
   renderReport,
@@ -31,6 +31,8 @@ import {
   type Ledger,
   type ReviewInput,
 } from "./review-ledger.mts";
+import { NOT_OWNED_BASELINE_PATHS } from "./repo-config.mts";
+import { fingerprint } from "./security-record.mts";
 
 // Only the config each test sets: a machine's global or system git config
 // (commit signing, a hooks path, merge.ff=only, colour) mustn't decide these
@@ -109,7 +111,7 @@ function rewriteFindings(path: string, change: (finding: Record<string, unknown>
 const nearest = () => latestLedger(repo, mergeBase(repo));
 
 // Run main() with stdout and stderr captured.
-function cli(args: string[], cwd = repo, env: NodeJS.ProcessEnv = {}): { code: number; out: string; err: string } {
+function cli(args: string[], cwd = repo, env: NodeJS.ProcessEnv = {}, slug?: string): { code: number; out: string; err: string } {
   const out: string[] = [];
   const err: string[] = [];
   const stdout = process.stdout.write;
@@ -117,7 +119,7 @@ function cli(args: string[], cwd = repo, env: NodeJS.ProcessEnv = {}): { code: n
   process.stdout.write = ((chunk: string) => (out.push(chunk), true)) as typeof process.stdout.write;
   process.stderr.write = ((chunk: string) => (err.push(chunk), true)) as typeof process.stderr.write;
   try {
-    const code = main(args, cwd, env);
+    const code = main(args, cwd, env, slug);
     return { code, out: out.join(""), err: err.join("") };
   } finally {
     process.stdout.write = stdout;
@@ -138,7 +140,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("diffKey", () => {
@@ -497,7 +499,7 @@ describe("diffKey", () => {
       assert.doesNotThrow(() => diffKey(repo, mergeBase(repo)));
     } finally {
       process.env.PATH = path;
-      rmSync(bin, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -544,6 +546,22 @@ describe("diffKey", () => {
       assert.throws(() => diffKey(repo, mergeBase(repo)), /binary/);
     });
   }
+
+  it("lets a branch delete or empty a text file a diff attribute marks binary, since the new side has no text to hide", () => {
+    commit(repo, ".gitattributes", "*.cs -diff\n", "attributes");
+    run(repo, "rm", "--quiet", "app.cs");
+    run(repo, "commit", "--quiet", "-m", "delete");
+
+    assert.doesNotThrow(() => reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")));
+    assert.doesNotThrow(() => diffKey(repo, mergeBase(repo)));
+  });
+
+  it("lets a branch empty a text file a diff attribute marks binary", () => {
+    commit(repo, ".gitattributes", "*.cs -diff\n", "attributes");
+    commit(repo, "app.cs", "", "empty it");
+
+    assert.doesNotThrow(() => reviewPatch(repo, mergeBase(repo), run(repo, "rev-parse", "HEAD")));
+  });
 
   it("reads and keys commits as they are, not as a replace ref shows them", () => {
     const base = mergeBase(repo);
@@ -715,7 +733,7 @@ describe("checkReview", () => {
       return checkReview(repo, mergeBase(repo), {});
     } finally {
       process.env.PATH = path;
-      rmSync(bin, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 
@@ -766,7 +784,7 @@ describe("checkReview", () => {
     run(repo, "switch", "--quiet", "-C", "chore/reapply-baseline", "origin/main");
     mkdirSync(join(repo, "scripts"));
     commit(repo, "global.json", "{}\n", "re-Apply");
-    commit(repo, "scripts/gate.sh", "#!/bin/sh\n", "re-Apply");
+    commit(repo, "scripts/check-branch-name.sh", "#!/bin/sh\n", "re-Apply");
 
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
   });
@@ -818,6 +836,47 @@ describe("checkReview", () => {
     commit(repo, "\tglobal.json", "sneaked in\n", "not Owned");
 
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+  });
+
+  it("reviews a re-Apply that deletes an Owned file, which Apply never does", () => {
+    commit(upstream, "global.json", "{}\n", "main has an Owned file");
+    run(repo, "fetch", "--quiet", "origin", "main");
+    run(repo, "switch", "--quiet", "-C", "chore/reapply-baseline", "origin/main");
+    run(repo, "rm", "--quiet", "global.json");
+    run(repo, "commit", "--quiet", "-m", "delete an Owned file");
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+  });
+
+  it("reviews a re-Apply that turns an Owned path into a symlink", () => {
+    run(repo, "switch", "--quiet", "-C", "chore/reapply-baseline", "origin/main");
+    symlinkSync("/etc/passwd", join(repo, "global.json"));
+    run(repo, "add", "global.json");
+    run(repo, "commit", "--quiet", "-m", "symlink");
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+  });
+
+  it("reviews a re-Apply that adds a submodule at an Owned path", () => {
+    run(repo, "switch", "--quiet", "-C", "chore/reapply-baseline", "origin/main");
+    run(repo, "update-index", "--add", "--cacheinfo", `160000,${run(repo, "rev-parse", "HEAD")},scripts/tests/vendor`);
+    run(repo, "commit", "--quiet", "-m", "gitlink");
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, false);
+  });
+
+  it("still passes a re-Apply that adds a new executable Owned file and edits one main already has", () => {
+    commit(upstream, "global.json", "[]\n", "main has an Owned file");
+    run(repo, "fetch", "--quiet", "origin", "main");
+    run(repo, "switch", "--quiet", "-C", "chore/reapply-baseline", "origin/main");
+    mkdirSync(join(repo, "scripts"), { recursive: true });
+    writeFileSync(join(repo, "scripts/check-pr-title.sh"), "#!/bin/sh\n");
+    chmodSync(join(repo, "scripts/check-pr-title.sh"), 0o755);
+    run(repo, "add", "scripts/check-pr-title.sh");
+    run(repo, "commit", "--quiet", "-m", "re-Apply");
+    commit(repo, "global.json", "{}\n", "re-Apply");
+
+    assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
   });
 
   it("reviews Owned-only changes on any other branch", () => {
@@ -885,6 +944,18 @@ describe("recordReview", () => {
     assert.equal(checkReview(repo, mergeBase(repo), {}).ok, true);
   });
 
+  it("refuses a security weakness recorded fixed on a reason alone, and takes one that names its test", () => {
+    const weakness = { severity: "warning" as const, security: true, status: "fixed" as const };
+
+    assert.throws(() => record([finding({ ...weakness, test: null, reason: "Reworded." })]), /R1 is a security weakness recorded fixed without a test/);
+    assert.equal(record([finding({ ...weakness, test: ".github/ci/gate-checks.sh::no-token-in-env", reason: null })]).findings[0]?.status, "fixed");
+  });
+
+  it("holds a Warning marked security: false, or a finding whose lens names security, to the same rule", () => {
+    assert.throws(() => record([finding({ severity: "warning", security: false, status: "fixed", test: null, reason: "Reworded." })]), /recorded fixed without a test/);
+    assert.throws(() => record([finding({ lens: "Security", severity: "critical", security: false, status: "fixed", test: null, reason: "Reworded." })]), /recorded fixed without a test/);
+  });
+
   it("refuses a fixed finding that names neither a test nor why it has none", () => {
     assert.throws(() => record([finding({ test: null })]), /neither its test/);
   });
@@ -897,11 +968,19 @@ describe("recordReview", () => {
     assert.throws(() => record([finding({ status: "dismissed", test: null })]), /dismissed without a reason/);
   });
 
-  for (const path of ["a b.cs", "a<b.cs", "a>b.cs", "a`b.cs"]) {
+  for (const path of ["a<b.cs", "a>b.cs", "a`b.cs", "a\tb.cs", "a\nb.cs", "a  b.cs", "a\u2028b.cs"]) {
     it(`refuses a path that isn't a plain repository path: ${JSON.stringify(path)}`, () => {
       assert.throws(() => record([finding({ path })]), /a path has no whitespace/);
     });
   }
+
+  it("takes a path with single spaces, as every file of the Template has under \"Support For New Projects/\"", () => {
+    const path = "Support For New Projects/.claude/skills/repo-ci-baseline/apply.sh";
+
+    const ledger = record([finding({ path })]);
+
+    assert.match(renderReport(ledger), /Support For New Projects/);
+  });
 
   it("refuses a finding given as accepted: only the person accepts, with scripts/review.sh accept", () => {
     assert.throws(
@@ -1088,7 +1167,7 @@ describe("recordReview", () => {
   });
 
   // Triage decides every finding's security mark, so a weakness misgraded
-  // under a lens that doesn't say security is still held back (#89's review).
+  // under a lens that doesn't say security is still held back (a real review's case).
   it("refuses a finding without its security decision", () => {
     const { security: _, ...undecided } = finding();
 
@@ -1289,6 +1368,60 @@ describe("latestLedger", () => {
 });
 
 describe("renderReport", () => {
+  it("says which agent reviewed, or that none was recorded", () => {
+    const named = recordReview(repo, mergeBase(repo), { ...reviewed(), rounds: 1, reviewerAgent: "general-purpose", findings: [] });
+    assert.equal(named.reviewerAgent, "general-purpose");
+    assert.match(renderReport(named), /reviewed by general-purpose\./);
+    assert.match(renderReport(record([finding()])), /reviewed by an unrecorded agent\./);
+  });
+
+  it("refuses a reviewerAgent that isn't an agent type name", () => {
+    for (const reviewerAgent of ["", "two words", "a|b", "x\ny", "-lead", "a".repeat(65), "www.evil.example", "a:", ":b", "a:b:c"]) {
+      assert.throws(() => recordReview(repo, mergeBase(repo), { ...reviewed(), rounds: 1, reviewerAgent, findings: [] }), /agent type name/, reviewerAgent);
+    }
+  });
+
+  it("records a plugin agent type, and the notes break a cross-reference in it", () => {
+    const ledger = recordReview(repo, mergeBase(repo), { ...reviewed(), rounds: 1, reviewerAgent: "my-plugin:GH-12", findings: [] });
+
+    assert.equal(ledger.reviewerAgent, "my-plugin:GH-12");
+    assert.doesNotMatch(renderReport(ledger), /GH-12/);
+    assert.doesNotMatch(renderReviewNotes(ledger), /GH-12/);
+  });
+
+  it("writes Review notes for a stand-in reviewer even when nothing was accepted, and none for the pre-push-reviewer", () => {
+    const standIn = recordReview(repo, mergeBase(repo), { ...reviewed(), rounds: 1, reviewerAgent: "general-purpose", findings: [] });
+    assert.match(renderReviewNotes(standIn), /^<!-- review-notes -->\n## Review notes\n[\s\S]*Reviewed by general-purpose, not the read-only pre-push-reviewer\./);
+
+    const proper = recordReview(repo, mergeBase(repo), { ...reviewed(), rounds: 1, reviewerAgent: "pre-push-reviewer", findings: [] });
+    assert.equal(renderReviewNotes(proper), "");
+    assert.equal(renderReviewNotes(record([])), "");
+  });
+
+  it("names a stand-in reviewer beside an accepted finding that the notes list", () => {
+    recordReview(repo, mergeBase(repo), {
+      ...reviewed(),
+      rounds: 1,
+      reviewerAgent: "general-purpose",
+      findings: [finding({ id: "R2", severity: "advisory", security: false, status: "open", test: null, reason: null, fix: "Do it." })],
+    });
+    const notes = renderReviewNotes(acceptFinding(repo, mergeBase(repo), "R2", "Spec."));
+
+    assert.match(notes, /were accepted, not changed/);
+    assert.match(notes, /Accepted: Spec\./);
+    assert.match(notes, /Reviewed by general-purpose, not the read-only pre-push-reviewer\./);
+  });
+
+  it("names a stand-in reviewer in the Review notes, but not the pre-push-reviewer", () => {
+    const accepted = (reviewerAgent: string, id: string) => {
+      recordReview(repo, mergeBase(repo), { ...reviewed(), rounds: 1, reviewerAgent, findings: [finding({ id, status: "open", test: null, reason: null, fix: "Do it.", severity: "warning" })] });
+      return renderReviewNotes(acceptFinding(repo, mergeBase(repo), id, "Fine."));
+    };
+
+    assert.match(accepted("general-purpose", "R1"), /Reviewed by general-purpose, not the read-only pre-push-reviewer\./);
+    assert.doesNotMatch(accepted("pre-push-reviewer", "R2"), /Reviewed by/);
+  });
+
   it("lists every finding with its status and its test or reason, with pipes escaped", () => {
     const ledger = record([finding({ summary: "a | b" }), finding({ id: "R2", status: "accepted", test: null, reason: "Spec." })], 2);
 
@@ -2251,6 +2384,9 @@ describe("scripts/review.sh", () => {
     assert.match(result.stderr, /Usage: scripts\/review\.sh/);
   });
 
+  // A repo-config.mts that exports the given names, as the Seed's does.
+  const configWith = (names: string[]) => names.map((name) => `export const ${name} = ${name === "REPO_SLUG" ? '"o/r"' : "[]"};\n`).join("");
+
   // A copy of scripts/review.sh in a checkout with no packages, and a stub
   // pnpm (or none) on a PATH of its own. The stub logs its arguments; "works"
   // creates tsx, "no-tsx" succeeds without creating it, "fails" exits 1.
@@ -2259,9 +2395,11 @@ describe("scripts/review.sh", () => {
     mkdirSync(join(checkout, "scripts"), { recursive: true });
     const script = join(checkout, "scripts", "review.sh");
     writeFileSync(script, readFileSync(reviewScript, "utf8"));
+    mkdirSync(join(checkout, ".sandcastle", "lib"), { recursive: true });
+    writeFileSync(join(checkout, ".sandcastle", "lib", "repo-config.mts"), configWith(["REPO_SLUG", "NOT_OWNED_BASELINE_PATHS"]));
     const bin = join(root, "bin");
     mkdirSync(bin);
-    for (const tool of ["dirname", "mkdir", "chmod", "printf"]) {
+    for (const tool of ["dirname", "mkdir", "chmod", "printf", "grep"]) {
       symlinkSync(execFileSync("bash", ["-c", `command -v ${tool}`], { encoding: "utf8" }).trim(), join(bin, tool));
     }
     const log = join(root, "pnpm.log");
@@ -2297,6 +2435,50 @@ describe("scripts/review.sh", () => {
     });
   }
 
+  for (const missing of [["REPO_SLUG"], ["NOT_OWNED_BASELINE_PATHS"], ["REPO_SLUG", "NOT_OWNED_BASELINE_PATHS"]]) {
+    it(`says to add ${missing.join(" and ")} to repo-config.mts, before any install, when the repo's copy lacks ${missing.length > 1 ? "both" : "it"}`, () => {
+      const { checkout, log, runScript } = bareCheckout("works");
+      const present = ["REPO_SLUG", "NOT_OWNED_BASELINE_PATHS"].filter((name) => !missing.includes(name));
+      writeFileSync(join(checkout, ".sandcastle", "lib", "repo-config.mts"), configWith(present));
+
+      const result = runScript("check");
+
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, new RegExp(`no export of ${missing[0]}`));
+      assert.equal(existsSync(log), false, "installed packages before checking the config");
+    });
+  }
+
+  it("refuses names that only look exported: a longer name, a comment, an indented line", () => {
+    const { checkout, runScript } = bareCheckout("works");
+    const decoys = `export const REPO_SLUG_OLD = 1;\n// export const REPO_SLUG = "o/r";\n  export const REPO_SLUG = "o/r";\n${configWith(["NOT_OWNED_BASELINE_PATHS"])}`;
+    writeFileSync(join(checkout, ".sandcastle", "lib", "repo-config.mts"), decoys);
+
+    const result = runScript("check");
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /no export of REPO_SLUG/);
+  });
+
+  it("takes names exported with let, or with extra spaces", () => {
+    const { checkout, runScript } = bareCheckout("works");
+    writeFileSync(join(checkout, ".sandcastle", "lib", "repo-config.mts"), `export  let   REPO_SLUG = "o/r";\nexport   const   NOT_OWNED_BASELINE_PATHS = [];\n`);
+
+    const result = runScript("key");
+
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  it("says the config doesn't exist, rather than blaming its contents", () => {
+    const { checkout, runScript } = bareCheckout("works");
+    rmSync(join(checkout, ".sandcastle", "lib", "repo-config.mts"));
+
+    const result = runScript("check");
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /doesn't exist/);
+  });
+
   it("says to enable pnpm when it isn't installed", () => {
     const result = bareCheckout("missing").runScript("check");
 
@@ -2314,36 +2496,61 @@ describe("scripts/review.sh", () => {
   });
 });
 
+// The Seed's value before Apply fills it in, spelled so this Owned file carries no placeholder.
+const UNFILLED = `{{${"OWNER"}}}/{{${"REPO"}}}`;
+
+describe("repoSlugProblem and the repo command", () => {
+  it("accepts OWNER/REPO and nothing else", () => {
+    for (const slug of ["mpaulosky/dotfiles", "o/r", "my-org/my.repo_1"]) assert.equal(repoSlugProblem(slug), undefined, slug);
+    for (const slug of [UNFILLED, "", "o", "o/r/x", "github.com/o/r", "o/r\n", " o/r", "o /r", "/r", "o/"]) {
+      assert.match(repoSlugProblem(slug) ?? "", /not OWNER\/REPO/, JSON.stringify(slug));
+    }
+  });
+
+  it("prints a valid slug alone on one line and exits 0", () => {
+    const written: string[] = [];
+    const write = process.stdout.write;
+    process.stdout.write = ((text: string) => (written.push(text), true)) as typeof process.stdout.write;
+    try {
+      assert.equal(main(["repo"], repo, {}, "mpaulosky/dotfiles"), 0);
+    } finally {
+      process.stdout.write = write;
+    }
+
+    assert.deepEqual(written, ["mpaulosky/dotfiles\n"]);
+  });
+
+  it("exits 1 and prints nothing to stdout for the unfilled Seed value", () => {
+    const written: string[] = [];
+    const out = process.stdout.write;
+    const err = process.stderr.write;
+    process.stdout.write = ((text: string) => (written.push(text), true)) as typeof process.stdout.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      assert.equal(main(["repo"], repo, {}, UNFILLED), 1);
+    } finally {
+      process.stdout.write = out;
+      process.stderr.write = err;
+    }
+
+    assert.deepEqual(written, []);
+  });
+});
+
 describe("OWNED_PATHS", () => {
-  const rule = () => readFileSync(join(repoRoot, ".claude/rules/baseline.md"), "utf8");
-  const section = (from: string, to: string) => rule().slice(rule().indexOf(from), rule().indexOf(to));
-  const named = (text: string) => [...text.matchAll(/`([^`]+)`/g)].map((match) => match[1] ?? "");
-
-  it("lists exactly the Owned files .claude/rules/baseline.md names", () => {
-    const owned = named(section("## Owned files", "When a task needs an Owned file"));
-
-    assert.deepEqual([...OWNED_PATHS].sort(), [...new Set(owned)].sort());
-  });
-
-  it("leaves out exactly the files under an Owned pattern that .claude/rules/baseline.md calls this repository's own", () => {
-    const own = named(section("## Not from the Template", "## Owned files")).filter(underOwnedPattern);
-
-    assert.deepEqual([...NOT_OWNED].sort(), own.sort());
-    for (const path of own) assert.equal(isOwnedPath(path), false, path);
-  });
-
   it("matches folders and globs as the rule means them", () => {
-    for (const path of [".github/workflows/ci.yml", ".github/hooks/tests/pre-push.test.sh", ".github/scripts/a/b/c.sh", "global.json"]) {
+    for (const path of [".github/workflows/ci.yml", ".github/hooks/tests/pre-push.test.sh", ".github/scripts/a/b/c.sh", "global.json", ".claude/skills/pre-push-review/SKILL.md", ".claude/skills/hardening-review/SKILL.md", ".claude/skills/hardening-review/scripts/mutate.py", ".claude/skills/hardening-review/references/brief.md", ".sandcastle/lib/build.mts"]) {
       assert.equal(isOwnedPath(path), true, path);
     }
     for (const path of [
-      ".github/workflows/sandcastle.yml",
-      ".github/workflows/copilot-review-sync.yml",
-      "scripts/tests/check-git-hooks.test.sh",
+      ".sandcastle/lib/repo-config.mts",
       ".github/workflows/nested/ci.yml",
       ".github/instructions/a/b.md",
+      ".sandcastle/lib/nested/build.mts",
+      ".claude/skills/hardening-review-notes/SKILL.md",
+      ".claude/skills/hardening-reviewer/scripts/mutate.py",
+      ".claude/skills/other/SKILL.md",
       ".github/ci/gate-checks.sh",
-      "scripts/review.sh",
       "scripts/gate.shx",
       "global.json.bak",
       "globalxjson",
@@ -2351,5 +2558,417 @@ describe("OWNED_PATHS", () => {
     ]) {
       assert.equal(isOwnedPath(path), false, path);
     }
+  });
+
+  it("leaves out the files the repository lists as its own, which are Owned patterns' otherwise", () => {
+    for (const path of NOT_OWNED_BASELINE_PATHS) {
+      // A file, exactly as git names it: NOT_OWNED is matched by exact string, so a folder, a "./" or a stray space excludes nothing.
+      assert.ok(!path.endsWith("/") && !path.startsWith("./") && path === path.trim(), `${JSON.stringify(path)} must be a file path, not a folder, "./" or padded`);
+      assert.equal(underOwnedPattern(path), true, `${path} isn't under an Owned pattern, so listing it does nothing`);
+      assert.equal(isOwnedPath(path), false, path);
+    }
+  });
+});
+
+// The local, git-ignored record of security findings (.security/ in the main checkout). `record` writes it; two reviews read it
+// through `security`. The unit-level cases are in security-record.test.mts; these go through scripts/review.sh's own command.
+describe("the security record", () => {
+  // The Template's .gitignore (dotfiles' own, in its copy of this test) carries the record's two lines.
+  const templateIgnore = readFileSync(new URL("../../.gitignore", import.meta.url), "utf8");
+  const MARKER = "SECRET-MARKER-5d1f";
+
+  // A security finding as triage records it: a Warning, marked security. `policy` and `repeats` are only the record's, and
+  // aren't kept in the ledger.
+  type SecurityFinding = Finding & { policy?: string; repeats?: string };
+  const weakness = (overrides: Partial<SecurityFinding> = {}): SecurityFinding => ({
+    id: "R1",
+    lens: "Security",
+    path: "scripts/upload.sh",
+    line: 3,
+    summary: "The upload handler writes outside the target folder.",
+    severity: "warning",
+    security: true,
+    status: "fixed",
+    test: "tests/upload.test.sh::rejects_dotdot",
+    reason: null,
+    fix: "Resolve the path and refuse one outside the folder.",
+    ...overrides,
+  });
+
+  // `scripts/review.sh record`, run in `cwd` on a file holding the review of that checkout's HEAD.
+  let inputs = 0;
+  function recordIn(cwd: string, findings: SecurityFinding[], options: { pr?: number; slug?: string } = {}): { code: number; out: string; err: string } {
+    const body = {
+      reviewedKey: diffKey(cwd, mergeBase(cwd)),
+      reviewedHead: run(cwd, "rev-parse", "HEAD"),
+      rounds: 1,
+      ...(options.pr === undefined ? {} : { pr: options.pr }),
+      findings,
+    };
+    inputs += 1;
+    const file = join(root, `input-${inputs}.json`);
+    writeFileSync(file, JSON.stringify(body));
+    return cli(["record", file], cwd, {}, options.slug ?? "o/r");
+  }
+  const recordHere = (findings: SecurityFinding[], options: { pr?: number; slug?: string } = {}) => recordIn(repo, findings, options);
+
+  const securityFiles = (checkout = repo) => (existsSync(join(checkout, ".security")) ? readdirSync(join(checkout, ".security")).sort() : []);
+  const entries = (checkout = repo) => securityFiles(checkout).filter((name) => /^\d+-/.test(name));
+  const entry = (name: string, checkout = repo) => readFileSync(join(checkout, ".security", name), "utf8");
+
+  const firstEntry = () => {
+    assert.notEqual(entries().length, 0, "no entry was written");
+    return entry(entries()[0] ?? "");
+  };
+
+  // A second worktree of the clone, on its own branch with a change of its own.
+  function otherWorktree(): string {
+    const other = join(root, "wt");
+    run(repo, "worktree", "add", "--quiet", "-b", "feature/2-other", other, "origin/main");
+    commit(other, "other.cs", "changed in the other worktree\n", "change other");
+    return other;
+  }
+
+  describe("with the Template's .gitignore", () => {
+    beforeEach(() => {
+      commit(repo, ".gitignore", templateIgnore, "ignore the record");
+    });
+
+    // Criterion 4.
+    it("has the .gitignore lines that ignore every entry and not the README", () => {
+      assert.match(templateIgnore, /^\.security\/\*$/m);
+      assert.match(templateIgnore, /^!\.security\/README\.md$/m);
+      mkdirSync(join(repo, ".security"));
+      const ignored = (path: string) => spawnSync("git", ["check-ignore", "-q", path], { cwd: repo }).status === 0;
+
+      assert.equal(ignored(".security/0001-x.md"), true);
+      assert.equal(ignored(".security/README.md"), false);
+    });
+
+    // Criterion 1.
+    it("record writes .security/0001-<slug>.md for a Warning", () => {
+      const result = recordHere([weakness({ summary: "Path traversal in the upload handler is not checked" })]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.deepEqual(entries(), ["0001-path-traversal-in-the-upload-handler.md"]);
+    });
+
+    it("record writes an entry for a Warning marked security: false, which counts as a security weakness all the same", () => {
+      const result = recordHere([weakness({ security: false })]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.equal(entries().length, 1);
+    });
+
+    it("record writes an entry for a finding marked security: true, an open one too", () => {
+      const result = recordHere([weakness({ status: "open", test: null })]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.match(firstEntry(), /^- Status: open$/m);
+    });
+
+    // The entry `accept` changes is the one the finding was recorded against, not one found again from its text.
+    it("accept leaves a fixed entry fixed, with a warning, when a later branch's finding repeats it and is recorded open", () => {
+      recordHere([weakness()]);
+      commit(repo, "later.cs", "a later change\n", "later change");
+
+      recordHere([weakness({ id: "R2", status: "open", test: null })]);
+      const result = cli(["accept", "R2", "The", "policy", "is", "gone", "here."]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.match(result.err, /^\.security: 0001 is fixed, so it stays fixed/m);
+      assert.doesNotMatch(result.err, /marked 0001 accepted/);
+      assert.match(firstEntry(), /^- Status: fixed$/m);
+      assert.doesNotMatch(firstEntry(), /## Accepted/);
+      assert.equal(readLedger(repo, diffKey(repo, mergeBase(repo)))?.findings[0]?.status, "accepted");
+    });
+
+    it("accept turns the open entry accepted that a finding was matched to through `repeats` in other words", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "later.cs", "a later change\n", "later change");
+
+      recordHere([weakness({ id: "R2", summary: "Files can be written above the upload folder.", status: "open", test: null, repeats: "0001" })]);
+      const result = cli(["accept", "R2", "The folder is a sandbox."]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.match(result.err, /^\.security: marked 0001 accepted$/m);
+      assert.deepEqual(entries().length, 1);
+      assert.match(firstEntry(), /^- Status: accepted$/m);
+      assert.match(firstEntry(), /The folder is a sandbox\./);
+    });
+
+    it("accept still finds the entry by the finding's text when no note of the entry was kept (an older record)", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      for (const name of readdirSync(ledgerDir(repo))) if (name.endsWith(".entries")) rmSync(join(ledgerDir(repo), name));
+
+      const result = cli(["accept", "R1", "Fine."]);
+
+      assert.match(result.err, /^\.security: marked 0001 accepted$/m);
+      assert.match(firstEntry(), /^- Status: accepted$/m);
+    });
+
+    it("the note of which entry each finding went to isn't a ledger, and holds no entry text", () => {
+      recordHere([weakness({ policy: MARKER })]);
+
+      const names = readdirSync(ledgerDir(repo)).filter((name) => name.endsWith(".entries"));
+      assert.equal(names.length, 1);
+      assert.equal(readFileSync(join(ledgerDir(repo), names[0] ?? ""), "utf8").trim(), '{"R1":"0001"}');
+      assert.equal(cli(["latest"]).code, 0);
+    });
+
+    it("record writes no entry for a finding that isn't a security weakness, or one dismissed", () => {
+      const result = recordHere([
+        weakness({ id: "R1", lens: "Edge cases", severity: "critical", security: false, summary: "An email of only spaces passes." }),
+        weakness({ id: "R2", lens: "Edge cases", severity: "advisory", security: false, status: "open", test: null, summary: "A comment is stale." }),
+        weakness({ id: "R3", status: "dismissed", test: null, reason: "The code at app.cs:3 shows it isn't reachable.", summary: "Not a weakness." }),
+      ]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.deepEqual(securityFiles(), []);
+    });
+
+    it("record numbers an entry after the highest one, padded to four digits, and the README doesn't count", () => {
+      mkdirSync(join(repo, ".security"));
+      writeFileSync(join(repo, ".security", "README.md"), "# The record\n");
+      writeFileSync(join(repo, ".security", "0007-old.md"), "- Status: fixed\n");
+
+      recordHere([weakness()]);
+
+      assert.deepEqual(entries().map((name) => name.slice(0, 5)), ["0007-", "0008-"]);
+    });
+
+    // Criterion 2.
+    it("an entry names the weakness, the policy, the pinning test, the status, the branch and the PR it came from", () => {
+      recordHere([weakness({ policy: "Every path is resolved and refused when it leaves the folder." })], { pr: 12, slug: "o/r" });
+
+      const text = firstEntry();
+      assert.match(text, /The upload handler writes outside the target folder\./);
+      assert.match(text, /Every path is resolved and refused when it leaves the folder\./);
+      assert.match(text, /tests\/upload\.test\.sh::rejects_dotdot/);
+      assert.match(text, /^- Status: fixed$/m);
+      assert.match(text, /^- Branch: feature\/1-thing$/m);
+      assert.match(text, /^- PR: o\/r#12$/m);
+    });
+
+    it("an entry says none when no PR was recorded", () => {
+      recordHere([weakness()]);
+
+      assert.match(firstEntry(), /^- PR: none when recorded$/m);
+    });
+
+    it("record prints on stderr what it wrote, and its stdout stays the report", () => {
+      const result = recordHere([weakness()]);
+
+      assert.match(result.err, /^\.security: wrote 0001-[a-z0-9-]+\.md \(fixed\)$/m);
+      assert.doesNotMatch(result.out, /\.security/);
+      assert.match(result.out, /R1/);
+    });
+
+    it("record keeps a finding's policy, repeats and the review's pr out of the ledger", () => {
+      const result = recordHere([weakness({ policy: "A policy sentence.", repeats: "0042" })], { pr: 12 });
+
+      assert.equal(result.code, 0, result.err);
+      const files = readdirSync(ledgerDir(repo)).filter((name) => name.endsWith(".json"));
+      assert.equal(files.length > 0, true);
+      for (const name of files) {
+        const text = readFileSync(join(ledgerDir(repo), name), "utf8");
+        assert.doesNotMatch(text, /"policy"|"repeats"|"pr"|A policy sentence/, name);
+      }
+    });
+
+    // Criterion 4.
+    it("git status shows no entry after a record", () => {
+      recordHere([weakness()]);
+
+      assert.equal(entries().length, 1);
+      assert.equal(run(repo, "status", "--porcelain", "--untracked-files=all"), "");
+    });
+
+    // Criterion 3.
+    it("a weakness an entry holds gets no second file, however the later record words it", () => {
+      recordHere([weakness()]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      const again = recordHere([weakness({ id: "R2", summary: "  THE upload handler writes\noutside the target   folder. " })]);
+
+      assert.equal(again.code, 0, again.err);
+      assert.deepEqual(entries().length, 1);
+      assert.match(again.err, /R2 repeats 0001/);
+    });
+
+    it("a finding naming `repeats` holds the weakness of that entry", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      recordHere([weakness({ id: "R2", summary: "Uploads can leave their folder.", repeats: "0001" })]);
+
+      assert.equal(entries().length, 1);
+    });
+
+    it("an open entry recorded fixed later is updated in place, not written twice", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+      commit(repo, "other.cs", "again\n", "another change");
+
+      recordHere([weakness({ id: "R2" })]);
+
+      assert.equal(entries().length, 1);
+      assert.match(firstEntry(), /^- Status: fixed$/m);
+    });
+
+    // Criterion 3 and 9: another branch, in another worktree.
+    it("a review on another branch, in another worktree, writes no second file for a weakness an entry holds", () => {
+      recordHere([weakness()]);
+      const other = otherWorktree();
+
+      const result = recordIn(other, [weakness({ summary: "the upload handler writes outside the target folder." })]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.equal(entries().length, 1);
+      assert.match(result.err, /R1 repeats 0001/);
+      assert.deepEqual(securityFiles(other), []);
+    });
+
+    // Criterion 9.
+    it("an entry written in one worktree is listed by `security` in another, from the main checkout's directory", () => {
+      const other = otherWorktree();
+      recordHere([weakness()]);
+
+      const listed = cli(["security"], other);
+
+      assert.equal(listed.code, 0, listed.err);
+      const columns = listed.out.trim().split("\n")[0]?.split("\t");
+      assert.deepEqual(columns, ["0001", "fixed", "Security", "scripts/upload.sh", join(repo, ".security", entries()[0] ?? "")]);
+      assert.deepEqual(securityFiles(other), []);
+    });
+
+    it("a record made in a linked worktree writes into the main checkout's .security, and the main checkout lists it", () => {
+      const other = otherWorktree();
+
+      const result = recordIn(other, [weakness()]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.equal(entries().length, 1);
+      assert.deepEqual(securityFiles(other), []);
+      assert.match(cli(["security"], repo).out, /^0001\tfixed\t/);
+    });
+
+    it("security prints that there are no entries, and exits 0, when the directory doesn't exist", () => {
+      const result = cli(["security"]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.equal(result.out.trim(), "No security entries.");
+    });
+
+    it("security lists a fixed, an accepted and an open entry by id, status, lens, path and file, and prints nothing of their text", () => {
+      recordHere([
+        weakness({ id: "R1", path: "a.sh", summary: `Fixed ${MARKER}.`, policy: `Policy ${MARKER}.` }),
+        weakness({ id: "R2", path: "b.sh", summary: "Open one.", status: "open", test: null }),
+        weakness({ id: "R3", path: "c.sh", summary: "Soon accepted.", status: "open", test: null }),
+      ]);
+      assert.equal(cli(["accept", "R3", `Because ${MARKER}.`]).code, 0);
+
+      const listed = cli(["security"]);
+
+      assert.deepEqual(listed.out.trim().split("\n").map((line) => line.split("\t").slice(0, 4)), [
+        ["0001", "fixed", "Security", "a.sh"],
+        ["0002", "open", "Security", "b.sh"],
+        ["0003", "accepted", "Security", "c.sh"],
+      ]);
+      assert.doesNotMatch(listed.out, new RegExp(MARKER));
+    });
+
+    // Criterion 2 again: accepting a finding is seen in its entry.
+    it("accept turns the open finding's entry accepted, with the person's reason", () => {
+      recordHere([weakness({ status: "open", test: null })]);
+
+      assert.equal(cli(["accept", "R1", "The folder is a sandbox."]).code, 0);
+
+      const text = firstEntry();
+      assert.match(text, /^- Status: accepted$/m);
+      assert.match(text, /The folder is a sandbox\./);
+    });
+
+    // Criterion 10.
+    it("an accepted or open entry is read but changes neither the check nor the report", () => {
+      recordHere([]);
+      const before = { check: cli(["check"]), report: cli(["report"]) };
+      assert.equal(before.check.code, 0);
+      mkdirSync(join(repo, ".security"), { recursive: true });
+      const hand = (id: string, status: string) =>
+        writeFileSync(join(repo, ".security", `${id}-hand.md`), `# ${id}: Hand\n\n- Status: ${status}\n- Lens: Security\n- Path: scripts/upload.sh\n- Fingerprint: ${fingerprint("scripts/upload.sh", "x")}\n`);
+      hand("0001", "accepted");
+      hand("0002", "open");
+      hand("0003", "fixed");
+
+      const after = { check: cli(["check"]), report: cli(["report"]) };
+
+      assert.deepEqual(after, before);
+      assert.deepEqual(cli(["security"]).out.trim().split("\n").map((line) => line.split("\t")[1]), ["accepted", "open", "fixed"]);
+    });
+
+    // Criterion 5.
+    it("no text of an entry reaches the record's output, the report, the notes, the follow-up issue's list, the PR body or the ledgers", () => {
+      mkdirSync(join(repo, ".security"));
+      writeFileSync(
+        join(repo, ".security", "0001-hand-written.md"),
+        `# 0001: ${MARKER}\n\n- Status: fixed\n- Lens: Security\n- Path: scripts/upload.sh\n- Branch: ${MARKER}\n- PR: none when recorded\n` +
+          `- Fingerprint: ${fingerprint("scripts/upload.sh", "The upload handler writes outside the target folder.")}\n\n## Weakness\n\n${MARKER}\n\n## Policy\n\n${MARKER}\n\n## Pinned by\n\n${MARKER}\n`,
+      );
+      writeFileSync(join(root, "old-body.md"), "Closes the issue.\n");
+
+      const recorded = recordHere([
+        weakness({ id: "R1", policy: `The policy: ${MARKER}.` }),
+        weakness({ id: "R2", path: "scripts/other.sh", summary: "A second weakness.", policy: `Another policy: ${MARKER}.`, status: "open", test: null }),
+        weakness({ id: "R3", lens: "Docs match the code", path: "README.md", severity: "advisory", security: false, status: "open", test: null, summary: "A comment is stale." }),
+      ]);
+      assert.equal(recorded.code, 0, recorded.err);
+      const outputs = [
+        recorded.out,
+        recorded.err,
+        cli(["report"]).out,
+        cli(["notes"]).out,
+        cli(["advisory"]).out,
+        cli(["latest"]).out,
+        cli(["body", join(root, "old-body.md"), join(root, "new-body.md")]).out,
+        readFileSync(join(root, "new-body.md"), "utf8"),
+        ...readdirSync(ledgerDir(repo)).map((name) => readFileSync(join(ledgerDir(repo), name), "utf8")),
+      ];
+
+      assert.match(cli(["advisory"]).out, /A comment is stale\./);
+      for (const output of outputs) assert.doesNotMatch(output, new RegExp(MARKER));
+    });
+  });
+
+  // Criterion 4: a repo whose .gitignore lacks the line never gets an entry that git status would show.
+  describe("without the ignore line", () => {
+    it("record writes no entry, says to re-Apply on stderr, and still records the review", () => {
+      const result = recordHere([weakness()]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.deepEqual(securityFiles(), []);
+      assert.match(result.err, /^\.security: .*isn't git-ignored/m);
+      assert.match(result.err, /re-Apply/);
+      assert.equal(cli(["check"]).code, 0);
+    });
+  });
+
+  // A .security that can't be trusted is no reason to lose the review.
+  describe("with a .security that is a symlink", () => {
+    it("record writes nothing through it, warns, and still records the review", () => {
+      commit(repo, ".gitignore", templateIgnore, "ignore the record");
+      mkdirSync(join(root, "elsewhere"));
+      symlinkSync(join(root, "elsewhere"), join(repo, ".security"));
+
+      const result = recordHere([weakness()]);
+
+      assert.equal(result.code, 0, result.err);
+      assert.deepEqual(readdirSync(join(root, "elsewhere")), []);
+      assert.match(result.err, /^\.security: /m);
+      assert.equal(cli(["check"]).code, 0);
+    });
+  });
+
+  it("is a command the usage lists", () => {
+    assert.match(cli(["nonsense"]).err, /^ {2}security {3,}/m);
   });
 });

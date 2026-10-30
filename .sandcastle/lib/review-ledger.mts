@@ -1,9 +1,8 @@
 // The local review's ledger and its stamp: what `/pre-push-review` found on a
 // branch's diff, what became of each finding, and the check
-// `.github/ci/gate-checks.sh` runs so nothing is pushed that the review didn't
-// pass. Most of the threads GitHub's reviewers opened on this repo's PRs were
-// about behaviour a review before the push could have caught, so the gate now
-// asks for one.
+// `scripts/gate.sh` runs so nothing is pushed that the review didn't pass.
+// Most of the threads GitHub's reviewers open on a PR are about behaviour a
+// review before the push could have caught, so the gate asks for one.
 //
 // A ledger is keyed by the branch's own changes against its merge base with
 // origin/main: their patch, with blob ids, line numbers and hunk headers left
@@ -23,8 +22,15 @@
 // person: anyone who can push can write one, as anyone can push with
 // --no-verify.
 //
+// `record` also keeps a local record of security findings, `.security/` in the
+// main checkout (see security-record.mts): one file per weakness, written for
+// every security finding it records, so a later branch reads what an earlier
+// one decided. It is git-ignored and never published, like the ledgers, and
+// `security` lists it for the reviews, by id, status, lens and path only.
+//
 // Run as a script: `scripts/review.sh <command>` (see USAGE below). Sandcastle
-// doesn't use this module yet; it lives here for its type-check and tests.
+// doesn't run this review yet; the module lives in .sandcastle/lib/ for its
+// type-check and tests.
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -33,6 +39,8 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { plainText, visibleLetters } from "./plain-text.mts";
+import { NOT_OWNED_BASELINE_PATHS, REPO_SLUG } from "./repo-config.mts";
+import { markAccepted, readEntries, recordSecurity, renderSecurityList, type SecurityInput, type SecurityOutcome } from "./security-record.mts";
 
 // The variable that skips the review check, for the gate runs that come
 // before or during the review: the skill's own (each round's), and every gate
@@ -45,19 +53,38 @@ export const EMPTY_DIFF_KEY = "empty";
 // The branch the Baseline's re-Apply pushes (repo-ci-baseline's reapply.sh).
 export const REAPPLY_BRANCH = "chore/reapply-baseline";
 
-// The Owned Baseline files, as `.claude/rules/baseline.md` lists them (a test
-// keeps the two the same). A re-Apply changes only these, and they're
-// reviewed in the Template's own PRs; this repository must never change them,
-// so a review here could only raise findings nobody here may fix.
+// The Owned Baseline files, as the Template ships them (a test in dotfiles
+// keeps this list and template/owned the same). A re-Apply overwrites only
+// these (and writes any Seed file the repository lacks, which is not on this
+// list and needs a review), and they're reviewed in the Template's own PRs; a
+// repository must never change them, so a review there could only raise
+// findings nobody there may fix.
 export const OWNED_PATHS = [
   ".github/workflows/*.yml",
   ".github/hooks/**",
   ".github/scripts/**",
   ".github/instructions/*.md",
   ".github/pull_request_template.md",
+  ".claude/agents/pre-push-reviewer.md",
+  ".claude/skills/pre-push-review/**",
+  ".claude/skills/hardening-review/**",
+  ".sandcastle/main.mts",
+  ".sandcastle/status.mts",
+  ".sandcastle/status.test.mts",
+  ".sandcastle/lib/*.mts",
+  ".sandcastle/critique-prompt.md",
+  ".sandcastle/intake-prompt.md",
+  ".sandcastle/tsconfig.json",
+  ".sandcastle/.env.example",
+  ".sandcastle/.gitignore",
+  ".sandcastle/.markdownlint-cli2.jsonc",
   "scripts/gate.sh",
   "scripts/check-branch-name.sh",
+  "scripts/check-git-hooks.sh",
   "scripts/check-pr-title.sh",
+  "scripts/sync-copilot-review.sh",
+  "scripts/review.sh",
+  "scripts/watch-pr.sh",
   "scripts/tests/**",
   "docs/PROCESS.md",
   ".editorconfig",
@@ -69,13 +96,10 @@ export const OWNED_PATHS = [
   "global.json",
 ] as const;
 
-// The files under an Owned pattern that the Template doesn't supply, which
-// `.claude/rules/baseline.md` lists as this repository's own.
-export const NOT_OWNED: ReadonlySet<string> = new Set([
-  ".github/workflows/sandcastle.yml",
-  ".github/workflows/copilot-review-sync.yml",
-  "scripts/tests/check-git-hooks.test.sh",
-]);
+// The files under an Owned pattern that the Template doesn't supply: its Seed
+// repo-config.mts, and the files the repository lists in repo-config.mts's
+// NOT_OWNED_BASELINE_PATHS (its own workflows, scripts and Sandcastle tests).
+export const NOT_OWNED: ReadonlySet<string> = new Set([".sandcastle/lib/repo-config.mts", ...NOT_OWNED_BASELINE_PATHS]);
 
 // A glob from OWNED_PATHS as a regular expression: `**` crosses folders, `*`
 // doesn't.
@@ -110,9 +134,12 @@ export type Severity = (typeof SEVERITIES)[number];
 const findingFields = z.object({
   id: z.string().regex(/^R[1-9]\d{0,5}$/, "ids are R1, R2, ... up to R999999, with no leading zero"),
   lens: z.string().trim().min(1),
-  // A repository path: no whitespace, markup or backtick, so it can't carry
-  // anything into the PR description that plainText would have to undo.
-  path: z.string().trim().min(1).regex(/^[^\s<>`]+$/, "a path has no whitespace, <, > or backtick"),
+  // A repository path: no markup or backtick, and no whitespace but single
+  // spaces between its parts (the Template's own files sit under "Support For
+  // New Projects/"), so it can't carry anything into the PR description that
+  // plainText would have to undo: renderReport and the notes run it through
+  // plainText, and a tab, newline or double space never gets that far.
+  path: z.string().trim().min(1).regex(/^[^\s<>`]+( [^\s<>`]+)*$/, "a path has no whitespace but single spaces between its parts, and no <, > or backtick"),
   line: z.number().int().nonnegative(),
   summary: z.string().trim().min(1),
   status: z.enum(["fixed", "dismissed", "accepted", "open"]),
@@ -141,22 +168,37 @@ function checkOutcome(finding: z.infer<typeof findingFields>, context: z.Refinem
 // lens names security is never Advisory: it would pass the check without a
 // person deciding it, and go to the public follow-up issue.
 // Its `fix` is always given, null when unused, and given for every open
-// finding: the person deciding it, or the follow-up issue, needs it.
-export const findingSchema = findingFields
-  .extend({ severity: z.enum(SEVERITIES), security: z.boolean(), fix: z.string().trim().min(1).nullable() })
+// finding: the person deciding it, or the follow-up issue, needs it. A security
+// weakness (isSecurity) is recorded fixed only with a test, which may name a
+// gate check: a reason alone leaves it open.
+const recordedFields = findingFields.extend({ severity: z.enum(SEVERITIES), security: z.boolean(), fix: z.string().trim().min(1).nullable() });
+
+function checkRecorded(finding: z.infer<typeof recordedFields>, context: z.RefinementCtx): void {
+  if (finding.status === "open" && finding.fix === null) {
+    context.addIssue({ code: "custom", message: `${finding.id} is open without a suggested fix` });
+  }
+  // isSecurity is what the check and the notes use, so the agent-written `security` flag alone can't dodge this.
+  if (finding.status === "fixed" && finding.test === null && isSecurity(finding)) {
+    context.addIssue({ code: "custom", message: `${finding.id} is a security weakness recorded fixed without a test: name its test or gate check, or leave it open with its suggested fix` });
+  }
+  if (finding.security && finding.severity !== "warning") {
+    context.addIssue({ code: "custom", message: `${finding.id} is a security weakness: grade it warning, not ${finding.severity}` });
+  }
+  if (finding.severity === "advisory" && /security/i.test(finding.lens)) {
+    context.addIssue({ code: "custom", message: `${finding.id}'s lens names security, so it's a security weakness: grade it warning, not advisory` });
+  }
+}
+
+export const findingSchema = recordedFields.strict().superRefine(checkOutcome).superRefine(checkRecorded);
+
+// A finding as `record` is handed it: the above, and two fields only the security record uses and the ledger never
+// stores. `policy` is the one-sentence rule that now holds for a security weakness; `repeats` is the number of the
+// entry (`0003`) triage judged the finding repeats, for a repeat worded differently from the entry.
+const inputFindingSchema = recordedFields
+  .extend({ policy: z.string().trim().min(1).nullable().optional(), repeats: z.string().regex(/^\d{4,}$/, "repeats is an entry number such as 0003").optional() })
   .strict()
   .superRefine(checkOutcome)
-  .superRefine((finding, context) => {
-    if (finding.status === "open" && finding.fix === null) {
-      context.addIssue({ code: "custom", message: `${finding.id} is open without a suggested fix` });
-    }
-    if (finding.security && finding.severity !== "warning") {
-      context.addIssue({ code: "custom", message: `${finding.id} is a security weakness: grade it warning, not ${finding.severity}` });
-    }
-    if (finding.severity === "advisory" && /security/i.test(finding.lens)) {
-      context.addIssue({ code: "custom", message: `${finding.id}'s lens names security, so it's a security weakness: grade it warning, not advisory` });
-    }
-  });
+  .superRefine(checkRecorded);
 
 // A finding as stored. A ledger recorded before `severity` existed has none,
 // nor a `fix`, and still parses, so check, accept, report and latest read it;
@@ -186,6 +228,9 @@ export const isSecurity = (finding: Finding) =>
 // finding whatever its grade.
 const isBlocking = (finding: Finding) => finding.status === "open" && (severityOf(finding) !== "advisory" || isSecurity(finding));
 
+// An agent type name, with the optional plugin namespace (plugin:agent). No dot: www.example would autolink in the PR body.
+const reviewerAgentSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?::[A-Za-z0-9][A-Za-z0-9_-]{0,63})?$/, "reviewerAgent is an agent type name");
+
 // What the skill hands to `record`: the key and the HEAD `scripts/review.sh
 // prepare` printed when the last round started, from the patch its reviewers
 // read; how many rounds ran; and every finding this run raised, with its
@@ -197,7 +242,12 @@ export const reviewInputSchema = z
     reviewedKey: z.string().min(1),
     reviewedHead: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/, "reviewedHead is the commit id prepare printed"),
     rounds: z.number().int().min(1),
-    findings: z.array(findingSchema),
+    // The agent type that read the diff (pre-push-reviewer, or the one that
+    // stood in for it), so the report and the notes show who reviewed.
+    reviewerAgent: reviewerAgentSchema.optional(),
+    // The number of the PR the branch has, when there is one, for the security record's entries. Not kept in the ledger.
+    pr: z.number().int().positive().optional(),
+    findings: z.array(inputFindingSchema),
   })
   .strict()
   .superRefine((input, context) => {
@@ -226,6 +276,7 @@ export const ledgerSchema = z
     head: z.string().min(1),
     recordedAt: z.string().min(1),
     rounds: z.number().int().min(1),
+    reviewerAgent: reviewerAgentSchema.optional(),
     findings: z.array(storedFindingSchema),
     // The highest id any review of the branch had used when this one was
     // recorded, so a review that found nothing still holds the ids taken.
@@ -349,7 +400,8 @@ export function reviewPatch(cwd: string, base: string, head: string = headCommit
     if (binary(before) && !absent(after) && !binary(after) && !emptied) {
       throw new Error(`${file}: the branch turns a binary file (or UTF-16 or UTF-32 text) into text, which git shows only as "Binary files differ", so the reviewers couldn't read the text. Add the text at a new path instead.`);
     }
-    if (!binary(before) && !binary(after)) {
+    // Not for a deleted or emptied file either: the old text is on main and the new side has none.
+    if (!absent(after) && !emptied && !binary(before) && !binary(after)) {
       throw new Error(`${file}: a diff attribute marks this text file binary, so the reviewers couldn't read its change. Remove the attribute.`);
     }
   }
@@ -449,6 +501,34 @@ function writeLedger(cwd: string, ledger: Ledger): void {
   renameSync(temporary, path);
 }
 
+// Which security entry each of a ledger's findings was recorded against, kept beside the ledger (`<key>.entries`, not
+// `.json`, so no reader of ledgers sees it) and not in it, so the ledger is as before. `accept` reads it: a finding matched
+// to an entry through `repeats` in other words, or to a fixed entry, can't be found again from its own text.
+const entriesPath = (cwd: string, key: string) => join(ledgerDir(cwd), `${key}.entries`);
+
+function writeEntryMap(cwd: string, key: string, entries: Record<string, string>): void {
+  const path = entriesPath(cwd, key);
+  // Nothing recorded against an entry: no file, and none left over from an earlier record of this diff.
+  if (Object.keys(entries).length === 0) {
+    rmSync(path, { force: true });
+    return;
+  }
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(entries)}\n`, { mode: 0o600 });
+  renameSync(temporary, path);
+}
+
+// The entry id `findingId` was recorded against, or undefined when unknown (an older record, or none written).
+function readEntryMap(cwd: string, key: string, findingId: string): string | undefined {
+  try {
+    const entries: unknown = JSON.parse(readFileSync(entriesPath(cwd, key), "utf8"));
+    const found = (entries as Record<string, unknown>)[findingId];
+    return typeof found === "string" && /^\d{4,}$/.test(found) ? found : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Run `change` holding the review folder's lock, so two writers (a `record`
 // and an `accept`) can't interleave. One lock for every key, not one per key:
 // a record reads every review of the branch for the ids taken (takenIds), so a
@@ -538,15 +618,27 @@ export function takenIds(cwd: string, base: string, head: string = headCommit(cw
 // person who read a report before a review was recorded again can't accept a
 // different finding by its id. (A rebase or an amend leaves the branch's
 // earlier commits behind, and their ids with them, unless the diff is the same.)
+//
+// Once the ledger is written, every security finding recorded fixed or open also
+// goes to the security record (recordSecurity), under the same lock. That can't
+// fail the record: the ledger is what the gate checks, so a problem writing
+// entries comes back through `onSecurity` as warnings. `slug` is the repository
+// the entries name a PR of.
 export function recordReview(
   cwd: string,
   base: string,
   input: ReviewInput,
   now: Date = new Date(),
   taken: typeof takenIds = takenIds,
+  { slug = REPO_SLUG, onSecurity }: { slug?: string; onSecurity?: (outcome: SecurityOutcome) => void } = {},
 ): Ledger {
   const parsed = reviewInputSchema.parse(input);
-  const dirty = git(cwd, "status", "--porcelain", "--untracked-files=all");
+  // The security record is local and not code (see security-record.mts): an untracked README, or a symlink put in its
+  // place, isn't a change HEAD fails to vouch for. Tracked changes there still count.
+  const dirty = git(cwd, "status", "--porcelain", "--untracked-files=all")
+    .split("\n")
+    .filter((line) => !/^\?\? \.security(\/|$)/.test(line))
+    .join("\n");
   if (dirty !== "") {
     throw new Error(`the worktree has uncommitted changes, so the review can't vouch for HEAD:\n${dirty}`);
   }
@@ -563,7 +655,9 @@ export function recordReview(
     head,
     recordedAt: now.toISOString(),
     rounds: parsed.rounds,
-    findings: parsed.findings,
+    ...(parsed.reviewerAgent === undefined ? {} : { reviewerAgent: parsed.reviewerAgent }),
+    // The security record's own fields stay out of the ledger, so every reader of it is as before.
+    findings: parsed.findings.map(({ policy: _policy, repeats: _repeats, ...stored }) => stored),
   };
   withLock(cwd, () => {
     const floor = taken(cwd, base, head, key);
@@ -573,13 +667,31 @@ export function recordReview(
     }
     ledger = { ...ledger, lastId: Math.max(floor, highestId(ledger)) };
     writeLedger(cwd, ledger);
+    const security = parsed.findings.filter((finding): finding is typeof finding & { status: "fixed" | "open" } => isSecurity(finding) && (finding.status === "fixed" || finding.status === "open"));
+    const inputs: SecurityInput[] = security.map(({ id, lens, path, summary, status, test, reason, fix, policy, repeats }) => ({
+      id, lens, path, summary, status, test, reason, fix, policy, ...(repeats === undefined ? {} : { repeats }),
+    }));
+    let outcome: SecurityOutcome;
+    try {
+      outcome = recordSecurity(cwd, ledger, inputs, { ...(parsed.pr === undefined ? {} : { pr: parsed.pr }), slug });
+    } catch (error) {
+      outcome = { written: [], repeated: [], entries: {}, warnings: [`the security record couldn't be written: ${(error as Error).message ?? String(error)}`] };
+    }
+    try {
+      writeEntryMap(cwd, key, outcome.entries);
+    } catch (error) {
+      outcome.warnings.push(`couldn't note which entry each finding went to: ${(error as Error).message ?? String(error)}`);
+    }
+    onSecurity?.(outcome);
   });
   return ledger;
 }
 
 // Accept an open finding on the ledger for HEAD's diff, with the person's
-// reason. A finding that isn't open stays as it is.
-export function acceptFinding(cwd: string, base: string, id: string, reason: string): Ledger {
+// reason. A finding that isn't open stays as it is. The security record's entry
+// the finding was recorded against is accepted too if it is open (a fixed one stays, with a warning), and `onSecurity` hears of it (or of why it
+// couldn't be): the acceptance itself stands either way.
+export function acceptFinding(cwd: string, base: string, id: string, reason: string, onSecurity?: (message: string) => void): Ledger {
   if (reason.trim() === "") throw new Error("say why the finding is accepted");
   const key = diffKey(cwd, base);
   return withLock(cwd, () => {
@@ -591,6 +703,14 @@ export function acceptFinding(cwd: string, base: string, id: string, reason: str
     finding.status = "accepted";
     finding.reason = reason.trim();
     writeLedger(cwd, ledgerSchema.parse(ledger));
+    if (isSecurity(finding)) {
+      try {
+        const entry = markAccepted(cwd, finding, reason.trim(), readEntryMap(cwd, key, id), onSecurity);
+        if (entry !== undefined) onSecurity?.(`marked ${entry} accepted`);
+      } catch (error) {
+        onSecurity?.(`couldn't mark the entry accepted: ${(error as Error).message ?? String(error)}`);
+      }
+    }
     return ledger;
   });
 }
@@ -611,12 +731,22 @@ export function checkReview(cwd: string, base: string, env: NodeJS.ProcessEnv = 
   if (git(cwd, "branch", "--show-current") === REAPPLY_BRANCH) {
     // The key's own pins: no renames (a file moved into an Owned folder is
     // still a change elsewhere), no ignored submodules, no relative paths, and
-    // no trimming, so a name starting with a space keeps it.
-    const paths = gitBytes(cwd, ["-c", "diff.relative=false", "diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", base, head])
+    // no trimming, so a name starting with a space keeps it. The raw form, not
+    // just the names, because Apply only adds or overwrites regular files and
+    // never deletes: a deleted Owned file, a symlink or a submodule under an
+    // Owned path is not what a re-Apply writes, and is reviewed.
+    const raw = gitBytes(cwd, ["-c", "diff.relative=false", "diff", "--raw", "--no-renames", "--ignore-submodules=none", "-z", base, head])
       .toString("utf8")
       .split("\0")
-      .filter((path) => path !== "");
-    if (paths.every(isOwnedPath)) {
+      .filter((entry) => entry !== "");
+    const changes: { status: string; mode: string; path: string }[] = [];
+    for (let index = 0; index + 1 < raw.length; index += 2) {
+      const [, mode = "", , , status = ""] = raw[index]!.split(" ");
+      changes.push({ status, mode, path: raw[index + 1]! });
+    }
+    const writtenByApply = (change: { status: string; mode: string; path: string }) =>
+      (change.status === "A" || change.status === "M") && (change.mode === "100644" || change.mode === "100755") && isOwnedPath(change.path);
+    if (changes.length > 0 && changes.every(writtenByApply)) {
       return { ok: true, message: "A Baseline re-Apply that changes only Owned files: the Template's own review covers them." };
     }
   }
@@ -660,7 +790,7 @@ const severityHeadings: Record<Severity, string> = { critical: "Critical", warni
 // happened to it, and the test or reason behind that. A severity no finding
 // has gets no section.
 export function renderReport(ledger: Ledger): string {
-  const header = `Review of ${ledger.branch === "" ? "HEAD" : cell(ledger.branch)} at ${ledger.head.slice(0, 12)}: ${ledger.rounds} round(s), ${ledger.findings.length} finding(s).`;
+  const header = `Review of ${ledger.branch === "" ? "HEAD" : cell(ledger.branch)} at ${ledger.head.slice(0, 12)}: ${ledger.rounds} round(s), ${ledger.findings.length} finding(s), reviewed by ${plainText(ledger.reviewerAgent ?? "an unrecorded agent")}.`;
   if (ledger.findings.length === 0) return `${header}\n\nNo findings.\n`;
   const sections = SEVERITIES.flatMap((severity) => {
     const rows = ledger.findings
@@ -677,9 +807,8 @@ export function renderReport(ledger: Ledger): string {
 
 // The markers around the PR description's `## Review notes`, so the section
 // can be replaced without touching what follows it (`Fixes #`, the footer).
-// They're the pair PR #82's own description used: its request to the
-// Template's Claude Review names the first, and #81's PR names both. The
-// release blog drops HTML comments.
+// The release blog drops HTML comments, so the markers don't reach the published
+// notes.
 export const REVIEW_NOTES_START = "<!-- review-notes -->";
 export const REVIEW_NOTES_END = "<!-- /review-notes -->";
 
@@ -687,12 +816,13 @@ export const REVIEW_NOTES_END = "<!-- /review-notes -->";
 // person accepted, for people reading the PR. Security findings (see
 // isSecurity: graded Warning, a lens naming security, or unmarked) are only
 // counted, so the maintainer knows to wait for the
-// private report. GitHub's reviewers aren't known to read the description, so
+// private report. Claude Review reads the notes' accepted non-security findings on an owner's same-repo PR, but
+// raises a security finding again (the notes only count it), and Copilot isn't known to read them, so
 // a thread one opens on an accepted finding gets the same "Left for the
-// owner." reply as every thread left for the owner (CLAUDE.md), which doesn't
+// owner." reply as every thread left for the owner (docs/PROCESS.md), which doesn't
 // say which thread a security finding is on; the reason stays in the ledger
 // and, for a finding that isn't a security one, in these notes. Empty when
-// none was accepted.
+// none was accepted and the reviewer was the pre-push-reviewer (or unrecorded).
 export function renderReviewNotes(ledger: Ledger): string {
   const accepted = ledger.findings.filter((finding) => finding.status === "accepted");
   // An accepted security finding is a known weakness left as it is, and the
@@ -700,17 +830,19 @@ export function renderReviewNotes(ledger: Ledger): string {
   // (docs/SECURITY.md), and only counted here.
   const security = accepted.filter(isSecurity);
   const listed = accepted.filter((finding) => !security.includes(finding));
-  if (accepted.length === 0) return "";
+  const standIn = ledger.reviewerAgent !== undefined && ledger.reviewerAgent !== "pre-push-reviewer";
+  if (accepted.length === 0 && !standIn) return "";
   const privately =
     security.length === 0
       ? []
       : ["", `${security.length} accepted security finding(s) are left out here and reported privately, as docs/SECURITY.md describes.`];
   const section = (...body: string[]) => [REVIEW_NOTES_START, "## Review notes", ...body, REVIEW_NOTES_END, ""].join("\n");
-  if (listed.length === 0) return section(...privately);
+  const reviewer = standIn ? ["", `Reviewed by ${plainText(ledger.reviewerAgent ?? "")}, not the read-only pre-push-reviewer.`] : [];
+  if (listed.length === 0) return section(...privately, ...reviewer);
   const lines = listed.map(
     (finding) => `- ${plainText(`${finding.path}:${finding.line}`)}: ${plainText(finding.summary)} Accepted: ${plainText(finding.reason ?? "")}`,
   );
-  return section("", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately);
+  return section("", "The local review raised these and they were accepted, not changed:", "", ...lines, ...privately, ...reviewer);
 }
 
 // Which lines of a Markdown text are inside a fenced code block (the fence
@@ -885,7 +1017,7 @@ const USAGE = `Usage: scripts/review.sh <command>
                          the round before printed) the fixes since to <dir>/fixes.patch; print the key, then HEAD
   key                    print the ledger key of HEAD's diff against origin/main
   check [<base>]         the gate's check: exit 1 unless HEAD's diff was reviewed clean
-  record <file>          record a review from JSON ({ reviewedKey, reviewedHead, rounds, findings }); - reads stdin
+  record <file>          record a review from JSON ({ reviewedKey, reviewedHead, rounds, reviewerAgent, pr, findings }); - reads stdin
   accept <id> <reason>   accept an open finding on HEAD's review
   report                 print HEAD's review report
   notes                  print the "## Review notes" section for the PR description
@@ -893,11 +1025,19 @@ const USAGE = `Usage: scripts/review.sh <command>
   body <in> <out>        write to <out> the PR description in <in> (- reads stdin) with its Review notes replaced;
                          <out> is removed first and written only on success
   latest                 print the nearest earlier review of this branch's work as JSON ({} when none)
+  security               list the local security record (.security/ in the main checkout): id, status, lens, path, file
+  repo                   print this repository as OWNER/REPO, for GH_REPO (lib/repo-config.mts's REPO_SLUG)
   next                   print the first finding id this run may use`;
+
+// Why `slug` isn't a repository gh can be told (GH_REPO), or undefined when it is: exactly OWNER/REPO, each
+// part a GitHub name, with nothing around it. The Seed's unfilled owner-and-repo placeholder fails.
+export function repoSlugProblem(slug: string): string | undefined {
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(slug) ? undefined : `REPO_SLUG in lib/repo-config.mts is ${JSON.stringify(slug)}, not OWNER/REPO.`;
+}
 
 // The command line. Returns the exit code: 0 only for a command that did
 // what it was asked, so the gate can't pass on a failure.
-export function main(args: readonly string[], cwd: string = process.cwd(), env: NodeJS.ProcessEnv = process.env): number {
+export function main(args: readonly string[], cwd: string = process.cwd(), env: NodeJS.ProcessEnv = process.env, slug: string = REPO_SLUG): number {
   const [command, ...rest] = args;
   const out = (text: string) => process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
   const fail = (text: string) => {
@@ -940,13 +1080,25 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
       case "record": {
         if (rest[0] === undefined) return fail(USAGE);
         const text = readFileSync(rest[0] === "-" ? 0 : rest[0], "utf8");
-        out(renderReport(recordReview(cwd, mergeBase(cwd), JSON.parse(text) as ReviewInput)));
+        const note = (message: string) => process.stderr.write(`.security: ${message}\n`);
+        const report = renderReport(
+          recordReview(cwd, mergeBase(cwd), JSON.parse(text) as ReviewInput, undefined, undefined, {
+            slug,
+            onSecurity: (outcome) => {
+              const status = new Map(readEntries(cwd).map((entry) => [entry.file, entry.status]));
+              for (const file of outcome.written) note(`wrote ${file} (${status.get(file) ?? "unknown"})`);
+              for (const { finding, entry } of outcome.repeated) note(`${finding} repeats ${entry}, no new entry`);
+              for (const warning of outcome.warnings) note(plainText(warning));
+            },
+          }),
+        );
+        out(report);
         return 0;
       }
       case "accept": {
         const [id, ...reason] = rest;
         if (id === undefined || reason.length === 0) return fail(USAGE);
-        out(renderReport(acceptFinding(cwd, mergeBase(cwd), id, reason.join(" "))));
+        out(renderReport(acceptFinding(cwd, mergeBase(cwd), id, reason.join(" "), (message) => process.stderr.write(`.security: ${message}\n`))));
         return 0;
       }
       case "report":
@@ -980,9 +1132,20 @@ export function main(args: readonly string[], cwd: string = process.cwd(), env: 
         out(ledger === undefined ? "{}" : JSON.stringify(ledger, null, 2));
         return 0;
       }
+      case "security":
+        out(renderSecurityList(readEntries(cwd)));
+        return 0;
       case "next":
         out(`R${takenIds(cwd, mergeBase(cwd)) + 1}`);
         return 0;
+      case "repo": {
+        // gh ignores an empty GH_REPO and falls back to its default repository, so a slug that isn't
+        // OWNER/REPO fails here with a non-zero exit, and the skill stops its command chain on it.
+        const problem = repoSlugProblem(slug);
+        if (problem !== undefined) return fail(problem);
+        out(slug);
+        return 0;
+      }
       default:
         return fail(USAGE);
     }

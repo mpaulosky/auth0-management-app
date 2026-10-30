@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { HIDDEN_ELEMENTS } from "./build.mts";
-import { SANDBOX_SKILLS } from "./skills.mts";
+import { SANDBOX_SKILLS } from "./repo-config.mts";
 
 const sandcastleFile = (path: string) => new URL(`../${path}`, import.meta.url);
 const read = (path: string) => readFileSync(sandcastleFile(path), "utf8");
@@ -267,16 +266,6 @@ describe("prompt shell expansions", () => {
         if (!line.includes("!`")) continue;
         assert.match(line, /^!`git [^`]+`$/, `${prompt}:${number + 1}: ${line}`);
       }
-    });
-  }
-});
-
-// The host refuses a reviewer's PR body for these elements, and the prompt is
-// what tells the reviewer, so it names each one.
-describe("the reviewer prompt's refusals", () => {
-  for (const element of HIDDEN_ELEMENTS) {
-    it(`names the ${element} element the host refuses`, () => {
-      assert.ok(read("review-prompt.md").includes(`<${element}>`));
     });
   }
 });

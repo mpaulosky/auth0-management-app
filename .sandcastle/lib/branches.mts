@@ -38,24 +38,14 @@ export function slugFor(title: string): string {
 // since review-prompt.md passes {{BRANCH}} to the `git diff` it runs in the
 // sandbox, and anyone with push access could name a branch `fix/4-$(...)`.
 export function isIssueBranch(branch: string, issueNumber: number): boolean {
-  return issueBranchPattern(String(issueNumber)).test(branch);
+  return new RegExp(`^(?:${issuePrefixes.join("|")})/${issueNumber}-[a-z0-9]+(?:-[a-z0-9]+)*$`).test(branch);
 }
 
-// feature/, fix/ or hotfix/{issue}-{slug}, where `issue` is a regex source for
-// the issue number: one issue's number, or any number's.
-function issueBranchPattern(issue: string): RegExp {
-  return new RegExp(`^(?:${issuePrefixes.join("|")})/${issue}-[a-z0-9]+(?:-[a-z0-9]+)*$`);
-}
-
-// Whether a branch is one scripts/check-branch-name.sh accepts without --pr:
-// an issue branch for any issue, or chore/{slug}. The sweep follows up on a
-// hand-off PR (#58) only from such a branch, since a branch name reaches a
-// shell in the sandbox, and it keeps the host off dev, preview and dependabot/*.
+// Whether a branch is one scripts/check-branch-name.sh accepts, without --pr: feature/, fix/ or hotfix/{n}-{slug}, or
+// chore/{slug}. The branch of a pull request the owner handed to Sandcastle (lib/follow-up.mts#sweepSubject) has to pass
+// it, because its name reaches a shell the way an issue branch's does ({{BRANCH}} in review-prompt.md, git in the sandbox).
 export function isHandOffBranch(branch: string): boolean {
-  return (
-    issueBranchPattern("[0-9]+").test(branch) ||
-    /^chore\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(branch)
-  );
+  return /^(?:(?:feature|fix|hotfix)\/[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*|chore\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*)$/.test(branch);
 }
 
 // The issue's branch: its existing feature/, fix/ or hotfix/{n}-{slug} branch on the
@@ -79,6 +69,18 @@ export function parseHeads(lsRemote: string): string[] {
     .split("\n")
     .filter(Boolean)
     .map((line) => line.split("\t")[1]!.replace(/^refs\/heads\//, ""));
+}
+
+// The commit that `git ls-remote origin refs/heads/<branch>` printed for exactly
+// that branch, or undefined when it printed none. ls-remote matches refs by their
+// tail, so a branch like a/refs/heads/<branch> comes back too, and can sort
+// before the real one.
+export function headOfRef(lsRemote: string, branch: string): string | undefined {
+  const ref = `refs/heads/${branch}`;
+  return lsRemote
+    .split("\n")
+    .map((line) => line.split(/\s+/))
+    .find((fields) => fields[1] === ref)?.[0] || undefined;
 }
 
 // The remote git operations prepareBranches needs; tests pass a stub.
@@ -117,7 +119,7 @@ export function commitsAhead(branch: string, base: string): number {
 // unshallowed here. Shallow, git can't see that a branch's older history is in
 // main, so `<this commit>..<branch>` lists everything the branch reaches past
 // the cut: the secret scan then read main's whole history as a PR's own, and a
-// fake token in a test on main handed a follow-up pass back (#372). git refuses
+// fake token in a test on main handed a follow-up pass back. git refuses
 // --unshallow in a full clone, so it's only passed to a shallow one.
 export function fetchMain(run: (...args: string[]) => string = git): string {
   const shallow = run("rev-parse", "--is-shallow-repository") === "true";
@@ -157,7 +159,7 @@ function exitStatus(error: unknown): unknown {
 // The live BranchRefs, whose `contains` lib/follow-up-pass.mts also asks
 // whether a PR's head already has main.
 export const originRefs: BranchRefs = {
-  remoteHead: (branch) => git("ls-remote", "origin", `refs/heads/${branch}`).split(/\s/)[0] || undefined,
+  remoteHead: (branch) => headOfRef(git("ls-remote", "origin", `refs/heads/${branch}`), branch),
   localHead: (ref) => {
     try {
       return git("rev-parse", "--verify", "--quiet", `${ref}^{commit}`);

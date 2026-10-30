@@ -3,14 +3,15 @@
 //
 // The sweep (lib/follow-up.mts) decides which PRs need a pass; this module is
 // the pass itself. One pass resets the PR's worktree to its head, gates the
-// head when a check is red to tell a real failure from a flaky one (#79),
+// head when a check is red to tell a real failure from a flaky one,
 // merges main in when the PR needs it, runs the follow-up role to resolve the
 // merge, the PR's bot and owner review threads and any red check the gate
 // doesn't cover, gates and pushes the result, re-runs a flaky check the gate
 // passes, then replies to and resolves the role's verdicts and posts a
-// pass-summary comment. See docs/plans/sandcastle-workflow.md, "Phase 1:
-// Follow-up sweep", and #78's design note (.sandcastle/work/78/design.md) for
-// the step-by-step this module follows.
+// pass-summary comment. See Blazor-Server's docs/plans/sandcastle-workflow.md,
+// "Phase 1: Follow-up sweep", for the step-by-step this module follows. A PR the
+// owner handed off with the sandcastle:follow-up label has no issue: its pass
+// claims the PR itself and the prompt shows the PR's own title and description.
 // ---------------------------------------------------------------------------
 
 import { setTimeout as sleep } from "node:timers/promises";
@@ -26,7 +27,7 @@ import {
   publicErrorText,
   retryOnServerError,
 } from "./build.mts";
-import { claimBuildingLabel, releaseBuildingLabel } from "./building.mts";
+import { claimBuildingLabel, claimPullRequestBuildingLabel, releaseBuildingLabel, releasePullRequestBuildingLabel } from "./building.mts";
 import { runCheckpoint, runGate, tail, type GateRun } from "./checkpoint.mts";
 import {
   BUILDING_LABEL,
@@ -37,20 +38,17 @@ import {
   GATE_COMMENT_LINES,
   GATE_FIXER_ATTEMPTS,
   GIVE_UP_MARKER,
+  SESSION_REPLY_MARKER,
   WORKTREE_TAMPERED_MARKER,
 } from "./config.mts";
-import { UncountedStopError } from "./errors.mts";
-import { isHostReply, issueNumberOf, type CheckState, type PassTarget } from "./follow-up.mts";
+import { TamperedWorktreeError, UncountedStopError } from "./errors.mts";
+import { issueNumberOf, recordApprovedHead, threadStanding, withoutOwnCheck, type CheckState, type PassTarget } from "./follow-up.mts";
 import {
-  bodyEdits,
   commentOnPullRequest,
   failedCheckLogs,
+  followUpPassCount,
   handBack,
   headChecksOf,
-  isCopilot,
-  issueEvents,
-  markerComments,
-  pullRequestText,
   pushAccess,
   replyToReviewThread,
   rerunFailedChecksOnce,
@@ -58,16 +56,16 @@ import {
   reviewThreadsOf,
   signedInHostLogin,
   type HeadCheck,
-  type PullRequestText,
   type ReviewThread,
   type SandcastleIssue,
 } from "./github.mts";
 import { repoGitDir, worktreeLinkProblems } from "./host-safety.mts";
 import { withoutReferences } from "./intake.mts";
-import { runLimits, type RunLimits } from "./limits.mts";
 import { plainText } from "./plain-text.mts";
-import { followUpPromptArgs, gateFixerPromptArgs, type PassBrief } from "./prompts.mts";
-import { approval, ownerCheck, type IsOwner } from "./queue.mts";
+import { runLimits, type RunLimits } from "./limits.mts";
+import { followUpPromptArgs, gateFixerPromptArgs } from "./prompts.mts";
+import { ownerCheck, type IsOwner } from "./queue.mts";
+import { GATE_COMMAND, GATE_COVERED_CHECKS } from "./repo-config.mts";
 import { humanThreadReport, outcomeReport, type HumanThreadEntry, type OutcomeEntry, type OutcomeReport } from "./report.mts";
 import { containsSandboxSecret, sandboxSecrets } from "./sandbox-env.mts";
 import { describeSecretMatch, firstSecretMatch, type SecretMatch } from "./scan.mts";
@@ -86,7 +84,7 @@ const COMMENT_LIMIT = 65_000;
 // each run's own end, where its error is, rather than the end of the whole
 // joined text): a whole CodeQL log can run to megabytes, far past what a
 // prompt should carry, and without the split one run's log could crowd out
-// another's entirely (#79).
+// another's entirely.
 const CI_LOG_LIMIT = 60_000;
 
 // One review thread given to the follow-up role, trimmed to only what it
@@ -102,29 +100,23 @@ export type PromptThread = {
   comments: { author: string | null; body: string }[];
 };
 
+// Whether `comment` is a Claude Code session's: posted under the owner's login (the owner's token, which is the host
+// login or another owner's) and carrying SESSION_REPLY_MARKER, which a session ends every reply with.
+// The marker is checked first, so a comment without it (a bot's, say) costs no owner lookup.
+function isSessionComment(comment: ReviewThread["comments"][number], hostLogin: string, isOwner: IsOwner): boolean {
+  return comment.body.includes(SESSION_REPLY_MARKER) && (comment.author === hostLogin || isOwner(comment.author) === true);
+}
+
 // Sorts a PR's open review threads for the follow-up role (runPass's step
-// 2). A resolved thread is dropped outright. A thread whose first comment's
-// author is a bot goes to the role as "bot". A thread the repository owner
-// opened goes to the role as "owner", unless the last comment by the owner or
-// `hostLogin` is the host's own reply: one by `hostLogin` that opens with
-// FOLLOW_UP_REPLY_MARKER (lib/config.mts) or carries SESSION_REPLY_MARKER.
-// The second is the owner's session, which posts with the host's token, so a
-// hand-off PR's first pass doesn't answer again the threads the session
-// declined (#58). Either means the host already answered the thread and is
-// waiting on the owner, so it's dropped from every list rather than handed to
-// the role again. Comments by anyone else don't count
-// either way, so a stranger can neither hide an owner thread by quoting the
-// marker nor reopen one by replying after the host. A bot thread whose last
-// comment by a bot, the owner or the host is the host's own reply is dropped
-// too: it's open again only because resolving it failed (the pass summary
-// says so) or the owner unresolved it, and either way it's a person's now,
-// not the role's to answer twice. Any other thread,
-// including one with no author at all, goes to `leftForHuman`
-// (lib/report.mts#recordHumanThread records each one). A thread whose first
-// author `isOwner` can't answer for goes to `unknown`, so a pass never
-// decides from partial information: runPass skips the round when `unknown`
-// isn't empty. Inside a kept thread, a comment by neither a bot nor the
-// owner is dropped before the thread reaches the role.
+// 2) by their threadStanding (lib/follow-up.mts), the rule the sweep flags
+// a PR by too. A resolved thread, or one the host has already answered, is
+// dropped outright. A bot's or the repository owner's thread goes to the
+// role as "bot" or "owner". Any other thread, including one with no author
+// at all, goes to `leftForHuman` (lib/report.mts#recordHumanThread records
+// each one). A thread whose first author `isOwner` can't answer for goes to
+// `unknown`, so a pass never decides from partial information: runPass skips
+// the round when `unknown` isn't empty. Inside a kept thread, a comment by
+// neither a bot nor the owner is dropped before the thread reaches the role.
 export function threadsForRole(
   threads: readonly ReviewThread[],
   isOwner: IsOwner,
@@ -133,43 +125,38 @@ export function threadsForRole(
   const forRole: PromptThread[] = [];
   const leftForHuman: ReviewThread[] = [];
   const unknown: ReviewThread[] = [];
-  const hostReply = (comment: ReviewThread["comments"][number] | undefined) => isHostReply(comment, hostLogin);
   for (const thread of threads) {
-    if (thread.resolved) continue;
-    const first = thread.comments[0];
-    let from: PromptThread["from"];
-    if (first?.byBot === true) {
-      const last = thread.comments.findLast(
-        (comment) => comment.byBot || comment.author === hostLogin || isOwner(comment.author) === true,
-      );
-      if (hostReply(last)) continue;
-      from = "bot";
-    } else {
-      const owner = first === undefined ? false : isOwner(first.author);
-      if (owner === undefined) {
+    const standing = threadStanding(thread, isOwner, hostLogin);
+    switch (standing) {
+      case "resolved":
+      case "answered":
+        continue;
+      case "unknown":
         unknown.push(thread);
         continue;
-      }
-      if (!owner) {
+      case "human":
         leftForHuman.push(thread);
         continue;
-      }
-      const last = thread.comments.findLast((comment) => comment.author === hostLogin || isOwner(comment.author) === true);
-      if (hostReply(last)) continue;
-      from = "owner";
+      case "bot":
+      case "owner":
+        forRole.push({
+          threadId: thread.id,
+          from: standing,
+          path: thread.path,
+          line: thread.line,
+          outdated: thread.outdated,
+          // A comment whose author's ownership can't be confirmed is dropped
+          // too: only what's known to be a bot's or the owner's reaches the
+          // role.
+          // A session's comment is under the owner's login, so it isn't the owner's
+          // words either (SESSION_REPLY_MARKER).
+          comments: thread.comments
+            .filter((comment) => !isSessionComment(comment, hostLogin, isOwner))
+            .filter((comment) => comment.byBot || isOwner(comment.author) === true)
+            .map((comment) => ({ author: comment.author, body: comment.body })),
+        });
+        continue;
     }
-    forRole.push({
-      threadId: thread.id,
-      from,
-      path: thread.path,
-      line: thread.line,
-      outdated: thread.outdated,
-      // A comment whose author's ownership can't be confirmed is dropped too:
-      // only what's known to be a bot's or the owner's reaches the role.
-      comments: thread.comments
-        .filter((comment) => comment.byBot || isOwner(comment.author) === true)
-        .map((comment) => ({ author: comment.author, body: comment.body })),
-    });
   }
   return { forRole, leftForHuman, unknown };
 }
@@ -225,17 +212,6 @@ export function parseVerdicts(text: string): { verdicts: ThreadVerdict[]; reject
 // INVALID for one declined.
 export type Resolution = "ADDRESSED" | "WONT_FIX" | "INVALID";
 
-// Which bot threads a pass resolves (#58): every one it answered, as for a
-// Sandcastle PR, or only those Copilot or Claude Review opened and the pass
-// fixed, as for a hand-off PR, whose declined threads stay open for the owner.
-export type ResolveRule = "every-bot-thread" | "fixed-review-threads";
-
-// Whether `login` is Copilot's code-review account or Claude Review's
-// github-actions, with or without "[bot]", case-insensitively.
-export function isReviewBot(login: string | null): boolean {
-  return isCopilot(login) || login?.toLowerCase().replace(/\[bot\]$/, "") === "github-actions";
-}
-
 // One verdict matched to the thread it answers (see threadActions), and how
 // the host resolves it on GitHub: undefined for an owner thread, which the
 // host replies to but never resolves.
@@ -249,14 +225,10 @@ export type ThreadAction = { thread: PromptThread; verdict: ThreadVerdict; resol
 // 12 relies on `actions` holding at most one entry per thread). `resolve` is
 // ADDRESSED for "fixed" or "outdated", WONT_FIX for "declined" (INVALID
 // instead when the verdict's `invalid` is set), and always undefined for an
-// owner thread. Under "fixed-review-threads" (#58, #54's decline rule), a bot
-// thread is resolved only when isReviewBot opened it (its first comment, which
-// threadsForRole always keeps) and the verdict is "fixed"; any other gets a
-// reply and stays open for the owner.
+// owner thread.
 export function threadActions(
   verdicts: readonly ThreadVerdict[],
   given: readonly PromptThread[],
-  rule: ResolveRule = "every-bot-thread",
 ): { actions: ThreadAction[]; ignored: string[] } {
   const byId = new Map(given.map((thread) => [thread.threadId, thread]));
   const answered = new Set<string>();
@@ -269,16 +241,9 @@ export function threadActions(
       continue;
     }
     answered.add(verdict.threadId);
-    actions.push({ thread, verdict, resolve: resolutionFor(thread, verdict, rule) });
+    actions.push({ thread, verdict, resolve: thread.from === "owner" ? undefined : resolutionOf(verdict) });
   }
   return { actions, ignored };
-}
-
-// How `verdict` resolves `thread` under `rule`, if at all (see threadActions).
-function resolutionFor(thread: PromptThread, verdict: ThreadVerdict, rule: ResolveRule): Resolution | undefined {
-  if (thread.from === "owner") return undefined;
-  if (rule === "every-bot-thread") return resolutionOf(verdict);
-  return verdict.verdict === "fixed" && isReviewBot(thread.comments[0]?.author ?? null) ? "ADDRESSED" : undefined;
 }
 
 // How a verdict on a bot thread resolves it (see threadActions).
@@ -293,7 +258,7 @@ const RESOLUTION_WORDS: Record<Resolution, string> = { ADDRESSED: "addressed", W
 
 // Model text the host posts with its <!-- broken, so a reason quoting a host
 // marker can't pass for the host's own comment (as lib/build.mts's
-// designComment does, #228).
+// designComment does).
 function withoutCommentOpeners(text: string): string {
   return text.replaceAll("<!--", BROKEN_COMMENT_OPEN);
 }
@@ -307,7 +272,7 @@ function cutToLimit(text: string): string {
 // FOLLOW_UP_REPLY_MARKER, a first line naming the verdict (and, for a bot
 // thread, the resolution, such as "Resolved as won't fix."), then the reason
 // — through `publicError`, which hides a secret, with its <!-- and every
-// @mention or #123 reference outside code broken — and "Fixed in <commit>"
+// @mention or issue reference outside code broken — and "Fixed in <commit>"
 // when the verdict names one. Cut to fit GitHub's comment limit.
 export function replyBody(action: ThreadAction, publicError: (text: string) => string): string {
   const { verdict, resolve } = action;
@@ -355,16 +320,16 @@ const MERGE_SENTENCES: Record<PassReport["merged"], string[]> = {
 export function passSummaryComment(report: PassReport, publicError: (text: string) => string): string {
   const lines = [`${FOLLOW_UP_MARKER}\nSandcastle's follow-up pass ${report.pass} of ${FOLLOW_UP_PASS_CAP} on this PR.`];
   const pushed =
-    report.pushed === undefined ? "Nothing needed pushing." : `Pushed \`${report.pushed}\`, which passed \`scripts/gate.sh\`.`;
+    report.pushed === undefined ? "Nothing needed pushing." : `Pushed \`${report.pushed}\`, which passed \`${GATE_COMMAND}\`.`;
   lines.push([...MERGE_SENTENCES[report.merged], pushed].join(" "));
   const ci = report.redCi;
   if (ci !== undefined) {
-    if (ci.fix) lines.push("`scripts/gate.sh` was red on the PR's head before this pass.");
+    if (ci.fix) lines.push(`\`${GATE_COMMAND}\` was red on the PR's head before this pass.`);
     if (ci.forward.length > 0) {
-      lines.push(`Gave the follow-up role the failed-job logs of these checks, which \`scripts/gate.sh\` doesn't cover: ${checkList(ci.forward)}.`);
+      lines.push(`Gave the follow-up role the failed-job logs of these checks, which \`${GATE_COMMAND}\` doesn't cover: ${checkList(ci.forward)}.`);
     }
     if (ci.rerun.length > 0) {
-      lines.push(`Re-ran the failed jobs of ${checkList(ci.rerun)} once as flaky, since \`scripts/gate.sh\` passes on the PR's head.`);
+      lines.push(`Re-ran the failed jobs of ${checkList(ci.rerun)} once as flaky, since \`${GATE_COMMAND}\` passes on the PR's head.`);
     }
   }
   if (report.actions.length > 0) {
@@ -423,7 +388,7 @@ function checkList(names: readonly string[]): string {
 // or left out of the host's answer, since a check missing from it isn't
 // known to have passed. `expectedHead` is the commit the pass gated
 // (target.headRefOid): the host refuses when the PR's head has moved past it,
-// rather than re-run jobs for a commit the pass never judged (#79).
+// rather than re-run jobs for a commit the pass never judged.
 function stillRedAfterRerun(pr: number, names: readonly string[], host: PassHost, expectedHead: string): string[] {
   const after = new Map(host.rerunFailedChecks(pr, names, expectedHead).map((check) => [check.name, check]));
   return names.filter((name) => {
@@ -446,12 +411,13 @@ function rerunLog(pr: number, names: readonly string[], host: PassHost, log: (li
 }
 
 // The PR hand-back comment for a pass that gave up (runPass's step 4, 9, 10,
-// 11): GIVE_UP_MARKER, why, then the tail of the last gate output or the role's error (when
-// given) in a fence longer than any backtick run in it, and how to re-queue
-// the PR (remove sandcastle:needs-human).
+// 11): GIVE_UP_MARKER on a line of its own (so scripts/watch-pr.sh skips it),
+// why, then the tail of the last gate output or the role's error (when given)
+// in a fence longer than any backtick run in it, and how to re-queue the PR
+// (remove sandcastle:needs-human).
 export function giveUpComment(reason: string, output: string | undefined): string {
   const parts = [
-    `${GIVE_UP_MARKER}\nSandcastle stopped its follow-up passes on this PR: ${reason}. It's labelled \`sandcastle:needs-human\` until a person ` +
+    `Sandcastle stopped its follow-up passes on this PR: ${reason}. It's labelled \`sandcastle:needs-human\` until a person ` +
       "has looked at it.",
   ];
   if (output !== undefined && output.trim() !== "") {
@@ -464,7 +430,7 @@ export function giveUpComment(reason: string, output: string | undefined): strin
     "To have Sandcastle pick the PR up again, remove `sandcastle:needs-human`. That also starts its count of follow-up " +
       "passes again.",
   );
-  return cutToLimit(parts.join("\n\n"));
+  return cutToLimit(`${GIVE_UP_MARKER}\n${parts.join("\n\n")}`);
 }
 
 // What one call to runPass decided or did:
@@ -501,9 +467,21 @@ export function passOutcomeEntry(target: PassTarget, outcome: PassOutcome): Outc
   }
 }
 
+// The prompt's view of the hand-off PR `target`: an issue-shaped record whose number is the PR's, whose title is the PR's
+// and whose body is the PR's description under a note saying it isn't an issue.
+export function handOffIssue(target: PassTarget): SandcastleIssue {
+  if (target.handOff === undefined) throw new Error(`PR #${target.number} was not handed off: it has an issue`);
+  const note =
+    "(This is not an issue. The pull request was handed off to Sandcastle by the repository owner; the text below is the " +
+    `pull request's description, and #${target.number} is the pull request's number.)`;
+  return { number: target.number, title: target.handOff.title, body: `${note}\n\n${target.handOff.body}`, labels: [], comments: [] };
+}
+
 // What runPass needs from outside the pass itself; tests pass a stub. The
 // live wiring sits at the bottom of this module.
 export type PassHost = {
+  // The CI checks scripts/gate.sh reproduces (lib/repo-config.mts#GATE_COVERED_CHECKS).
+  gateCovered: ReadonlySet<string>;
   // branches.mts's originGit.fetch, so the sandbox's createSandbox(branch)
   // checks the PR's head out from its remote-tracking ref.
   fetchBranch(branch: string): void;
@@ -514,19 +492,19 @@ export type PassHost = {
   // lib/github.mts#signedInHostLogin: who the host's replies are posted as.
   hostLogin(): string;
   // FOLLOW_UP_MARKER comments posted since sandcastle:needs-human was last
-  // removed (lib/github.mts#markerComments), counted against
+  // removed (lib/github.mts#followUpPassCount), counted against
   // FOLLOW_UP_PASS_CAP.
   passCount(pr: number): number;
   // git merge-base --is-ancestor, in the main checkout.
   contains(commit: string, ancestor: string): boolean;
   // lib/building.mts#claimBuildingLabel.
   markBuilding(issue: number): boolean;
+  // lib/building.mts#claimPullRequestBuildingLabel: the claim on a hand-off PR, which has no issue to carry it.
+  markPullRequestBuilding(pr: number): boolean;
   // lib/building.mts#releaseBuildingLabel.
   unmarkBuilding(issue: number): void;
-  // A hand-off PR's own text as the pass's brief (#58): lib/github.mts#pullRequestText,
-  // read before the PR's events and body edits, and only when the owner's
-  // sandcastle:follow-up still approves it. Throws with the reason otherwise.
-  pullRequestBrief(pr: number): PullRequestText;
+  // lib/building.mts#releasePullRequestBuildingLabel.
+  unmarkPullRequestBuilding(pr: number): void;
   createSandbox(branch: string): Promise<sandcastle.Sandbox>;
   // lib/host-safety.mts's worktree-tamper check, as lib/build.mts#BuildHost
   // already exposes it.
@@ -535,7 +513,7 @@ export type PassHost = {
   // from `base` to `commit` publish, against one of the sandbox's secrets or
   // a token shape, or undefined when nothing matches. Carries only where the
   // match sits and what kind it is, never the matched text, so logging or
-  // reporting it never risks the secret itself (#324).
+  // reporting it never risks the secret itself.
   leaksSecret(base: string, commit: string): SecretMatch | undefined;
   // A plain push of the gated commit to the PR's branch, retried on a
   // GitHub server error the way lib/build.mts#publish's push is.
@@ -546,7 +524,7 @@ export type PassHost = {
   // sweep read (lib/follow-up.mts#SweepPullRequest.checks) may be stale by
   // the time a pass claims the PR (lib/github.mts#headChecksOf). The head the
   // checks were read from travels with them, so a caller can tell a race from
-  // a settled read (#79) rather than decide red CI from a commit it never
+  // a settled read rather than decide red CI from a commit it never
   // gated.
   checks(pr: number): { headRefOid: string; checks: HeadCheck[] };
   // `gh run rerun --failed` for the run(s) backing each of `checkNames`
@@ -556,7 +534,7 @@ export type PassHost = {
   // to finish, since that would hold the issue's building label, and the
   // whole host, for as long as CI takes (lib/github.mts#rerunFailedChecksOnce).
   // `expectedHead` is the commit the pass gated: the host refuses when the
-  // PR's head has moved past it (#79), rather than re-run a commit the pass
+  // PR's head has moved past it, rather than re-run a commit the pass
   // never judged.
   rerunFailedChecks(pr: number, checkNames: readonly string[], expectedHead: string): CheckState[];
   // `gh run view --log-failed` for the run(s) backing each of `checkNames`
@@ -565,7 +543,7 @@ export type PassHost = {
   // `expectedHead` is checked the same way rerunFailedChecks' is. `limit`,
   // when given, keeps each run's own section to an even share of it, so one
   // run's log can't crowd another's out when the joined text is cut to fit a
-  // prompt (#79).
+  // prompt.
   failedCheckLog(pr: number, checkNames: readonly string[], expectedHead: string, limit?: number): string;
   // lib/github.mts#replyToReviewThread.
   replyToThread(threadId: string, body: string): void;
@@ -573,6 +551,8 @@ export type PassHost = {
   resolveThread(threadId: string): void;
   // lib/github.mts#commentOnPullRequest.
   commentOnPullRequest(pr: number, body: string): void;
+  // Records `head`, which the pass pushed, as a head of the hand-off PR the owner approved (lib/follow-up.mts#approvedHeadComment).
+  recordApprovedHead(pr: number, head: string): void;
   // lib/github.mts#handBack({ kind: "pr", number: pr }, "sandcastle:needs-human", reason, body).
   handBack(pr: number, reason: string, body: string): void;
   // lib/report.mts#humanThreadReport.record.
@@ -587,6 +567,7 @@ export type PassHost = {
 
 // The live PassHost.
 export const livePassHost: PassHost = {
+  gateCovered: new Set(GATE_COVERED_CHECKS),
   fetchBranch: (branch) => originGit.fetch(branch),
   reviewThreads: (pr) => reviewThreadsOf(pr),
   isOwner: ownerCheck(
@@ -594,23 +575,12 @@ export const livePassHost: PassHost = {
     (login) => pushAccess(login),
   ),
   hostLogin: () => signedInHostLogin(),
-  passCount: (pr) => markerComments(pr, "sandcastle:needs-human", FOLLOW_UP_MARKER).length,
+  passCount: (pr) => followUpPassCount(pr),
   contains: (commit, ancestor) => originRefs.contains(commit, ancestor),
   markBuilding: (issue) => claimBuildingLabel(issue),
   unmarkBuilding: (issue) => releaseBuildingLabel(issue),
-  pullRequestBrief: (pr) => {
-    // The text first, then the events and edits, so an edit made before the
-    // text was read shows up below and a stranger's text never passes.
-    const text = pullRequestText(pr);
-    const approved = approval(
-      FOLLOW_UP_LABEL,
-      issueEvents(pr),
-      bodyEdits(pr, undefined, undefined, "pullRequest"),
-      livePassHost.isOwner,
-    );
-    if (!approved.approved) throw new Error(approved.reason);
-    return text;
-  },
+  markPullRequestBuilding: (pr) => claimPullRequestBuildingLabel(pr),
+  unmarkPullRequestBuilding: (pr) => releasePullRequestBuildingLabel(pr),
   createSandbox: (branch) => createCheckedSandbox(branch),
   worktreeProblems: (path) => worktreeLinkProblems(path, repoGitDir()),
   leaksSecret: (base, commit) => firstSecretMatch(base, commit, sandboxSecrets()),
@@ -626,6 +596,7 @@ export const livePassHost: PassHost = {
   replyToThread: (threadId, body) => replyToReviewThread(threadId, body),
   resolveThread: (threadId) => resolveReviewThread(threadId),
   commentOnPullRequest: (pr, body) => commentOnPullRequest(pr, body),
+  recordApprovedHead: (pr, head) => recordApprovedHead(pr, head),
   handBack: (pr, reason, body) => handBack({ kind: "pr", number: pr }, "sandcastle:needs-human", reason, body),
   // A thread left for a person is found again every round a pass looks at
   // its PR, so the run's report lists it once.
@@ -658,7 +629,7 @@ async function sandboxContains(sandbox: Pick<sandcastle.Sandbox, "exec">, commit
 // rethrown.
 async function followUpVerdicts(
   sandbox: sandcastle.Sandbox,
-  brief: PassBrief,
+  issue: SandcastleIssue,
   target: PassTarget,
   forRole: PromptThread[],
   mergeNote: string,
@@ -673,7 +644,7 @@ async function followUpVerdicts(
       "follow-up",
       {
         promptFile: "./.sandcastle/roles/follow-up.md",
-        promptArgs: followUpPromptArgs(brief, target.headRefName, target.number, forRole, mergeNote, ciLog),
+        promptArgs: followUpPromptArgs(issue, target.headRefName, target.number, forRole, mergeNote, ciLog),
       },
       host.limits,
     );
@@ -740,22 +711,16 @@ async function fixesInPush(
   return { kept, unverified };
 }
 
-// Whether `checkName` is a job scripts/gate.sh actually runs: the build and
-// test jobs in ci.yml ("Build Solution", and "Tests: <project>" for each
-// matrix entry) and the lint jobs in lint-markdown.yml ("markdownlint") and
-// lint-yaml.yml ("yamllint"). Every other check on a PR's head, CodeQL's
-// "Analyze" jobs included, isn't: the gate never runs it, so a pass can't
-// tell whether it's a real failure or a flaky one by gating alone (see "Red
-// CI" in docs/plans/sandcastle-workflow.md). ci.yml's "Test Suite" counts
-// as covered too: it only reports the test jobs' results, so it's red exactly
-// when one of them is, and `gh run rerun --failed` re-runs it with them.
-export function isGateCovered(checkName: string): boolean {
-  return GATE_COVERED_CHECKS.has(checkName) || /^Tests: \S/.test(checkName);
+// Whether `checkName` is a job scripts/gate.sh actually runs: one of the
+// `covered` names (the host's gateCovered, from
+// lib/repo-config.mts#GATE_COVERED_CHECKS), each a CI job that runs what the
+// gate does. Every other check on a PR's head (Claude Review's and PR
+// Auto-Merge's jobs, code scanning's) isn't: the gate never runs it, so a
+// pass can't tell whether it's a real failure or a flaky one by gating alone
+// (see "Red CI" in Blazor-Server's docs/plans/sandcastle-workflow.md).
+export function isGateCovered(checkName: string, covered: ReadonlySet<string>): boolean {
+  return covered.has(checkName);
 }
-
-// The check names isGateCovered matches exactly; ci.yml's test matrix jobs
-// ("Tests: <project>") are matched by their prefix.
-const GATE_COVERED_CHECKS = new Set(["Build Solution", "Test Suite", "markdownlint", "yamllint"]);
 
 // What a pass does about a PR's red checks (planPass's `redChecks`),
 // decided from whether `scripts/gate.sh` reproduced a failure on the head
@@ -769,31 +734,27 @@ const GATE_COVERED_CHECKS = new Set(["Build Solution", "Test Suite", "markdownli
 // nothing to re-run or forward until the gate is green), and when there are
 // no red checks at all.
 export type RedCiPlan = { fix: boolean; rerun: string[]; forward: string[] };
-export function planRedCi(gatePassed: boolean, redChecks: readonly CheckState[]): RedCiPlan {
+export function planRedCi(gatePassed: boolean, redChecks: readonly CheckState[], covered: ReadonlySet<string>): RedCiPlan {
   if (!gatePassed) return { fix: true, rerun: [], forward: [] };
   // A check can be listed twice (a status and a check run of one name), but
   // it's re-run or forwarded once.
   const names = [...new Set(redChecks.map((check) => check.name))];
-  return { fix: false, rerun: names.filter(isGateCovered), forward: names.filter((name) => !isGateCovered(name)) };
+  const isCovered = (name: string) => isGateCovered(name, covered);
+  return { fix: false, rerun: names.filter(isCovered), forward: names.filter((name) => !isCovered(name)) };
 }
 
 // Runs one follow-up pass on `target`, a PR the sweep (lib/follow-up.mts)
-// marked as needing one, from `brief`: its issue, or for a hand-off PR the
-// PR's own text (#58). A hand-off PR's pass claims sandcastle:building on the
-// PR itself and resolves only the review bots' threads it fixed. See this
-// module's header and the design note at .sandcastle/work/78/design.md for the step-by-step: reset
-// the PR's worktree to its head, merge main in when the PR needs it, run the
+// marked as needing one, for its issue or, for a hand-off PR, for the PR itself. See this module's header for the
+// step-by-step: reset the PR's worktree to its head, merge main in when the PR needs it, run the
 // follow-up role, gate and push, then reply to and resolve the role's
 // verdicts and post the pass summary. `base` is the commit fetchMain()
 // resolved origin/main to this round.
 export async function runPass(
   target: PassTarget,
-  brief: PassBrief,
+  issue: SandcastleIssue,
   base: string,
   host: PassHost = livePassHost,
 ): Promise<PassOutcome> {
-  const claim = brief.kind === "issue" ? brief.issue.number : target.number;
-  const rule: ResolveRule = brief.kind === "issue" ? "every-bot-thread" : "fixed-review-threads";
   const log = (line: string) => host.log(`  PR #${target.number} ${line}`);
   const skip = (reason: string): PassOutcome => {
     log(`isn't given a follow-up pass this round: ${reason}.`);
@@ -809,32 +770,51 @@ export async function runPass(
 
   // Claimed as a build claims it, so two runs never pass on one PR or share
   // its worktree, and a build of the same issue stands aside meanwhile. A
-  // hand-off PR on an issue's branch (feature/{n}-...) shares that branch, and
-  // so its worktree, with a build of #n, whose claim is on the issue: claim
-  // that too, or the two runs never see each other.
-  const claims = [claim];
-  const branchIssue = brief.kind === "pull-request" ? issueNumberOf(target.headRefName) : undefined;
-  if (branchIssue !== undefined && branchIssue !== claim) claims.push(branchIssue);
-  const held: number[] = [];
-  const release = () => {
-    for (const number of held.reverse()) {
+  // hand-off PR has no issue to carry the claim, so the PR carries it.
+  // A hand-off PR on an issue's branch (feature/{n}-…) claims that issue too: a build of the issue pushes to the same
+  // branch (branchFor reuses it), and the gate holds an issue back only for its own label. That claim is best effort:
+  // a branch number need not name an issue (a deleted one, a typo, the PR's own number), and a label read or add that
+  // fails must not keep the PR from being followed up. A build already holding the issue still makes the pass skip.
+  // A failed add is undone at once (claimBuildingLabel); if the undo fails too, the issue stays remembered and
+  // releaseAllBuildingLabels retries it each round, warning if it fails again, until the claim ages out. Startup clears a
+  // stale label from a closed issue too (clearStaleBuildingLabels).
+  type Claim = { name: string; mark: () => boolean; unmark: () => void; bestEffort?: true };
+  const claims: Claim[] =
+    target.handOff !== undefined
+      ? [{ name: `PR #${target.number}`, mark: () => host.markPullRequestBuilding(target.number), unmark: () => host.unmarkPullRequestBuilding(target.number) }]
+      : [{ name: `#${issue.number}`, mark: () => host.markBuilding(issue.number), unmark: () => host.unmarkBuilding(issue.number) }];
+  const branchIssue = target.handOff !== undefined ? issueNumberOf(target.headRefName) : undefined;
+  if (branchIssue !== undefined && branchIssue !== target.number) {
+    claims.push({ name: `#${branchIssue}`, mark: () => host.markBuilding(branchIssue), unmark: () => host.unmarkBuilding(branchIssue), bestEffort: true });
+  }
+  const held: typeof claims = [];
+  const releaseHeld = () => {
+    for (const claim of held.splice(0).reverse()) {
       try {
-        host.unmarkBuilding(number);
+        claim.unmark();
       } catch (error) {
-        console.error(`  ⚠ #${number}: removing ${BUILDING_LABEL} failed, so it's tried again when this run exits: ${error}`);
+        console.error(`  ⚠ ${claim.name}: removing ${BUILDING_LABEL} failed, so it's tried again when this run exits: ${error}`);
       }
     }
   };
   try {
-    for (const number of claims) {
-      if (!host.markBuilding(number)) return skip(`another run marked #${number} ${BUILDING_LABEL}`);
-      held.push(number);
+    for (const claim of claims) {
+      let marked: boolean;
+      try {
+        marked = claim.mark();
+      } catch (error) {
+        if (claim.bestEffort === undefined) throw error;
+        console.error(`  ⚠ ${claim.name}: claiming ${BUILDING_LABEL} failed, so PR #${target.number} is passed on without it: ${error}`);
+        continue;
+      }
+      if (!marked) return skip(`another run marked ${claim.name} ${BUILDING_LABEL}`);
+      held.push(claim);
     }
     const plan = planPass(target, base, host, skip, true);
     if (!("forRole" in plan)) return plan;
-    return await passOnMarkedIssue(target, brief, rule, base, host, plan);
+    return await passOnMarkedIssue(target, issue, base, host, plan);
   } finally {
-    release();
+    releaseHeld();
   }
 }
 
@@ -869,25 +849,28 @@ function planPass(
   // of redChecks entirely: no pass can re-run, forward or gate-fix a failure
   // with nothing behind it to act on, and sending it to the follow-up role
   // anyway would only start a run with no log to fix from, over and over
-  // every sweep (#79). A thread about the same alert, if the owner or a bot
-  // opens one, still reaches the role as a bot or owner thread.
+  // every sweep. A thread about the same alert, if the owner or a bot
+  // opens one, still reaches the role as a bot or owner thread. Sandcastle's
+  // own check is left out as the sweep leaves it out (withoutOwnCheck).
   const checksRead = host.checks(target.number);
   if (checksRead.headRefOid !== target.headRefOid) return skip("its checks were read from a commit other than its head");
-  const checks = checksRead.checks;
+  const checks = withoutOwnCheck(checksRead.checks);
   const redChecks = checks.some((check) => !check.completed) ? [] : checks.filter((check) => !check.green && check.runId !== undefined);
-  // Only a needed merge, a bot thread or a red check starts a pass. One with
-  // only owner threads keeps the sweep's rule that human threads alone don't
-  // start a pass, so an owner thread is answered only alongside one of the
-  // others. A merge is needed when the PR conflicts with main, or, since
+  // A needed merge, a red check, or any thread the role is given (a bot's or
+  // the owner's) starts a pass. An owner thread alone counts: the sweep flags
+  // a PR for one, and skipping it left the PR flagged and skipped every
+  // round with the thread never answered. A thread the host has
+  // already answered isn't in forRole, so it doesn't start another pass. A
+  // merge is needed when the PR conflicts with main, or, since
   // `pull_request` CI builds the head merged with main, when a settled red
   // check sits on a head that's merely behind it: gating the bare head would
   // then judge a commit CI never built, possibly misreading a real failure
-  // main's own change caused as one the gate doesn't reproduce (#79). A head
+  // main's own change caused as one the gate doesn't reproduce. A head
   // that's behind with no red check is left for the sweep's update-branch
   // instead, so a clean PR doesn't spend a counted pass merging every time
   // main moves.
   const needsMerge = !host.contains(target.headRefOid, base) && (target.conflicted || redChecks.length > 0);
-  if (!needsMerge && redChecks.length === 0 && !sorted.forRole.some((thread) => thread.from === "bot")) {
+  if (!needsMerge && redChecks.length === 0 && sorted.forRole.length === 0) {
     return skip("there's nothing a follow-up pass handles yet");
   }
 
@@ -903,11 +886,18 @@ function planPass(
   return { forRole: sorted.forRole, leftForHuman: sorted.leftForHuman.length, needsMerge, redChecks, passCount };
 }
 
+// What the PR is told when a worktree was left in place, with its sandbox,
+// because it no longer points at this repository, under WORKTREE_TAMPERED_MARKER.
+const tamperedWorktreeComment = (branch: string) =>
+  `${WORKTREE_TAMPERED_MARKER}\n` +
+  `Sandcastle stopped: the worktree for \`${branch}\` no longer points at this repository, so it was left for a ` +
+  "person to look at. Don't run git in it.";
+
 // Hands the PR back with sandcastle:needs-human (see giveUpComment), quoting
 // `output` once it's safe to post. `privateDetail`, when given, is added to
 // the reason in the run log and the run report but left out of the PR comment,
 // for what's fine for the run's own records but not for the public PR, such as
-// where the secret scan matched (#324). A hand-back that fails is logged: the
+// where the secret scan matched. A hand-back that fails is logged: the
 // next round's sweep finds the PR again.
 function giveUp(target: PassTarget, host: PassHost, reason: string, output: string | undefined, privateDetail?: string): PassOutcome {
   const recorded = privateDetail === undefined ? reason : `${reason} (${privateDetail})`;
@@ -932,12 +922,11 @@ type PassPlan = {
   passCount: number;
 };
 
-// runPass's work once the issue is marked: everything from creating the
+// runPass's work once the issue (or a hand-off PR) is marked: everything from creating the
 // sandbox to closing it.
 async function passOnMarkedIssue(
   target: PassTarget,
-  brief: PassBrief,
-  rule: ResolveRule,
+  issue: SandcastleIssue,
   base: string,
   host: PassHost,
   { forRole, leftForHuman, needsMerge, redChecks, passCount }: PassPlan,
@@ -949,6 +938,17 @@ async function passOnMarkedIssue(
   try {
     sandbox = await host.createSandbox(branch);
   } catch (error) {
+    // The sandbox and its worktree were left in place for a person, as the
+    // finally below does for a worktree it finds tampered with, so the PR
+    // says so too.
+    if (error instanceof TamperedWorktreeError) {
+      console.error(`  ✗ PR #${target.number}: ${error.message}`);
+      try {
+        host.commentOnPullRequest(target.number, tamperedWorktreeComment(branch));
+      } catch (commentError) {
+        console.error(`  ⚠ PR #${target.number}: commenting on the tampered worktree failed: ${commentError}`);
+      }
+    }
     // Such as a leftover worktree that no longer points at this repository:
     // it fails the same way every round, so it goes to a person.
     return stop("creating the sandbox failed", String(error));
@@ -994,7 +994,7 @@ async function passOnMarkedIssue(
     };
     // A merge main can bring in cleanly happens before the gate decides red
     // CI, since `pull_request` CI builds the head merged with main: gating
-    // the bare head first would then judge a commit CI never built (#79).
+    // the bare head first would then judge a commit CI never built.
     // GitHub already says this PR isn't conflicted, so the merge is expected
     // to be clean; `tryMerge` falls back to the conflict path if it isn't. A
     // conflicted PR can't be merged without the role, so its gate still runs
@@ -1007,7 +1007,7 @@ async function passOnMarkedIssue(
         // GitHub's mergeability can be stale by the time this pass fetches
         // main: the conflict is real, but the worktree it leaves behind is
         // mid-merge, with conflict markers and no commit at all. Gating that
-        // tree would judge nonsense (#259), so abort back to the bare head
+        // tree would judge nonsense, so abort back to the bare head
         // and fall through to the conflicted-PR order below: gate the head,
         // then merge after, leaving the conflict for the follow-up role.
         const abort = await sandbox.exec("git merge --abort");
@@ -1024,9 +1024,9 @@ async function passOnMarkedIssue(
     let headGate: GateRun | undefined;
     let redCi: RedCiPlan = { fix: false, rerun: [], forward: [] };
     if (redChecks.length > 0) {
-      headGate = await runGate(sandbox);
-      redCi = planRedCi(headGate.passed, redChecks);
-      log(`has ${redChecks.length} red check(s), and \`scripts/gate.sh\` ${headGate.passed ? "passes" : "fails"} on its head`);
+      headGate = await runGate(sandbox, { base });
+      redCi = planRedCi(headGate.passed, redChecks, host.gateCovered);
+      log(`has ${redChecks.length} red check(s), and \`${GATE_COMMAND}\` ${headGate.passed ? "passes" : "fails"} on its head`);
     }
     let ciLog: string | undefined;
     if (redCi.forward.length > 0) {
@@ -1034,7 +1034,7 @@ async function passOnMarkedIssue(
         ciLog = host.failedCheckLog(target.number, redCi.forward, target.headRefOid, CI_LOG_LIMIT);
       } catch (error) {
         // Nothing has run or pushed yet, so there's nothing of this pass's to
-        // lose by giving up here (#79): a GitHub API error, a rate limit, or
+        // lose by giving up here: a GitHub API error, a rate limit, or
         // the PR's head having moved since redChecks was read.
         return stop(`reading the failed-job log of ${checkList(redCi.forward)} failed`, String(error));
       }
@@ -1052,7 +1052,7 @@ async function passOnMarkedIssue(
     let verdicts: ThreadVerdict[] = [];
     const roleRuns = merged === "conflicts" || forRole.length > 0 || ciLog !== undefined;
     if (roleRuns) {
-      const role = await followUpVerdicts(sandbox, brief, target, forRole, mergeNote, ciLog, host, stop);
+      const role = await followUpVerdicts(sandbox, issue, target, forRole, mergeNote, ciLog, host, stop);
       if (!Array.isArray(role)) return role;
       verdicts = role;
       log("follow-up finished");
@@ -1074,13 +1074,13 @@ async function passOnMarkedIssue(
         gate: async () => {
           const known = unchangedGate;
           unchangedGate = undefined;
-          return known ?? (await runGate(sandbox));
+          return known ?? (await runGate(sandbox, { base }));
         },
         fix: (at, gateOutput) =>
           runRoleInSandbox(
             sandbox,
             "gate-fixer",
-            { promptFile: "./.sandcastle/roles/gate-fixer.md", promptArgs: gateFixerPromptArgs(brief, branch, at, gateOutput) },
+            { promptFile: "./.sandcastle/roles/gate-fixer.md", promptArgs: gateFixerPromptArgs(issue, branch, at, gateOutput) },
             host.limits,
           ),
         uncounted: (error) => error instanceof UncountedStopError,
@@ -1093,7 +1093,7 @@ async function passOnMarkedIssue(
     // each and the quoted output says which.
     if (!gate.passed || gate.head === undefined) {
       return stop(
-        `\`scripts/gate.sh\` didn't pass on a known, clean commit after ${GATE_FIXER_ATTEMPTS} gate-fixer attempts: it's ` +
+        `\`${GATE_COMMAND}\` didn't pass on a known, clean commit after ${GATE_FIXER_ATTEMPTS} gate-fixer attempts: it's ` +
           "red, the worktree isn't clean, or HEAD moved while it ran",
         gate.output,
       );
@@ -1110,7 +1110,7 @@ async function passOnMarkedIssue(
     if (gated !== target.headRefOid) {
       // The push is public, and the sandbox holds the Claude token or API
       // key. The comment doesn't say where the secret is: the PR is public too.
-      // The log and the run report do (#324), since the location names no
+      // The log and the run report do, since the location names no
       // part of the secret, and the runner is the only holder of the commit.
       const leak = host.leaksSecret(base, gated);
       if (leak !== undefined) {
@@ -1158,15 +1158,27 @@ async function passOnMarkedIssue(
       }
     }
 
+    // The owner approved the head the pass started from, so the head it pushed is recorded as approved or the next sweep
+    // would find a commit nobody vouched for. A failed record leaves the PR unapproved until the owner removes and re-adds the label.
+    const unrecorded: string[] = [];
+    if (pushed !== undefined && target.handOff !== undefined) {
+      try {
+        host.recordApprovedHead(target.number, pushed);
+      } catch (error) {
+        log(`couldn't record ${pushed} as approved: ${error}`);
+        unrecorded.push(`recording the pushed head as approved, so the owner has to remove and add ${FOLLOW_UP_LABEL} again before the PR is followed up`);
+      }
+    }
+
     // Replied to and resolved before the red-CI re-run is decided, so a
     // give-up below for a check still red after its re-run never throws the
-    // role's verdicts away unanswered (#79): the push, if any, has already
+    // role's verdicts away unanswered: the push, if any, has already
     // landed, so there's nothing left to lose by answering threads first.
-    const matched = threadActions(verdicts, forRole, rule);
+    const matched = threadActions(verdicts, forRole);
     const { kept: actions, unverified } = await fixesInPush(sandbox, matched.actions, { gated, head: target.headRefOid, base, hostMerge });
     if (unverified.length > 0) log(`left ${unverified.length} "fixed" verdict(s) unanswered: their commit isn't one this pass added`);
     const { ignored } = matched;
-    const failedWrites = answerThreads(actions, host, log);
+    const failedWrites = [...unrecorded, ...answerThreads(actions, host, log)];
 
     // A push starts CI afresh on the new head, which is as good as a re-run,
     // so only a head the pass left as it was gets its flaky checks re-run.
@@ -1182,7 +1194,7 @@ async function passOnMarkedIssue(
       }
       if (stillRed.length > 0) {
         return stop(
-          `\`scripts/gate.sh\` passes on the head, but ${checkList(stillRed)} stayed red after its one re-run as flaky`,
+          `\`${GATE_COMMAND}\` passes on the head, but ${checkList(stillRed)} stayed red after its one re-run as flaky`,
           rerunLog(target.number, stillRed, host, log, target.headRefOid),
         );
       }
@@ -1195,7 +1207,7 @@ async function passOnMarkedIssue(
     // check either: nothing re-runs a forwarded check the way a push or
     // `gh run rerun --failed` does, so the next sweep would only find the
     // same red check and run the role the same way again, over and over
-    // until FOLLOW_UP_PASS_CAP (#79). Giving up now, rather than reporting
+    // until FOLLOW_UP_PASS_CAP. Giving up now, rather than reporting
     // "passed", stops that at once instead of after two wasted repeats.
     if (ciLog !== undefined && forRole.length === 0 && merged !== "conflicts" && pushed === undefined) {
       return stop(`the follow-up role committed nothing for the forwarded failed-job log of ${checkList(redCi.forward)}`);
@@ -1231,11 +1243,7 @@ async function passOnMarkedIssue(
     if (problems.length > 0) {
       console.error(`  ✗ PR #${target.number}: left ${sandbox.worktreePath} and its sandbox in place: ${problems.join("; ")}`);
       try {
-        host.commentOnPullRequest(
-          target.number,
-          `${WORKTREE_TAMPERED_MARKER}\nSandcastle stopped: the worktree for \`${branch}\` no longer points at this repository, so it was left for a ` +
-            "person to look at. Don't run git in it.",
-        );
+        host.commentOnPullRequest(target.number, tamperedWorktreeComment(branch));
       } catch (error) {
         console.error(`  ⚠ PR #${target.number}: commenting on the tampered worktree failed: ${error}`);
       }
@@ -1273,10 +1281,9 @@ function answerThreads(actions: readonly ThreadAction[], host: PassHost, log: (l
 
 // main.mts's pass phase: fetches every target's branch serially first (a
 // failed fetch skips that PR for the round, as prepareBranches'
-// lib/branches.mts#fetchMain-style fetches do), then runs runPass with
-// Promise.allSettled for each PR whose issue is in `issues` and each hand-off
-// PR whose brief host.pullRequestBrief reads (#58; one it can't read is
-// skipped before its fetch), logging each outcome. A rejection is logged and the PR is swept again next round. Once
+// lib/branches.mts#fetchMain-style fetches do), then runs runPass for each
+// PR whose issue is in `issues` (a hand-off PR needs none) with Promise.allSettled, logging each
+// outcome. A rejection is logged and the PR is swept again next round. Once
 // every pass has settled, the first UncountedStopError among them (a usage
 // or time-budget stop from the follow-up role or the gate-fixer) is
 // rethrown, so main.mts's catch ends the run cleanly rather than the round
@@ -1293,25 +1300,14 @@ export async function followUpPassPhase(
 ): Promise<PassOutcome[]> {
   const byNumber = new Map(issues.map((issue) => [issue.number, issue]));
   const outcomes: PassOutcome[] = targets.map(() => ({ kind: "skipped", reason: "not started" }));
-  const started: { index: number; brief: PassBrief }[] = [];
+  const started: { index: number; issue: SandcastleIssue }[] = [];
   // Serially, because concurrent fetches contend on the same ref lock.
   for (const [index, target] of targets.entries()) {
-    let brief: PassBrief;
-    if (target.issueNumber === undefined) {
-      try {
-        brief = { kind: "pull-request", pr: host.pullRequestBrief(target.number) };
-      } catch (error) {
-        host.log(`  ⚠ PR #${target.number}: couldn't read its brief, so it's passed on next round: ${error}`);
-        outcomes[index] = { kind: "skipped", reason: "couldn't read its brief" };
-        continue;
-      }
-    } else {
-      const issue = byNumber.get(target.issueNumber);
-      if (issue === undefined) {
-        outcomes[index] = { kind: "skipped", reason: `#${target.issueNumber} isn't in this round's queue` };
-        continue;
-      }
-      brief = { kind: "issue", issue };
+    // A hand-off PR has no issue in the queue: the prompt sees the PR itself.
+    const issue = target.handOff !== undefined ? handOffIssue(target) : byNumber.get(target.issueNumber);
+    if (issue === undefined) {
+      outcomes[index] = { kind: "skipped", reason: `#${target.issueNumber} isn't in this round's queue` };
+      continue;
     }
     try {
       host.fetchBranch(target.headRefName);
@@ -1320,10 +1316,10 @@ export async function followUpPassPhase(
       outcomes[index] = { kind: "skipped", reason: `fetching ${target.headRefName} failed` };
       continue;
     }
-    started.push({ index, brief });
+    started.push({ index, issue });
   }
 
-  const settled = await Promise.allSettled(started.map(({ index, brief }) => runPass(targets[index]!, brief, base, host)));
+  const settled = await Promise.allSettled(started.map(({ index, issue }) => runPass(targets[index]!, issue, base, host)));
   let stop: UncountedStopError | undefined;
   for (const [position, result] of settled.entries()) {
     const { index } = started[position]!;

@@ -1,82 +1,70 @@
 // ---------------------------------------------------------------------------
-// Follow-up-only run
+// The follow-up-only run (SANDCASTLE_MODE=follow-up)
 //
-// A run started with SANDCASTLE_MODE=follow-up (#53) does the sweep and the
-// follow-up passes once, then exits: no intake, no builds, no new rounds. It
-// runs beside a build, in its own concurrency group, so a review or a CI
-// result is answered within minutes rather than after the build. The two runs
-// stay off each other's PRs through sandcastle:building: a pass claims it on
-// the PR's issue, or on a hand-off PR itself (#58), and the sweep skips a PR
-// whose claim is held (lib/follow-up.mts#sweepSkipReason).
+// A full run that is busy building an issue answers a review or a red check
+// on its PRs only after the build. A follow-up-only run does the sweep and the
+// follow-up passes once, then exits: no intake, no builds, no rounds, so it
+// answers a PR in minutes while a full run is still building. It runs in its
+// own concurrency group, and the two stay off each other's PRs through
+// sandcastle:building (lib/follow-up.mts#sweepSubject: the issue's label, or a hand-off PR's own).
 // ---------------------------------------------------------------------------
 
 import { fetchMain } from "./branches.mts";
-import { followUpPassPhase, type PassOutcome } from "./follow-up-pass.mts";
-import { liveFollowUpGitHub, sweepPullRequests, type FollowUpGitHub, type PassTarget, type SweepResult } from "./follow-up.mts";
+import { followUpPassPhase } from "./follow-up-pass.mts";
+import {
+  followUpPhase,
+  liveFollowUpGitHub,
+  sweepPullRequests,
+  type FollowUpGitHub,
+  type PassTarget,
+  type SweepResult,
+} from "./follow-up.mts";
 import type { SandcastleIssue } from "./github.mts";
 import { loadQueue, startQueueRound } from "./queue.mts";
-import { outcomeReport, unlabelledPrReport, waitingPrReport } from "./report.mts";
 
-// What followUpOnlyRun needs; tests pass a stub that records calls.
+// What the follow-up-only run needs from the rest of Sandcastle; tests pass a stub.
 export type FollowUpRunSteps = {
   startRound(): void;
-  sweep(): SweepResult & { failed: readonly number[] };
+  // The sweep, with the hand-back of closed PRs off. A failed sweep gives an empty result.
+  sweep(): SweepResult;
   fetchMain(): string;
-  queue(): readonly SandcastleIssue[];
-  passes(targets: readonly PassTarget[], issues: readonly SandcastleIssue[], base: string): Promise<PassOutcome[]>;
-  log(line: string): void;
+  queue(): SandcastleIssue[];
+  runPasses(targets: readonly PassTarget[], issues: readonly SandcastleIssue[], base: string): Promise<unknown>;
 };
 
-// The steps with `github` behind the sweep, the same calls main.mts makes in a
-// full run's round. The sweep leaves closed PRs' hand-backs to full runs
-// (handBackClosed false), so two runs can't both hand back one issue. Its set of
-// PRs that have carried review:claude starts empty, since this run sweeps once.
-// It doesn't go through followUpPhase: that swallows a failed sweep because the
-// next round retries it, and this run has no next round, so a failure must
-// reach main.mts and end the run red rather than log "no PR needs a pass". The
-// sweep catches a failure on one PR itself, so the numbers of those PRs come
-// back in `failed` for followUpOnlyRun to return, after the passes.
-export function followUpRunSteps(github: FollowUpGitHub): FollowUpRunSteps {
-  return {
-    startRound: () => startQueueRound(),
-    sweep: () => {
-      const failed: number[] = [];
-      const result = sweepPullRequests(
-        github,
-        console.log,
-        Date.now(),
-        outcomeReport,
-        waitingPrReport,
-        unlabelledPrReport,
-        new Set<number>(),
-        false,
-        (pr) => void failed.push(pr),
-      );
-      return { ...result, failed };
-    },
-    fetchMain: () => fetchMain(),
-    queue: () => loadQueue(),
-    passes: (targets, issues, base) => followUpPassPhase(targets, issues, base),
-    log: (line) => console.log(line),
-  };
+// The follow-up-only run's sweep. It leaves the hand-back of a closed PR's issue to the full run beside this one:
+// two runs doing it would comment twice, and this run has no build to start from the issue afterwards. Takes
+// GitHub and the log as parameters so a test can pin that it never reads the closed PRs.
+export function liveSweep(
+  github: FollowUpGitHub = liveFollowUpGitHub,
+  log: (line: string) => void = console.log,
+): SweepResult {
+  return followUpPhase(() => sweepPullRequests(github, log, undefined, undefined, undefined, { handBackClosed: false }));
 }
 
 // The live steps.
-export const liveFollowUpRunSteps: FollowUpRunSteps = followUpRunSteps(liveFollowUpGitHub);
+export const liveFollowUpRunSteps: FollowUpRunSteps = {
+  startRound: startQueueRound,
+  sweep: () => liveSweep(),
+  fetchMain: () => fetchMain(),
+  queue: loadQueue,
+  runPasses: followUpPassPhase,
+};
 
-// The sweep, then the follow-up passes it found, once. An UncountedStopError
-// from the passes propagates, so main.mts's catch ends the run "stopped", as
-// it does a full run. Returns the PRs the sweep couldn't follow up: this run
-// has no next round to sweep them again, so main.mts records them in the run
-// report and ends the run red, rather than a throw that reads as a crash.
-export async function followUpOnlyRun(steps: FollowUpRunSteps = liveFollowUpRunSteps): Promise<readonly number[]> {
+// Sweeps the open PRs once and runs a follow-up pass on each one that needs it, then returns. It never loops
+// back for a second round: the next scheduled run sweeps again. An UncountedStopError from a pass (the time
+// budget or Claude's usage limit) propagates, and main.mts's catch ends the run cleanly on it.
+export async function followUpOnlyRun(
+  steps: FollowUpRunSteps = liveFollowUpRunSteps,
+  log: (line: string) => void = console.log,
+): Promise<SweepResult> {
   steps.startRound();
-  const { passes, failed } = steps.sweep();
-  if (passes.length === 0) {
-    steps.log("No open PR needs a follow-up pass. Exiting.");
-  } else {
-    const base = steps.fetchMain();
-    await steps.passes(passes, steps.queue(), base);
+  const result = steps.sweep();
+  if (result.passes.length === 0) {
+    log("Nothing to do: no PR needs a follow-up pass.");
+    return result;
   }
-  return failed;
+  const base = steps.fetchMain();
+  await steps.runPasses(result.passes, steps.queue(), base);
+  return result;
 }

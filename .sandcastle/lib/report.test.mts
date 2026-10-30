@@ -3,13 +3,11 @@ import { describe, it } from "node:test";
 import {
   handBacksJson,
   intakeStopExitCode,
-  unlabelledPrExitCode,
   IntakeStopReport,
   OutcomeReport,
   REPORT_DIR,
   renderSummary,
   targetUrl,
-  UnlabelledPrReport,
   UsageReport,
   WaitingPrReport,
   writeRunReport,
@@ -132,50 +130,6 @@ describe("intakeStopExitCode", () => {
   });
 });
 
-describe("UnlabelledPrReport", () => {
-  it("lists each PR once, with the latest url recorded for it", () => {
-    const report = new UnlabelledPrReport();
-
-    report.record({ pr: 9, url: "https://github.com/o/r/pull/9" });
-    report.record({ pr: 9, url: "https://github.com/o/r/pull/9#again" });
-
-    assert.deepEqual(report.items(), [{ pr: 9, url: "https://github.com/o/r/pull/9#again" }]);
-  });
-
-  it("drops a PR once it's resolved, and ignores one it never recorded", () => {
-    const report = new UnlabelledPrReport();
-    report.record({ pr: 9, url: "https://github.com/o/r/pull/9" });
-    report.record({ pr: 10, url: "https://github.com/o/r/pull/10" });
-
-    report.resolve(9);
-    report.resolve(11);
-
-    assert.deepEqual(report.items(), [{ pr: 10, url: "https://github.com/o/r/pull/10" }]);
-  });
-
-  it("keeps only the PRs still open when told which are", () => {
-    const report = new UnlabelledPrReport();
-    report.record({ pr: 9, url: "https://github.com/o/r/pull/9" });
-    report.record({ pr: 10, url: "https://github.com/o/r/pull/10" });
-
-    report.retain(new Set([10, 11]));
-
-    assert.deepEqual(report.items(), [{ pr: 10, url: "https://github.com/o/r/pull/10" }]);
-  });
-});
-
-// #51: a PR left without review:claude must end the run red, since the owner's
-// PAT means GitHub notifies nobody and the run would otherwise end green.
-describe("unlabelledPrExitCode", () => {
-  it("is 0 when no PR was left without review:claude", () => {
-    assert.equal(unlabelledPrExitCode([]), 0);
-  });
-
-  it("is 1 when any PR was left without review:claude", () => {
-    assert.equal(unlabelledPrExitCode([{ pr: 9, url: "https://github.com/o/r/pull/9" }]), 1);
-  });
-});
-
 // AC: "After a run, .sandcastle/logs/summary.md lists every touched issue and
 // PR with its outcome, the hand-backs with links, PRs waiting on human
 // threads, and a token-usage table by role."
@@ -212,7 +166,6 @@ describe("renderSummary", () => {
       ["backend", usage(5, 6, 7, 8)],
     ]),
     stops: [],
-    unlabelledPrs: [],
   };
 
   it("names the queue and says the run finished", () => {
@@ -281,19 +234,13 @@ describe("renderSummary", () => {
     assert.ok(section.includes("a deleted account"));
   });
 
-  it("lists each PR left without review:claude, linked, so the owner adds it by hand", () => {
-    const summary = renderSummary({ ...fullInput, unlabelledPrs: [{ pr: 9, url: "https://github.com/o/r/pull/9" }] });
+  it("lists a PR waiting only on the owner's reply to answered threads, without a count of people's threads", () => {
+    const summary = renderSummary({ ...fullInput, waitingPrs: [{ pr: 18, threads: 0, answered: 2 }], humanThreads: [] });
 
-    assert.match(summary, /### Pull requests without `review:claude`/);
-    const section = summary.slice(summary.indexOf("### Pull requests without"));
-    assert.ok(section.includes("[PR #9](https://github.com/o/r/pull/9)"));
-    assert.match(section, /add it by hand/);
-  });
-
-  it("leaves out the review-label section when every PR got the label", () => {
-    const summary = renderSummary(fullInput);
-
-    assert.doesNotMatch(summary, /### Pull requests without/);
+    const section = summary.slice(summary.indexOf("### Pull requests waiting on a person"));
+    assert.ok(section.includes(`[PR #18](${targetUrl("o/r", { kind: "pr", number: 18 })})`));
+    assert.match(section, /2 answered threads left open for the owner/);
+    assert.ok(!section.includes("opened by people"));
   });
 
   it("lists each role's token usage with a total row", () => {
@@ -339,14 +286,12 @@ describe("renderSummary", () => {
       humanThreads: [],
       usage: new Map(),
       stops: [],
-      unlabelledPrs: [],
     });
 
     assert.match(summary, /Nothing was touched\./);
     assert.match(summary, /No role ran\./);
     assert.equal((summary.match(/None\./g) ?? []).length, 2);
     assert.ok(!summary.includes("### Intake stops"));
-    assert.ok(!summary.includes("### Pull requests without"));
   });
 
   it("leaves a target unlinked when the repository isn't known", () => {

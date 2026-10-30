@@ -2,26 +2,39 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import type { Sandbox, SandboxRunOptions } from "@ai-hero/sandcastle";
-import { isRoleTimeout, roleOptions, runRoleInSandbox, runWithinLimits, withSharedRules } from "./agents.mts";
+import { isRoleTimeout, roleOptions, uiEnabled, runRoleInSandbox, runWithinLimits, withSharedRules } from "./agents.mts";
 import { UncountedStopError } from "./errors.mts";
 import { RunLimits } from "./limits.mts";
+import { ROLE_AGENTS } from "./repo-config.mts";
 import { usageReport } from "./report.mts";
+import { withUiRole } from "./ui-role-fixture.mts";
 
 const sharedRules = readFileSync(new URL("../roles/shared-rules.md", import.meta.url), "utf8");
 
 describe("roleOptions", () => {
+  it("builds the ui role's options from its ROLE_AGENTS entry, and refuses it when the repo has none", async () => {
+    await withUiRole(true, () => {
+      assert.equal(uiEnabled(), true);
+      assert.equal(roleOptions("ui").name, "ui");
+    });
+    await withUiRole(false, () => {
+      assert.equal(uiEnabled(), false);
+      assert.throws(() => roleOptions("ui"), /no ui entry/);
+    });
+  });
+
   it("names the run after the role and applies its iteration cap", () => {
     const options = roleOptions("tester");
 
     assert.equal(options.name, "tester");
-    assert.equal(options.maxIterations, 3);
+    assert.equal(options.maxIterations, ROLE_AGENTS.tester.maxIterations);
   });
 
   it("runs the role's model at its effort", () => {
     const { command } = roleOptions("scribe").agent.buildPrintCommand({ prompt: "", dangerouslySkipPermissions: true });
 
-    assert.match(command, /--model 'claude-sonnet-5-5'/);
-    assert.match(command, /--effort medium/);
+    assert.match(command, new RegExp(`--model '${ROLE_AGENTS.scribe.model}'`));
+    assert.match(command, new RegExp(`--effort ${ROLE_AGENTS.scribe.effort}`));
   });
 
   it("aborts the run after the role's timeout", () => {
@@ -33,7 +46,7 @@ describe("roleOptions", () => {
       return signal;
     });
 
-    assert.deepEqual(requested, [45 * 60_000]);
+    assert.deepEqual(requested, [ROLE_AGENTS.backend.timeoutMinutes * 60_000]);
     assert.equal(options.signal, signal);
   });
 });
@@ -42,9 +55,9 @@ describe("runRoleInSandbox", () => {
   it("lists a role that ran even when its run fails", async () => {
     const failing = { run: () => Promise.reject(new Error("timed out")) } as unknown as Sandbox;
 
-    await assert.rejects(runRoleInSandbox(failing, "ui", { prompt: "" }), /timed out/);
+    await assert.rejects(runRoleInSandbox(failing, "tester", { prompt: "" }), /timed out/);
 
-    assert.ok(usageReport.totals().has("ui"));
+    assert.ok(usageReport.totals().has("tester"));
   });
 
   it("gives the role's prompt the shared rules alongside its own arguments", async () => {
@@ -61,7 +74,7 @@ describe("runRoleInSandbox", () => {
     assert.deepEqual(runs[0]!.promptArgs, { TASK_ID: "3", SHARED_RULES: sharedRules });
   });
 
-  // #147: a run must stop cleanly at the time budget or Claude's usage limit,
+  // A run must stop cleanly at the time budget or Claude's usage limit,
   // without starting another role.
   it("never calls sandbox.run, and rejects with UncountedStopError, when the limits have already stopped the run", async () => {
     const limits = new RunLimits();

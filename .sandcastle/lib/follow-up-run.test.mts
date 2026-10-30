@@ -1,202 +1,241 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { PR_MARKER } from "./config.mts";
 import { UncountedStopError } from "./errors.mts";
-import type { PassOutcome } from "./follow-up-pass.mts";
-import { followUpOnlyRun, followUpRunSteps, type FollowUpRunSteps } from "./follow-up-run.mts";
-import type { FollowUpGitHub, PassTarget, SweepResult } from "./follow-up.mts";
-import type { SandcastleIssue } from "./github.mts";
+import { FOLLOW_UP_LABEL } from "./config.mts";
+import { approvedHeadComment, type FollowUpGitHub, type PassTarget, type SweepPullRequest, type SweepResult } from "./follow-up.mts";
+import { followUpOnlyRun, liveFollowUpRunSteps, liveSweep, type FollowUpRunSteps } from "./follow-up-run.mts";
+import type { ClosedPullRequest, SandcastleIssue } from "./github.mts";
 
 const target = (number: number): PassTarget => ({
   number,
   id: `PR_${number}`,
-  headRefName: `feature/${number}-add-search`,
+  headRefName: `feature/${number}-x`,
   headRefOid: "a".repeat(40),
   issueNumber: number,
-  reasons: ["it has merge conflicts"],
-  conflicted: true,
+  reasons: ["check build is red"],
+  conflicted: false,
 });
 
-const issues = [{ number: 42 }] as unknown as SandcastleIssue[];
+const issue = (number: number) => ({ number, title: `Issue ${number}` }) as unknown as SandcastleIssue;
 
-// FollowUpRunSteps stubs that record the order of their calls and what the
-// passes step was given.
-function steps(sweep: SweepResult, passes?: (targets: readonly PassTarget[]) => Promise<PassOutcome[]>, failed: readonly number[] = []) {
+// Steps that record every call in order, serving `sweep` and `queue`.
+function stubSteps({
+  sweep = { needsPass: [], passes: [] },
+  queue = [],
+  runPasses,
+}: {
+  sweep?: SweepResult;
+  queue?: SandcastleIssue[];
+  runPasses?: FollowUpRunSteps["runPasses"];
+} = {}) {
   const calls: string[] = [];
-  const logs: string[] = [];
-  const given: { targets: readonly PassTarget[]; issues: readonly SandcastleIssue[]; base: string }[] = [];
-  const stub: FollowUpRunSteps = {
+  const passCalls: { targets: readonly PassTarget[]; issues: readonly SandcastleIssue[]; base: string }[] = [];
+  const steps: FollowUpRunSteps = {
     startRound: () => void calls.push("startRound"),
     sweep: () => {
       calls.push("sweep");
-      return { ...sweep, failed };
+      return sweep;
     },
     fetchMain: () => {
       calls.push("fetchMain");
-      return "origin/main";
+      return "base-sha";
     },
     queue: () => {
       calls.push("queue");
-      return issues;
+      return queue;
     },
-    passes: async (targets, queued, base) => {
-      calls.push("passes");
-      given.push({ targets, issues: queued, base });
-      return passes === undefined ? [] : passes(targets);
-    },
-    log: (line) => void logs.push(line),
+    runPasses:
+      runPasses ??
+      (async (targets, issues, base) => {
+        calls.push("runPasses");
+        passCalls.push({ targets, issues, base });
+      }),
   };
-  return { stub, calls, logs, given };
+  return { steps, calls, passCalls };
 }
 
-// #53: with SANDCASTLE_MODE=follow-up the host runs only the sweep and the
-// passes, once, then exits: no intake, no builds, no new rounds.
 describe("followUpOnlyRun", () => {
-  it("sweeps once, then fetches main, reads the queue and runs the passes the sweep found", async () => {
-    const targets = [target(101), target(102)];
-    const { stub, calls, given } = steps({ needsPass: [101, 102], passes: targets });
+  it("starts a fresh queue round, then sweeps, before anything else", async () => {
+    const { steps, calls } = stubSteps();
 
-    await followUpOnlyRun(stub);
+    await followUpOnlyRun(steps, () => {});
 
-    assert.deepEqual(calls, ["startRound", "sweep", "fetchMain", "queue", "passes"]);
-    assert.deepEqual(given, [{ targets, issues, base: "origin/main" }]);
+    assert.deepEqual(calls.slice(0, 2), ["startRound", "sweep"]);
   });
 
-  it("runs the sweep and the passes once, not once per round", async () => {
-    const { stub, calls } = steps({ needsPass: [101], passes: [target(101)] });
+  it("runs a follow-up pass on each PR the sweep flagged, with the queue and main's head", async () => {
+    const passes = [target(1), target(2)];
+    const queue = [issue(1), issue(2)];
+    const { steps, calls, passCalls } = stubSteps({ sweep: { needsPass: [1, 2], passes }, queue });
 
-    await followUpOnlyRun(stub);
+    await followUpOnlyRun(steps, () => {});
 
-    assert.equal(calls.filter((call) => call === "sweep").length, 1);
-    assert.equal(calls.filter((call) => call === "passes").length, 1);
+    assert.deepEqual(calls, ["startRound", "sweep", "fetchMain", "queue", "runPasses"]);
+    assert.deepEqual(passCalls, [{ targets: passes, issues: queue, base: "base-sha" }]);
   });
 
-  it("exits with a log line, fetching nothing and running no pass, when no PR needs one", async () => {
-    const { stub, calls, logs } = steps({ needsPass: [], passes: [] });
+  it("starts no pass, and fetches nothing, when the sweep flagged no PR", async () => {
+    const { steps, calls } = stubSteps();
 
-    await followUpOnlyRun(stub);
+    await followUpOnlyRun(steps, () => {});
 
     assert.deepEqual(calls, ["startRound", "sweep"]);
-    assert.ok(logs.some((line) => line.includes("No open PR needs a follow-up pass. Exiting.")), logs.join("\n"));
   });
 
-  it("rejects with the UncountedStopError a pass stops with, so the run ends stopped", async () => {
-    const { stub } = steps({ needsPass: [101], passes: [target(101)] }, async () => {
-      throw new UncountedStopError("the time budget has passed");
+  it("says so in the log when there was nothing to answer", async () => {
+    const { steps } = stubSteps();
+    const lines: string[] = [];
+
+    await followUpOnlyRun(steps, (line) => lines.push(line));
+
+    assert.ok(lines.some((line) => /nothing to do|no PR/i.test(line)), lines.join("\n"));
+  });
+
+  it("sweeps and passes once: it never loops back for another round", async () => {
+    const { steps, calls } = stubSteps({ sweep: { needsPass: [1], passes: [target(1)] }, queue: [issue(1)] });
+
+    await followUpOnlyRun(steps, () => {});
+
+    assert.equal(calls.filter((call) => call === "sweep").length, 1);
+    assert.equal(calls.filter((call) => call === "runPasses").length, 1);
+  });
+
+  it("returns the sweep's result", async () => {
+    const sweep = { needsPass: [1], passes: [target(1)] };
+    const { steps } = stubSteps({ sweep, queue: [issue(1)] });
+
+    assert.deepEqual(await followUpOnlyRun(steps, () => {}), sweep);
+  });
+
+  // main.mts's catch ends the run cleanly on this one: the budget or Claude's usage limit.
+  it("lets a stop from a pass reach the caller", async () => {
+    const stop = new UncountedStopError("Claude's usage limit was hit");
+    const { steps } = stubSteps({
+      sweep: { needsPass: [1], passes: [target(1)] },
+      queue: [issue(1)],
+      runPasses: async () => {
+        throw stop;
+      },
     });
 
-    await assert.rejects(followUpOnlyRun(stub), UncountedStopError);
-  });
-
-  it("returns the PRs the sweep couldn't follow up, after the other PRs' passes", async () => {
-    const { stub, calls } = steps({ needsPass: [101], passes: [target(101)] }, undefined, [102]);
-
-    const failed = await followUpOnlyRun(stub);
-
-    assert.deepEqual(failed, [102]);
-    assert.deepEqual(calls, ["startRound", "sweep", "fetchMain", "queue", "passes"]);
-  });
-
-  it("returns the failed PRs when none needs a pass, rather than hiding them", async () => {
-    const { stub, logs } = steps({ needsPass: [], passes: [] }, undefined, [102]);
-
-    const failed = await followUpOnlyRun(stub);
-
-    assert.deepEqual(failed, [102]);
-    assert.ok(logs.some((line) => line.includes("No open PR needs")), logs.join("\n"));
-  });
-
-  it("returns no failed PRs when the sweep followed up every PR", async () => {
-    const { stub } = steps({ needsPass: [101], passes: [target(101)] });
-
-    assert.deepEqual(await followUpOnlyRun(stub), []);
-  });
-
-  it("resolves when the passes settle with skipped or failed outcomes", async () => {
-    const { stub } = steps({ needsPass: [101], passes: [target(101)] }, async () => [{ kind: "push-failed", error: "rejected" }]);
-
-    await assert.doesNotReject(followUpOnlyRun(stub));
+    await assert.rejects(followUpOnlyRun(steps, () => {}), stop);
   });
 });
 
-// A FollowUpGitHub with nothing open, one in-scope issue and the calls that
-// matter to a follow-up run recorded; `overrides` replaces any member.
-function githubStub(overrides: Partial<FollowUpGitHub> = {}) {
-  const closedCalls: string[] = [];
-  const handBacks: number[] = [];
-  const github: FollowUpGitHub = {
-    hostLogin: () => "sandcastle-bot",
-    openPullRequests: () => [],
-    closedPullRequests: (author) => {
-      closedCalls.push(author);
-      return [];
-    },
-    inScopeIssues: () => [{ number: 42, labels: [] }],
-    issueLabels: () => [],
-    labelTimeline: () => [],
-    requestCopilotReview: () => {},
-    updateBranch: () => {},
-    handBack: (issueNumber) => void handBacks.push(issueNumber),
-    isOwner: () => true,
-    pullRequestEvents: () => [],
-    addPullRequestLabel: () => {},
-    followsHandOffs: () => false,
-    pullRequestLabels: () => [],
-    pullRequestBodyEdits: () => [],
-    ...overrides,
+describe("liveFollowUpRunSteps", () => {
+  it("names every step the run takes", () => {
+    for (const name of ["startRound", "sweep", "fetchMain", "queue", "runPasses"] as const) {
+      assert.equal(typeof liveFollowUpRunSteps[name], "function", name);
+    }
+  });
+});
+
+describe("liveSweep", () => {
+  const closedPr: ClosedPullRequest = {
+    number: 10,
+    author: "host",
+    body: "Closes #42",
+    baseRefName: "main",
+    headRefName: "feature/42-x",
+    isCrossRepository: false,
+    headRefOid: "a".repeat(40),
+    state: "CLOSED",
+    closedAt: "2026-10-01T00:00:00Z",
   };
-  return { github, closedCalls, handBacks };
-}
 
-// The live wiring of the sweep step, run against a stub GitHub.
-describe("followUpRunSteps", () => {
-  it("sweeps without handing back closed PRs, which a full run does", async () => {
-    const { github, closedCalls, handBacks } = githubStub();
+  // A GitHub with no open PR and an in-scope issue whose latest PR closed without merging, recording what the sweep reads.
+  function stubGithub() {
+    const closedCalls: string[] = [];
+    const handBacks: number[] = [];
+    const github: FollowUpGitHub = {
+      hostLogin: () => "host",
+      openPullRequests: () => [],
+      closedPullRequests: (author) => {
+        closedCalls.push(author);
+        return [closedPr];
+      },
+      inScopeIssues: () => [{ number: 42, labels: [] }],
+      labelTimeline: () => [],
+      requestCopilotReview: () => {},
+      updateBranch: () => {},
+      handBack: (issueNumber) => void handBacks.push(issueNumber),
+      isOwner: () => true,
+      pullRequestEvents: () => [],
+      addPullRequestLabel: () => {},
+      reviewThreads: () => [],
+      pullRequestBodyEdits: () => [],
+      followsHandOffs: () => true,
+      repositoryOwner: () => "owner",
+      pullRequestComments: () => [],
+      mergeOfMain: () => ({ problem: "not stubbed" }),
+      recordApprovedHead: () => {},
+      commentOnPullRequest: () => {},
+    };
+    return { github, closedCalls, handBacks };
+  }
 
-    followUpRunSteps(github).sweep();
+  it("never reads the closed pull requests, and hands nothing back", () => {
+    const { github, closedCalls, handBacks } = stubGithub();
+
+    liveSweep(github, () => {});
 
     assert.deepEqual(closedCalls, []);
     assert.deepEqual(handBacks, []);
   });
 
-  it("reports a PR whose follow-up threw as failed", () => {
-    const { github } = githubStub({
-      openPullRequests: () => [
-        {
-          number: 101,
-          author: "sandcastle-bot",
-          body: PR_MARKER,
-          baseRefName: "main",
-          headRefName: "feature/42-add-search",
-          isCrossRepository: false,
-          isDraft: false,
-          labels: [],
-          threads: [],
-          checks: [],
-          truncated: false,
-        } as unknown as ReturnType<FollowUpGitHub["openPullRequests"]>[number],
-      ],
-      pullRequestEvents: () => {
-        throw new Error("gh api failed: HTTP 502");
-      },
-    });
+  // A PR the owner handed off has no issue in the queue, so the follow-up-only run must still pass on it.
+  it("returns a labelled hand-off PR's pass target, which has no issue in the queue, with the closed PRs still unread", () => {
+    const handOffPr: SweepPullRequest = {
+      number: 201,
+      id: "PR_201",
+      title: "chore: Tidy the build",
+      author: "owner",
+      body: "Tidies the build scripts.",
+      baseRefName: "main",
+      headRefName: "chore/tidy-the-build",
+      headRefOid: "b".repeat(40),
+      isCrossRepository: false,
+      isDraft: false,
+      labels: [FOLLOW_UP_LABEL],
+      mergeStateStatus: "DIRTY",
+      reviewRequests: [],
+      reviews: [],
+      threads: [],
+      checks: [],
+      copilotRequestedAt: [],
+      truncated: false,
+    };
+    const { github, closedCalls } = stubGithub();
+    github.openPullRequests = () => [handOffPr];
+    github.pullRequestEvents = () => [{ event: "labeled", actor: "owner", label: FOLLOW_UP_LABEL, createdAt: "2026-10-09T10:00:00Z" }];
+    github.isOwner = (login) => login === "owner";
+    github.pullRequestComments = () => [{ author: "host", body: approvedHeadComment("b".repeat(40)), createdAt: "2026-10-09T10:05:00Z", updatedAt: "2026-10-09T10:05:00Z" }];
 
-    const { failed } = followUpRunSteps(github).sweep();
+    const result = liveSweep(github, () => {});
 
-    assert.deepEqual(failed, [101]);
+    assert.deepEqual(result.needsPass, [201]);
+    assert.deepEqual(result.passes[0]?.handOff, { title: "chore: Tidy the build", body: "Tidies the build scripts." });
+    assert.deepEqual(closedCalls, []);
   });
+});
 
-  it("lets a failed sweep reach the caller instead of logging that no PR needs a pass", async () => {
-    const { github } = githubStub({
-      hostLogin: () => {
-        throw new Error("gh api failed: HTTP 502");
-      },
-    });
-    const { stub, logs } = steps({ needsPass: [], passes: [] });
-    const run = followUpRunSteps(github);
+describe("followUpOnlyRun and a hand-off PR", () => {
+  const handOffTarget: PassTarget = {
+    number: 201,
+    id: "PR_201",
+    headRefName: "chore/tidy-the-build",
+    headRefOid: "b".repeat(40),
+    handOff: { title: "chore: Tidy the build", body: "Tidies the build scripts." },
+    reasons: ["it has merge conflicts"],
+    conflicted: true,
+  };
 
-    await assert.rejects(followUpOnlyRun({ ...stub, sweep: run.sweep }), /HTTP 502/);
+  it("runs the passes for a sweep that flagged only a hand-off PR, though the queue is empty", async () => {
+    const { steps, calls, passCalls } = stubSteps({ sweep: { needsPass: [201], passes: [handOffTarget] }, queue: [] });
 
-    assert.ok(!logs.some((line) => line.includes("No open PR needs")), logs.join("\n"));
+    await followUpOnlyRun(steps, () => {});
+
+    assert.deepEqual(calls, ["startRound", "sweep", "fetchMain", "queue", "runPasses"]);
+    assert.deepEqual(passCalls, [{ targets: [handOffTarget], issues: [], base: "base-sha" }]);
   });
 });

@@ -303,7 +303,7 @@ describe("applyVerdicts for a well-formed split verdict", () => {
   });
 
   // A local run with SANDCASTLE_LABEL=Sandcastle:dev mustn't put its split
-  // children in GitHub Actions' queue (#146).
+  // children in GitHub Actions' queue.
   it("creates each child with the split github's queue label, not the literal Sandcastle, in a non-default queue scope", () => {
     const gh = recordingGh();
     const split = recordingSplitGithub(101, "Sandcastle:dev");
@@ -318,7 +318,7 @@ describe("applyVerdicts for a well-formed split verdict", () => {
   });
 });
 
-// #351: a split's children are model text, so the host gives each one the
+// A split's children are model text, so the host gives each one the
 // parent's conventional-commit prefix itself, deterministically, rather than
 // relying on the model to copy it from the parent.
 describe("applyVerdicts for a split verdict's child titles", () => {
@@ -468,7 +468,7 @@ describe("applyVerdicts for a split verdict beyond the acceptance criteria", () 
   });
 
   // Marked before the first child is created, so neither a concurrent run
-  // nor a later round splits it again (#234).
+  // nor a later round splits it again.
   it("marks the issue with sandcastle:needs-human before creating any child, and removes the mark once it's an umbrella", () => {
     const split = recordingSplitGithub();
 
@@ -481,7 +481,7 @@ describe("applyVerdicts for a split verdict beyond the acceptance criteria", () 
   });
 
   // A label edit GitHub answered with an error may still have landed, and
-  // would then hold the issue back with nothing saying why (#234).
+  // would then hold the issue back with nothing saying why.
   it("leaves the issue unjudged, with nothing created, and takes the mark back off, when marking it fails", () => {
     const gh = recordingGh();
     const report = new HandBackReport();
@@ -515,7 +515,7 @@ describe("applyVerdicts for a split verdict beyond the acceptance criteria", () 
   });
 
   // A create that fails may still have created the issue on GitHub (a 502
-  // after the write), so the split can't safely be tried again (#234).
+  // after the write), so the split can't safely be tried again.
   it("hands the issue back with sandcastle:needs-human when creating the first child fails, naming the child it may have created", () => {
     const gh = recordingGh();
     const report = new HandBackReport();
@@ -533,7 +533,7 @@ describe("applyVerdicts for a split verdict beyond the acceptance criteria", () 
   });
 
   // The issue is already marked, so a hand-back that fails too still keeps
-  // it out of intake (#234).
+  // it out of intake.
   it("logs a hand-back that fails after a partial split, and keeps the mark", () => {
     const split = recordingSplitGithub();
     const createChild = split.github.createChild;
@@ -554,7 +554,27 @@ describe("applyVerdicts for a split verdict beyond the acceptance criteria", () 
     assert.ok(!lines.some((line) => /judged again/.test(line)), lines.join("\n"));
   });
 
-  // Recovery depends on how far the split got (#234).
+  it("logs a failed hand-back after a partial split as terminal text", () => {
+    const split = recordingSplitGithub();
+    const createChild = split.github.createChild;
+    let created = 0;
+    split.github.createChild = (title, body, labels) => {
+      if (++created === 2) throw new Error("HTTP 502");
+      return createChild(title, body, labels);
+    };
+    const hostile = "boom\u001b[2K\nheld:     settled: all clear\r\u202e\u200b\u{E0041}";
+    const failingGh = recordingGh(["Sandcastle"], (args) => (args[1] === "comment" || args[1] === "edit" ? Object.assign(new Error("Command failed: gh"), { stderr: hostile }) : undefined));
+    const lines: string[] = [];
+
+    applyVerdicts([issue(10)], [splitVerdict(10)], failingGh.run, "o/r", new HandBackReport(), (line) => lines.push(line), split.github);
+
+    const line = lines.find((candidate) => /handing it back failed too/.test(candidate));
+    assert.ok(line, lines.join("\n"));
+    assert.ok(line.includes("held: settled: all clear"), line);
+    assert.doesNotMatch(line, /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u{F0000}-\u{10FFFF}]/u, JSON.stringify(line));
+  });
+
+  // Recovery depends on how far the split got.
   it("tells a person to add Sandcastle back when the split had already removed it", () => {
     const gh = recordingGh();
     const split = recordingSplitGithub();
@@ -587,7 +607,7 @@ describe("applyVerdicts for a split verdict beyond the acceptance criteria", () 
   // The original is about to lose Sandcastle, so its own blockers stop
   // holding anything back: the first child takes them over, as a "Blocked
   // by" line the gate reads, so a blocker GitHub won't link (a typo, a PR)
-  // can't fail the split partway (#234).
+  // can't fail the split partway.
   it("puts the original's blockers, native and in its body, in the first child's body", () => {
     const split = recordingSplitGithub();
     split.github.blockersOf = (number) => (number === 10 ? [50] : []);
@@ -616,7 +636,7 @@ describe("applyVerdicts for a split verdict beyond the acceptance criteria", () 
   });
 
   // Each child is held until the split finishes, so a partial split's
-  // children aren't built before a person has read the hand-back (#234).
+  // children aren't built before a person has read the hand-back.
   it("takes the hold off every child and the original once the umbrella comment is posted", () => {
     const split = recordingSplitGithub();
 
@@ -668,7 +688,7 @@ describe("applyVerdicts for a split verdict beyond the acceptance criteria", () 
   });
 
   // GitHub renders these as prose, so a mention or reference in them would
-  // fire (#234).
+  // fire.
   for (const [what, body] of [
     ["after an escaped backtick", "## Summary\n\nPress \\`@someone\\` to see #123.\n\n## Acceptance criteria\n\n- [ ] One."],
     ["between a stray backtick and a later code span", "## Summary\n\nThe ` key toggles.\n\ncc @someone, see #123\n\n## Acceptance criteria\n\n- [ ] `foo` works."],
@@ -685,8 +705,8 @@ describe("applyVerdicts for a split verdict beyond the acceptance criteria", () 
   }
 
   // The children's bodies are model text posted from the host's account, so
-  // a mention or cross-reference copied from the original would fire again
-  // (#234). They keep their Markdown, which the build needs.
+  // a mention or cross-reference copied from the original would fire again.
+  // They keep their Markdown, which the build needs.
   it("posts each child without a working mention or cross-reference, keeping its Markdown", () => {
     const split = recordingSplitGithub();
     const hostileChild = {
@@ -704,7 +724,7 @@ describe("applyVerdicts for a split verdict beyond the acceptance criteria", () 
     assert.match(body, /^- \[ \] One\.$/m);
   });
 
-  // The malformed-split comment names the child at fault (#234).
+  // The malformed-split comment names the child at fault.
   it("posts a malformed split's child title as plain text", () => {
     const gh = recordingGh();
     const hostile = { title: "Use ``` here, cc @someone, see #123", body: "## Summary\n\nNo criteria." };
@@ -852,7 +872,7 @@ describe("applyVerdicts beyond the acceptance criteria", () => {
   }
 
   // An ignored verdict isn't the issue's verdict, so a valid one after it
-  // still applies (#224).
+  // still applies.
   it("applies a valid verdict that follows an ignored needs-info verdict with no questions", () => {
     const gh = recordingGh();
     const lines: string[] = [];
@@ -913,7 +933,7 @@ describe("applyVerdicts beyond the acceptance criteria", () => {
   // The ready comment only explains labels already applied, so a rejected one
   // costs the explanation, not the verdict.
   it("keeps a ready issue's labels and logs it when its comment is rejected, and still applies the next verdict", () => {
-    const gh = recordingGh(["Sandcastle"], (args) => (args[1] === "comment" && args[2] === "1" ? new Error("HTTP 422") : undefined));
+    const gh = recordingGh(["Sandcastle"], (args) => (args[1] === "comment" && args[2] === "1" ? Object.assign(new Error("Command failed: gh issue comment 1"), { stderr: "HTTP 422" }) : undefined));
     const lines: string[] = [];
 
     applyVerdicts([issue(1), issue(2)], [verdict(1), verdict(2)], gh.run, "o/r", new HandBackReport(), (line) => lines.push(line));
@@ -1010,7 +1030,7 @@ describe("the labels intake adds", () => {
 
 describe("intakeRound", () => {
   // One bad or truncated answer then costs at most its batch, while the rest
-  // of the backlog is still judged (#224, #227).
+  // of the backlog is still judged.
   it("judges every batch in the same round, INTAKE_BATCH_SIZE issues at a time", async () => {
     const issues = Array.from({ length: INTAKE_BATCH_SIZE + 2 }, (_, i) => issue(i + 1));
     const sent: number[][] = [];
@@ -1033,7 +1053,7 @@ describe("intakeRound", () => {
   });
 
   // Otherwise a batch that fails every time would starve the issues behind
-  // it (#227).
+  // it.
   it("logs the issue that breaks its batch, and still judges the next batch", async () => {
     const issues = Array.from({ length: INTAKE_BATCH_SIZE + 1 }, (_, i) => issue(i + 1));
     const last = INTAKE_BATCH_SIZE + 1;
@@ -1063,7 +1083,7 @@ describe("intakeRound", () => {
   });
 
   // Two bad issues in different halves make both halves fail; that's not a
-  // failure every run would hit, so each half is narrowed down in turn (#229).
+  // failure every run would hit, so each half is narrowed down in turn.
   it("narrows down two issues that break their batch from different halves, and judges the rest", async () => {
     const issues = Array.from({ length: INTAKE_BATCH_SIZE }, (_, i) => issue(i + 1));
     const bad = [3, 7];
@@ -1093,7 +1113,7 @@ describe("intakeRound", () => {
   });
 
   // A failure every run hits would otherwise spend a run on every split of
-  // every batch (#229).
+  // every batch.
   it("stops for the round after INTAKE_FAILED_RUNS_LIMIT failed runs in a row, and logs it", async () => {
     const issues = Array.from({ length: INTAKE_BATCH_SIZE * 3 }, (_, i) => issue(i + 1));
     const warnings: string[] = [];
@@ -1122,7 +1142,7 @@ describe("intakeRound", () => {
 
   // AC: "When intake stops after INTAKE_FAILED_RUNS_LIMIT failed runs in a
   // row, the stop is recorded with its reason, the unjudged issue numbers
-  // and the first error's message (tested)." (#320: a repeated failure, such
+  // and the first error's message (tested)." (a repeated failure, such
   // as the missing Docker image in the first automatic runs, must no longer
   // end the job green.)
   it("records a stop with its reason, the unjudged issues and the first error's message after INTAKE_FAILED_RUNS_LIMIT failed runs in a row", async () => {
@@ -1151,8 +1171,8 @@ describe("intakeRound", () => {
   });
 
   // applyVerdicts handles a failure on one issue itself; when it fails on
-  // every verdict in two batches in a row, GitHub is refusing the host
-  // (#229), so each later batch would cost a run for nothing.
+  // every verdict in two batches in a row, GitHub is refusing the host, so
+  // each later batch would cost a run for nothing.
   it("stops for the round when GitHub refuses every verdict in two batches in a row, and logs it", async () => {
     const issues = Array.from({ length: INTAKE_BATCH_SIZE * 3 }, (_, i) => issue(i + 1));
     const warnings: string[] = [];
@@ -1166,7 +1186,7 @@ describe("intakeRound", () => {
         const sent: number[] = JSON.parse(promptArgs.ISSUES_JSON).map((i: { number: number }) => i.number);
         return sent.map((number) => verdict(number, { reason: "clear and checkable" }));
       },
-      recordingGh(["Sandcastle"], () => new Error("gh: HTTP 401")).run,
+      recordingGh(["Sandcastle"], () => Object.assign(new Error("Command failed: gh issue view"), { stderr: "gh: HTTP 401" })).run,
       "o/r",
       new HandBackReport(),
       () => {},
@@ -1190,7 +1210,7 @@ describe("intakeRound", () => {
         const sent: number[] = JSON.parse(promptArgs.ISSUES_JSON).map((i: { number: number }) => i.number);
         return sent.map((number) => verdict(number, { reason: "clear and checkable" }));
       },
-      recordingGh(["Sandcastle"], () => new Error("gh: HTTP 401")).run,
+      recordingGh(["Sandcastle"], () => Object.assign(new Error("Command failed: gh issue view"), { stderr: "gh: HTTP 401" })).run,
       "o/r",
       new HandBackReport(),
       () => {},
@@ -1205,9 +1225,56 @@ describe("intakeRound", () => {
     assert.deepEqual([...stop!.unjudged].sort((a, b) => a - b), issues.map((i) => i.number));
   });
 
+  // The host's gh wrapper wraps Node's error, whose message is the command line and so can quote an issue title or a branch name.
+  // The report's "First error" cell and the terminal get the wrapper's message, built from gh's stderr (ADR 0010).
+  describe("when GitHub refuses with a gh failure", () => {
+    const commandLine = "Command failed: gh issue edit 1 --repo o/r --add-label sandcastle:ready [title: Hostile Title\u001b[2K]";
+    const ghError = () => Object.assign(new Error(commandLine), { stderr: "HTTP 401: Bad credentials\u001b[2K\u200b\u{E0041}", status: 1 });
+    const HIDDEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Noncharacter_Code_Point}\p{Default_Ignorable_Code_Point}\p{Variation_Selector}]/u;
+
+    async function refuseEveryVerdict() {
+      const issues = Array.from({ length: INTAKE_BATCH_SIZE * 3 }, (_, i) => issue(i + 1));
+      const stops = new IntakeStopReport();
+      const printed: string[] = [];
+
+      await intakeRound(
+        issues,
+        [],
+        async (promptArgs) => {
+          const sent: number[] = JSON.parse(promptArgs.ISSUES_JSON).map((i: { number: number }) => i.number);
+          return sent.map((number) => verdict(number, { reason: "clear and checkable" }));
+        },
+        recordingGh(["Sandcastle"], ghError).run,
+        "o/r",
+        new HandBackReport(),
+        (line) => printed.push(line),
+        (line) => printed.push(line),
+        stops,
+      );
+      return { stops, printed };
+    }
+
+    it("records gh's stderr as the first error, without the command line", async () => {
+      const { stops } = await refuseEveryVerdict();
+
+      const [stop] = stops.items();
+      assert.ok(stop, "no stop was recorded");
+      assert.match(stop.firstError, /HTTP 401: Bad credentials/);
+      assert.doesNotMatch(stop.firstError, /Command failed|Hostile Title|--add-label/);
+    });
+
+    it("prints every line that quotes the failure as terminal text", async () => {
+      const { printed } = await refuseEveryVerdict();
+
+      const lines = printed.filter((line) => line.includes("HTTP 401"));
+      assert.ok(lines.length > 0, printed.join("\n"));
+      for (const line of lines) assert.doesNotMatch(line, HIDDEN, JSON.stringify(line));
+    });
+  });
+
   // One refused edit can be the issue's own (closed or transferred since the
   // queue was read), so a batch of one whose verdict GitHub refuses isn't
-  // reason enough to stop (#229).
+  // reason enough to stop.
   it("still judges the next batch when GitHub refuses the only verdict in one batch", async () => {
     const issues = Array.from({ length: INTAKE_BATCH_SIZE + 1 }, (_, i) => issue(i + 1));
     const last = INTAKE_BATCH_SIZE + 1;
@@ -1234,7 +1301,7 @@ describe("intakeRound", () => {
 
   // Narrowing a failed batch makes single-issue batches back to back, each of
   // whose edits can fail for that issue's own reasons, so they don't count
-  // toward the refused-batches limit (#229).
+  // toward the refused-batches limit.
   it("still judges the rest when single-issue batches from narrowing are refused in a row", async () => {
     const issues = Array.from({ length: INTAKE_BATCH_SIZE + 1 }, (_, i) => issue(i + 1));
     const closed = ["2", "3"];
@@ -1263,7 +1330,7 @@ describe("intakeRound", () => {
     assert.ok(!warnings.some((warning) => /GitHub refused/.test(warning)), warnings.join("\n"));
   });
 
-  // Refused batches with a good one between them aren't "in a row" (#229).
+  // Refused batches with a good one between them aren't "in a row".
   it("still judges the next batch when a batch GitHub accepted sits between two refused ones", async () => {
     const issues = Array.from({ length: INTAKE_BATCH_SIZE * 4 }, (_, i) => issue(i + 1));
     const refused = (number: number) => number <= INTAKE_BATCH_SIZE || (number > INTAKE_BATCH_SIZE * 2 && number <= INTAKE_BATCH_SIZE * 3);
@@ -1290,7 +1357,7 @@ describe("intakeRound", () => {
   });
 
   // The run that reaches the limit may be a batch's own: intake mustn't then
-  // log that it's splitting a batch it never tries (#229).
+  // log that it's splitting a batch it never tries.
   it("doesn't log a split it won't try once intake has stopped for the round", async () => {
     const lines: string[] = [];
 
@@ -1604,7 +1671,7 @@ describe("intakeRunner", () => {
   });
 
   // The issue JSON gives `number` as a number, so a model may echo it as one;
-  // and one verdict without bug would otherwise cost the whole batch (#224).
+  // and one verdict without bug would otherwise cost the whole batch.
   it("gives Sandcastle a schema that takes a numeric id as a string and a missing bug as false", async () => {
     const { calls, runRole } = stubRunRole();
     await intakeRunner(runRole, noSandbox)({ ISSUES_JSON: "[]" });
@@ -1632,7 +1699,7 @@ describe("intakeRunner", () => {
 });
 
 // The reason and questions come from a model that read untrusted issue text,
-// so they're posted as plain text (#224).
+// so they're posted as plain text.
 describe("intake's comments", () => {
   const hostile =
     "Use ``` here, cc @someone, see #123 and owner/repo#45, GH-67 and https://github.com/owner/repo/issues/89 <details><summary>ok</summary> <!-- hidden, &#64;someone &commat;someone &#35;123 github&#46;com";

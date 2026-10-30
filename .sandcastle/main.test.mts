@@ -79,7 +79,7 @@ describe("main.mts's queue-scope wiring", () => {
     const mainMts = read(".sandcastle/main.mts");
     const scopeCall = mainMts.indexOf("queueScopeFrom(");
     const protectCall = mainMts.indexOf("protectHostGit()");
-    const ensureLabelsCall = mainMts.indexOf("ensureHostLabels()");
+    const ensureLabelsCall = mainMts.indexOf("ensureLabels()");
 
     assert.notEqual(scopeCall, -1, "main.mts doesn't call queueScopeFrom(");
     assert.ok(scopeCall < protectCall, "main.mts doesn't resolve the queue scope before protectHostGit()");
@@ -337,40 +337,6 @@ describe("main.mts's intake-stop exit code", () => {
   });
 });
 
-// #51: a PR left without review:claude ends the run red, but only once the run
-// report is written, the same way an intake stop does.
-describe("main.mts's unlabelled-PR exit code", () => {
-  it("ends the run non-zero from unlabelledPrExitCode(unlabelledPrs) after writing the run report", () => {
-    const mainMts = read(".sandcastle/main.mts");
-    const writeReportCall = mainMts.indexOf("writeRunReport(");
-    const exitCall = mainMts.indexOf("unlabelledPrExitCode(", writeReportCall);
-
-    assert.notEqual(writeReportCall, -1, "main.mts doesn't call writeRunReport(");
-    assert.notEqual(exitCall, -1, "main.mts doesn't call unlabelledPrExitCode( after writeRunReport(");
-    const statementStart = mainMts.lastIndexOf("process.exitCode", exitCall);
-    assert.ok(statementStart > writeReportCall, "main.mts doesn't set process.exitCode from unlabelledPrExitCode( after writeRunReport(");
-    assert.match(mainMts.slice(exitCall, mainMts.indexOf(";", exitCall)), /unlabelledPrs|unlabelledPrReport\.items\(\)/);
-  });
-
-  it("keeps the intake-stop exit code alongside it", () => {
-    const mainMts = read(".sandcastle/main.mts");
-
-    assert.match(mainMts.slice(mainMts.indexOf("writeRunReport(")), /intakeStopExitCode\(/);
-  });
-});
-
-// #51: review:claude is created at startup through ensureHostLabels, which
-// adds it to SANDCASTLE_LABELS' labels without putting it in that list.
-describe("main.mts's startup labels", () => {
-  it("creates the host's labels, review:claude included, through ensureHostLabels() rather than ensureLabels()", () => {
-    const mainMts = read(".sandcastle/main.mts");
-
-    assert.match(mainMts, /\bensureHostLabels\(\)/, "main.mts doesn't call ensureHostLabels()");
-    assert.doesNotMatch(mainMts, /\bensureLabels\(\)/, "main.mts still calls ensureLabels() on its own");
-    assert.ok(mainMts.indexOf("ensureHostLabels()") < mainMts.indexOf("startedUp = true;"), "main.mts creates the labels after startup finished");
-  });
-});
-
 // #147: SANDCASTLE_BUDGET_MINUTES reaches the sandbox like every other key in
 // this file, and the host reads the budget from its own environment instead,
 // so it must stay commented out, as SANDCASTLE_ISSUE and SANDCASTLE_LABEL do.
@@ -387,73 +353,77 @@ describe(".sandcastle/.env.example budget", () => {
   });
 });
 
-// The host defers overlapping picks in code before the critique runs, and the
-// critique still runs on what's left, for dependencies and module overlaps
-// (#421).
-describe("main.mts's overlap wiring", () => {
-  it("runs the overlap check after the planner and before the critique", () => {
+// #248: before the critique, the host holds back picks whose planned files
+// share a path with an earlier pick or an open PR into main.
+describe("main.mts's file overlap wiring", () => {
+  it("holds overlapping picks back after planning and before the critique", () => {
     const mainMts = read(".sandcastle/main.mts");
-    const planCall = mainMts.indexOf("planRound(");
-    const overlapCall = mainMts.indexOf("deferOverlaps(");
-    const critiqueCall = mainMts.indexOf("critiqueRound(");
+    const loop = mainMts.indexOf("for (let iteration = 1;");
+    const planCall = mainMts.indexOf("planRound(", loop);
+    const holdCall = mainMts.indexOf("holdOverlappingPicks(", loop);
+    const critiqueCall = mainMts.indexOf("critiqueRound(", loop);
 
-    assert.notEqual(overlapCall, -1, "main.mts doesn't call deferOverlaps(");
-    assert.notEqual(critiqueCall, -1, "main.mts doesn't call critiqueRound(");
-    assert.ok(planCall < overlapCall && overlapCall < critiqueCall, "main.mts doesn't check overlaps between the plan and the critique");
-  });
-});
-
-// #425: a hold behind a pick that is deferred or opens no PR is released, the
-// critique gets each pick's files, and (#428) every overlap-held pick is passed
-// to it as unpicked, with a note, rather than left out.
-describe("main.mts's overlap follow-ups", () => {
-  const mainMts = read(".sandcastle/main.mts");
-
-  it("releases the holds behind picks that opened no pull request, after the build", () => {
-    const holdsCall = mainMts.indexOf("lastingHolds(");
-
-    assert.notEqual(holdsCall, -1, "main.mts doesn't call lastingHolds(");
-    assert.ok(mainMts.indexOf("critiqueRound(") < holdsCall, "main.mts decides the holds before the critique");
-    assert.ok(mainMts.indexOf("buildIssue(") < holdsCall, "main.mts decides the holds before the build");
+    assert.notEqual(holdCall, -1, "main.mts doesn't call holdOverlappingPicks(");
+    assert.ok(planCall < holdCall && holdCall < critiqueCall, "main.mts doesn't hold picks back between planning and the critique");
   });
 
-  it("builds the critique's picks with their files", () => {
-    assert.match(mainMts, /pickIssues\(/);
+  it("gives each pick the files the planner named", () => {
+    assert.match(read(".sandcastle/main.mts"), /files: resolveFiles\(/);
   });
 
-  it("computes the critique's unpicked list with unpickedReady rather than filtering ready", () => {
-    assert.match(mainMts, /unpickedReady\(/);
-    assert.doesNotMatch(mainMts, /unpicked: ready\.filter/);
+  it("gives the critique the kept picks, and the rest of the ready issues, held ones included, through critiqueUnpicked", () => {
+    const mainMts = read(".sandcastle/main.mts");
+    const critiqueCall = mainMts.indexOf("critiqueRound(", mainMts.indexOf("holdOverlappingPicks("));
+    const call = mainMts.slice(critiqueCall, mainMts.indexOf("});", critiqueCall));
+
+    assert.match(call, /picks: kept/);
+    assert.doesNotMatch(call, /picks,/);
+    assert.match(call, /unpicked: critiqueUnpicked\(ready, kept, heldThisRound\)/);
+    assert.doesNotMatch(call, /unpicked: ready\.filter/);
   });
 
-  // #428: the critique's dependency check must see the held issues.
-  it("passes the round's overlap holds to unpickedReady, so the critique sees the held issues", () => {
-    assert.match(mainMts, /unpickedReady\([^;]*\.\.\.holds\b/);
+  // #251: a hold is decided before the critique and the build, so it's released unless the pick it waits on opened a PR.
+  it("keeps a hold for the run only after it knows which picks opened a PR", () => {
+    const mainMts = read(".sandcastle/main.mts");
+    const loop = mainMts.indexOf("for (let iteration = 1;");
+    const lastCall = mainMts.lastIndexOf("lastingHolds(");
+
+    assert.notEqual(lastCall, -1, "main.mts doesn't call lastingHolds(");
+    assert.ok(lastCall > mainMts.indexOf("buildIssue(", loop), "main.mts decides the holds before the builds ran");
+    assert.match(mainMts, /publishedIssues\(/);
+    assert.doesNotMatch(mainMts, /for \(const issue of held\) \{\s*heldForFiles\.add/);
   });
 
-  // #428: a lasting hold behind a published pick is stored pointing at its pull request.
-  it("stores a lasting hold through carriedHold, so a later round's note names the pull request", () => {
-    assert.match(mainMts, /overlapDeferred\.set\(hold\.id, carriedHold\(hold, publishedPrs\)\)/);
+  it("keeps the holds behind an open PR when the critique defers every kept pick", () => {
+    const mainMts = read(".sandcastle/main.mts");
+    const deferred = mainMts.indexOf("The critique deferred every pick");
+    const before = mainMts.slice(mainMts.indexOf("critiqueRound(", mainMts.indexOf("holdOverlappingPicks(")), deferred);
+
+    assert.match(before, /lastingHolds\(/);
   });
 
-  // #428: a hold that lasts the run drops out of `ready` in later rounds, but not out of `unblocked`.
-  it("passes the lasting holds from earlier rounds, and every unblocked issue, to unpickedReady", () => {
-    assert.match(mainMts, /unpickedReady\(unblocked,[^;]*overlapDeferred\.values\(\)/);
+  it("doesn't plan again the issues it held back this run", () => {
+    const mainMts = read(".sandcastle/main.mts");
+    const loop = mainMts.indexOf("for (let iteration = 1;");
+
+    assert.match(mainMts, /new Set<number>\(\)/);
+    assert.match(mainMts, /heldForFiles/);
+    assert.doesNotMatch(mainMts.slice(loop), /planRound\(ready\)/);
   });
 });
 
 // #53: SANDCASTLE_MODE is resolved as early as the queue scope and the budget,
 // so an unknown mode exits before anything touches git, gh or a sandbox.
 describe("main.mts's run-mode wiring", () => {
-  it("resolves the run mode before protectHostGit() and ensureHostLabels()", () => {
+  it("resolves the run mode before protectHostGit() and ensureLabels()", () => {
     const mainMts = read(".sandcastle/main.mts");
     const modeCall = mainMts.indexOf("runModeFrom(");
     const protectCall = mainMts.indexOf("protectHostGit()");
-    const ensureLabelsCall = mainMts.indexOf("ensureHostLabels()");
+    const ensureLabelsCall = mainMts.indexOf("ensureLabels()");
 
     assert.notEqual(modeCall, -1, "main.mts doesn't call runModeFrom(");
     assert.ok(modeCall < protectCall, "main.mts doesn't resolve the run mode before protectHostGit()");
-    assert.ok(modeCall < ensureLabelsCall, "main.mts doesn't resolve the run mode before ensureHostLabels()");
+    assert.ok(modeCall < ensureLabelsCall, "main.mts doesn't resolve the run mode before ensureLabels()");
   });
 
   it("exits non-zero with a message naming SANDCASTLE_MODE, touching nothing, for an unknown mode", () => {
@@ -511,21 +481,13 @@ describe("main.mts's follow-up mode wiring", () => {
     assert.ok(followUpRun < loop, "main.mts doesn't run the follow-up run before the round loop");
   });
 
-  it("ends a follow-up run red, through the exit code and the report, for the PRs its sweep couldn't follow up", () => {
-    const mainMts = read(".sandcastle/main.mts");
-
-    assert.match(mainMts, /failedFollowUps = await followUpOnlyRun\(\)/);
-    assert.match(mainMts, /outcome: "follow-up failed"/);
-    assert.match(mainMts, /failedFollowUps\.length > 0 \? 1 : 0/);
-  });
-
   it("runs the round loop only in a full run", () => {
     const mainMts = read(".sandcastle/main.mts");
     const loop = mainMts.indexOf("for (let iteration = 1;");
     const condition = mainMts.slice(loop, mainMts.indexOf("{", loop));
 
     assert.notEqual(loop, -1, "main.mts has no round loop");
-    assert.match(condition, /\bmode\b/, "the round loop's condition doesn't read the run mode");
+    assert.match(condition, /\brunMode\b/, "the round loop's condition doesn't read the run mode");
   });
 
   it("sweeps in the round loop through a single followUpPhase() call, as before", () => {

@@ -2,12 +2,12 @@
 // Intake
 //
 // A run before the blocker gate judges every unjudged Sandcastle issue
-// against the Definition of Ready (see docs/plans/sandcastle-workflow.md,
+// against the Definition of Ready (see Blazor-Server's docs/plans/sandcastle-workflow.md,
 // "Phase 2: Intake"), so a human sees numbered questions on an unclear issue
 // instead of Sandcastle guessing at it. Its verdicts are "ready"
 // (sandcastle:ready), "needs-info" (hands the issue back with
 // sandcastle:needs-info and one comment of numbered questions), and "split"
-// (#75: too big for one PR, so the host creates child issues from the
+// (too big for one PR, so the host creates child issues from the
 // verdict's children and turns the original into an umbrella). Every verdict
 // can also carry bug: true, which adds the bug label so the issue's branch is
 // fix/.
@@ -19,13 +19,13 @@ import { z } from "zod";
 import { runRole } from "./agents.mts";
 import {
   BUILDING_LABEL,
-  hooks,
   INTAKE_BATCH_SIZE,
   INTAKE_FAILED_RUNS_LIMIT,
   INTAKE_REFUSED_BATCHES_LIMIT,
   queueLabelOf,
   UMBRELLA_MARKER,
 } from "./config.mts";
+import { hooks } from "./repo-config.mts";
 import { UncountedStopError } from "./errors.mts";
 import { bodyBlockers, openPrReason } from "./gate.mts";
 import { breakReferences, plainText } from "./plain-text.mts";
@@ -48,9 +48,10 @@ import { intakePromptArgs } from "./prompts.mts";
 import { activeQueueScope } from "./queue.mts";
 import { handBackReport, intakeStopReport, type HandBackReport, type IntakeStopReport } from "./report.mts";
 import { agentSandbox } from "./skills.mts";
+import { terminalText } from "./status.mts";
 
 // Lenient where a slip is harmless, because one verdict that fails the schema
-// costs every verdict in the block (#224): the issue JSON gives `number` as a
+// costs every verdict in the block: the issue JSON gives `number` as a
 // number, so a numeric id is taken as a string, and a missing bug means false.
 const intakeSchema = z.object({
   verdicts: z.array(
@@ -95,7 +96,7 @@ export type SplitGitHub = {
   unmarkSplitting(issue: number): void;
   // The label this run's queue scope approves issues with (lib/config.mts),
   // so a split under a non-default scope (SANDCASTLE_LABEL) queues its
-  // children in that scope rather than GitHub Actions' (#146).
+  // children in that scope rather than GitHub Actions'.
   queueLabel(): string;
 };
 
@@ -168,7 +169,7 @@ const runIntake: IntakeRun = intakeRunner();
 // Returns how many verdicts GitHub took and refused, the first refusal's
 // error, and the issues settled (a verdict GitHub took, or one another run
 // gave first), so intakeRound can record which issues a stop leaves behind
-// and why (#320).
+// and why.
 export function applyVerdicts(
   issues: readonly SandcastleIssue[],
   verdicts: readonly IntakeVerdict[],
@@ -199,7 +200,7 @@ export function applyVerdicts(
 
     // Handing an issue back with no questions would leave its author nothing
     // to answer, so such a verdict counts as none: checked before the issue
-    // counts as judged, so a valid verdict after it still applies (#224).
+    // counts as judged, so a valid verdict after it still applies.
     if (verdict.verdict === "needs-info" && questionsOf(verdict).length === 0) {
       log(`  ⚠ Ignoring intake's needs-info verdict on ${ref}: it has no questions.`);
       continue;
@@ -221,7 +222,7 @@ export function applyVerdicts(
       }
       log(`  ${applyVerdict(issue, verdict, run, repo, report, log, splitGithub)}`);
     } catch (error) {
-      log(`  ⚠ Couldn't apply intake's ${verdict.verdict} verdict on ${ref}, so it's judged again in a later round or run: ${error}`);
+      log(`  ⚠ Couldn't apply intake's ${verdict.verdict} verdict on ${ref}, so it's judged again in a later round or run: ${terminalText(String(error))}`);
       counts.failed += 1;
       if (counts.failed === 1) firstError = error;
       continue;
@@ -277,7 +278,7 @@ function applyVerdict(
   try {
     commentOnIssue(number, readyComment(verdict), run, repo);
   } catch (error) {
-    log(`  ⚠ #${number} is marked sandcastle:ready, but posting intake's reason failed: ${error}`);
+    log(`  ⚠ #${number} is marked sandcastle:ready, but posting intake's reason failed: ${terminalText(String(error))}`);
   }
   return `✓ Intake marks #${number} ready${bugNote}: ${verdict.reason}`;
 }
@@ -316,7 +317,7 @@ function applyVerdict(
 // failure after that hands it back with sandcastle:needs-human, even before
 // the first child exists: a create that GitHub answered with an error may
 // still have created the child. When the hand-back fails too, the marks still
-// keep the issue and its children out of intake (#234).
+// keep the issue and its children out of intake.
 function applySplit(
   issue: SandcastleIssue,
   verdict: IntakeVerdict,
@@ -354,7 +355,7 @@ function applySplit(
     try {
       splitGithub.unmarkSplitting(number);
     } catch (unmarkError) {
-      log(`  ⚠ Marking #${number} for its split failed, and so did taking the mark back off: if it carries sandcastle:needs-human, remove it by hand: ${unmarkError}`);
+      log(`  ⚠ Marking #${number} for its split failed, and so did taking the mark back off: if it carries sandcastle:needs-human, remove it by hand: ${terminalText(String(unmarkError))}`);
     }
     throw error;
   }
@@ -382,7 +383,7 @@ function applySplit(
     splitGithub.comment(number, umbrellaComment(verdict, children));
   } catch (error) {
     const created = children.length > 0 ? `after creating ${issueRefs(children)}` : "before creating any child";
-    log(`  ⚠ Splitting #${number} failed ${created}: ${error}`);
+    log(`  ⚠ Splitting #${number} failed ${created}: ${terminalText(String(error))}`);
     try {
       handBack(
         { kind: "issue", number },
@@ -394,7 +395,7 @@ function applySplit(
         report,
       );
     } catch (handBackError) {
-      log(`  ⚠ Splitting #${number} failed, and handing it back failed too; it keeps sandcastle:needs-human, so intake leaves it alone: ${handBackError}`);
+      log(`  ⚠ Splitting #${number} failed, and handing it back failed too; it keeps sandcastle:needs-human, so intake leaves it alone: ${terminalText(String(handBackError))}`);
     }
     return `🛑 Intake's split of #${number} failed partway, so it's handed back with sandcastle:needs-human.`;
   }
@@ -404,7 +405,7 @@ function applySplit(
     try {
       splitGithub.unmarkSplitting(held);
     } catch (error) {
-      log(`  ⚠ #${number}'s split finished, but removing sandcastle:needs-human from #${held} failed, so a person has to: ${error}`);
+      log(`  ⚠ #${number}'s split finished, but removing sandcastle:needs-human from #${held} failed, so a person has to: ${terminalText(String(error))}`);
     }
   }
   const bugNote = verdict.bug ? " (a bug)" : "";
@@ -421,8 +422,8 @@ const conventionalPrefix = /^(?:feat|fix|docs|style|refactor|perf|test|build|ci|
 // A split child's drafted title with the parent title's conventional prefix in
 // front, so the PR built from the child passes the PR title check, which wants
 // that prefix since the title becomes the squash commit's subject. The model
-// drafts child titles without one (#351: #347's children came back bare, and
-// the PR built from the first failed the check). A drafted title that already
+// drafts child titles without one (one split's children came back bare,
+// and the PR built from the first failed the check). A drafted title that already
 // has a prefix, or a parent title with none, leaves the draft as it is.
 function withParentPrefix(parentTitle: string, drafted: string): string {
   const prefix = conventionalPrefix.exec(parentTitle.trim())?.[0];
@@ -541,7 +542,7 @@ function questionsOf(verdict: IntakeVerdict): string[] {
 // &#64; would otherwise render as an @ these rules never saw. Code spans and
 // fenced blocks are left as written: mentions and references don't fire
 // there, and a child is a build spec, whose Razor directives (@page, @inject)
-// an agent must be able to copy as they are (#234).
+// an agent must be able to copy as they are.
 export function withoutReferences(text: string): string {
   const prose = (part: string) => breakReferences(part.replace(/&(?=#?[A-Za-z0-9]+;)/g, "&amp;"));
   // As CommonMark reads them: a fenced block, to its closing fence or the end
@@ -592,11 +593,11 @@ function handBackComment(lead: string, reason: string, questions: readonly strin
 // intake leaves alone (see needsIntake).
 //
 // Intake runs once per batch of INTAKE_BATCH_SIZE issues, so a malformed or
-// truncated answer costs only its batch (#224), and the next batch is still
-// judged (#227). A batch whose run fails is tried again in halves, and each
+// truncated answer costs only its batch, and the next batch is still
+// judged. A batch whose run fails is tried again in halves, and each
 // half that fails again in halves, so an issue that always breaks intake's
 // answer is left unjudged on its own rather than with its batch-mates: they'd
-// otherwise re-form the same batch every round (#229). Whatever is left
+// otherwise re-form the same batch every round. Whatever is left
 // unjudged is logged and judged again in a later round or run.
 //
 // Intake stops for the round after INTAKE_FAILED_RUNS_LIMIT failed runs in a
@@ -609,7 +610,7 @@ function handBackComment(lead: string, reason: string, questions: readonly strin
 // Either stop is recorded in `stops` (lib/report.mts#IntakeStopReport) with
 // its reason, the issue numbers intake never judged this round, and the
 // first error's message in the streak that stopped it, so a run that can't
-// do its work ends red instead of silently exiting 0 (#320).
+// do its work ends red instead of silently exiting 0.
 export async function intakeRound(
   issues: readonly SandcastleIssue[],
   openPrs: readonly OpenPullRequest[],
@@ -672,10 +673,10 @@ export async function intakeRound(
   async function narrow(batch: SandcastleIssue[], error: unknown): Promise<void> {
     if (stopped) return;
     if (batch.length === 1) {
-      warn(`  ✗ Intake failed on ${refs(batch)}, so it's judged again in a later round or run: ${error}`);
+      warn(`  ✗ Intake failed on ${refs(batch)}, so it's judged again in a later round or run: ${terminalText(String(error))}`);
       return;
     }
-    log(`  Intake failed on ${refs(batch)}, so it's trying them in halves: ${error}`);
+    log(`  Intake failed on ${refs(batch)}, so it's trying them in halves: ${terminalText(String(error))}`);
     const middle = Math.ceil(batch.length / 2);
     for (const half of [batch.slice(0, middle), batch.slice(middle)]) {
       if (stopped) return;
@@ -700,13 +701,17 @@ export async function intakeRound(
   }
 }
 
-// The message of the innermost error in `error`'s cause chain. The host's gh
-// wrapper (lib/github.mts#ghWithStderr) names only the command when gh wrote
-// nothing to stderr, so the cause is what says why it failed.
+// A message ghWithStderr built: "gh <command> failed:", a line break, and why gh stopped.
+const GH_FAILURE = /^gh [^\n]* failed:\n([\s\S]*)$/;
+
+// The text that says why a step stopped. The host's gh wrapper (lib/github.mts#ghWithStderr) wraps Node's error, whose message is the
+// command line (it can quote a title or a branch name), so the walk down the cause chain stops at the wrapper's own message, built from
+// gh's stderr (ADR 0010), and the result is what follows its "failed:"; any other error ends at the innermost cause's message.
 function rootMessage(error: unknown): string {
   let root = error;
-  while (root instanceof Error && root.cause !== undefined) root = root.cause;
-  return root instanceof Error ? root.message : String(root);
+  while (root instanceof Error && root.cause !== undefined && !GH_FAILURE.test(root.message)) root = root.cause;
+  if (!(root instanceof Error)) return String(root);
+  return GH_FAILURE.exec(root.message)?.[1] ?? root.message;
 }
 
 // Phase 0a as main.mts runs it: load the queue and the open PRs, then run
@@ -728,6 +733,6 @@ export async function intakePhase(
     await round(issues, openPrs);
   } catch (error) {
     if (error instanceof UncountedStopError) throw error;
-    warn(`  ✗ Intake failed, so the issues it was judging wait for a later round or run: ${error}`);
+    warn(`  ✗ Intake failed, so the issues it was judging wait for a later round or run: ${terminalText(String(error))}`);
   }
 }

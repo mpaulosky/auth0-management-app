@@ -6,10 +6,9 @@
 
 import { execFileSync } from "node:child_process";
 import { endOf } from "./checkpoint.mts";
-import { COPILOT_REVIEWER, FOLLOW_UP_LABEL_DEFINITION, QUEUE_LABEL, REVIEW_LABEL, REVIEW_LABEL_DEFINITION, SANDCASTLE_LABELS, SANDCASTLE_WORKFLOW, type QueueScope, type SandcastleLabel } from "./config.mts";
+import { BASE_BRANCH, COPILOT_REVIEWER, FOLLOW_UP_MARKER, HOST_LABELS, QUEUE_LABEL, withoutOwnCheck, type QueueScope, type SandcastleLabel } from "./config.mts";
 import type { CheckState, SweepPullRequest } from "./follow-up.mts";
-import { handBackReport, targetUrl, unlabelledPrReport, type HandBackReport, type UnlabelledPrReport } from "./report.mts";
-import { sh } from "./shell.mts";
+import { handBackReport, targetUrl, type HandBackReport } from "./report.mts";
 
 let repo: string | undefined;
 
@@ -17,8 +16,22 @@ let repo: string | undefined;
 // Read on first use rather than at import, so importing a module never shells
 // out to gh.
 export function repoName(): string {
-  repo ??= sh(process.cwd(), "gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner");
+  repo ??= readRepoName();
   return repo;
+}
+
+// One read of the name, with gh's stderr captured: a failure reaches the terminal only through the thrown message, where a caller
+// can print it as plain text, never written by gh itself. Takes the runner, for a test.
+export function readRepoName(run: typeof execFileSync = execFileSync): string {
+  const name = ghWithStderr(run, ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim();
+  if (name === "") throw new Error("gh repo view failed: it printed no repository name");
+  return name;
+}
+
+// The login in `repoName()`'s "owner/name": the account the repository belongs to. For an organisation's repository it
+// is the organisation's, which never opens a pull request.
+export function repositoryOwnerLogin(repo: string = repoName()): string {
+  return repo.split("/")[0] as string;
 }
 
 export type GhIssue = {
@@ -47,7 +60,7 @@ export function hasLabel(issue: Pick<SandcastleIssue, "labels">, label: string):
 // Keep only the comments of authors with admin, maintain or write permission
 // on `repo`, so text from anyone else never reaches a role's prompt.
 // Permission rather than the owner's login decides this, because in a
-// repository an organization owns the owner never comments (#214). A
+// repository an organization owns the owner never comments. A
 // permission lookup that fails drops that author's comments, so an error
 // never lets a stranger's text through. `canPush` caches each author's
 // answer, so a caller that shares one map across issues looks each author up
@@ -120,7 +133,7 @@ const writeAccessByLogin = new Map<string, boolean>();
 // login (a deleted account) is a definite no, with no gh call. `canPush` and
 // `failed` share one cache and one round's failures with whichever caller
 // passes them in, so a login asked about from two places, such as a comment
-// and a label event, is looked up once (#146).
+// and a label event, is looked up once.
 export function pushAccess(
   login: string | null,
   canPush: Map<string, boolean> = writeAccessByLogin,
@@ -197,36 +210,50 @@ export function sameRepository<T extends Pick<ListedPullRequest, "isCrossReposit
 // The open pull requests from this repository's branches, and their head
 // branches. gh pages through results up to --limit, so the cap sits far above
 // any real queue: a PR missed here would let its issue be built twice.
-export function openPullRequests(): OpenPullRequest[] {
-  return listOpenPullRequests();
+export function openPullRequests(run: typeof execFileSync = execFileSync, repo: string = repoName()): OpenPullRequest[] {
+  return openSameRepositoryPullRequests(run, repo);
 }
 
-// The open pull requests into main from this repository's branches, whoever
-// opened them and whichever queue built them, for the overlap check
-// (lib/overlap.mts, #421). A fork's PR is left out, as in openPullRequests: it
-// would let an outsider hold any issue back by touching its files.
-export function openPullRequestsIntoMain(): OpenPullRequest[] {
-  return listOpenPullRequests("--base", "main");
+// The open pull requests into main from this repository's branches, from any
+// author or queue: a person's PR, or one another queue's run opened, conflicts
+// with a pick just as this queue's own does. For lib/overlap.mts, which
+// reads each one's files with pullRequestFiles. Fork PRs are left out, as
+// sameRepository explains: counting them would let anyone with a fork hold the
+// whole queue back.
+export function openPullRequestsIntoMain(run: typeof execFileSync = execFileSync, repo: string = repoName()): OpenPullRequest[] {
+  return openSameRepositoryPullRequests(run, repo, "--base", BASE_BRANCH.replace(/^origin\//, ""));
 }
 
-// The open pull requests from this repository's branches that also match the
-// extra gh pr list filters.
-function listOpenPullRequests(...filters: string[]): OpenPullRequest[] {
+// The open pull requests from this repository's branches that gh pr list
+// returns with `filters`, and their head branches.
+function openSameRepositoryPullRequests(run: typeof execFileSync, repo: string, ...filters: string[]): OpenPullRequest[] {
   const listed = JSON.parse(
-    sh(
-      process.cwd(), "gh", "pr", "list", "--repo", repoName(), "--state", "open", ...filters, "--limit", "1000",
+    ghWithStderr(run, [
+      "pr", "list", "--repo", repo, "--state", "open", ...filters, "--limit", "1000",
       "--json", "number,headRefName,isCrossRepository",
-    ),
+    ]),
   ) as ListedPullRequest[];
   return sameRepository(listed).map(({ number, headRefName }) => ({ number, headRefName }));
 }
 
-// The open pull request from this repository's `branch`, or a new one for it
-// with the title and body, as its URL. A fork's PR from a branch of the same
-// name doesn't count.
+// Why gh stopped when it printed nothing, built from the error's own fields: Node's message holds the whole command line, which quotes
+// titles and branch names. A spawn failure (gh missing or not executable) is "couldn't run"; ENOBUFS (its output outgrew maxBuffer, which
+// Node also ends with SIGTERM) says so; a signal, with the code Node set beside it (ETIMEDOUT) if any, is "killed"; any other string code
+// only says gh stopped.
+function whyGhStopped(error: unknown): string {
+  const { code, signal, status } = (error ?? {}) as { code?: unknown; signal?: unknown; status?: unknown };
+  const named = typeof code === "string" ? ` (${code})` : "";
+  if (typeof code === "string" && ["ENOENT", "EACCES", "EPERM"].includes(code)) return `gh couldn't run${named}`;
+  if (code === "ENOBUFS") return `gh's output outgrew its buffer${named}`;
+  if (typeof signal === "string") return `gh was killed by ${signal}${named}`;
+  if (typeof code === "string") return `gh stopped${named}`;
+  if (typeof status === "number") return `gh exited with status ${status} and printed nothing`;
+  return "gh failed and printed nothing";
+}
+
 // Run gh with its stderr captured, and throw with that stderr in the message,
 // so a caller can say why it failed.
-function ghWithStderr(run: typeof execFileSync, args: string[], input?: string, maxBuffer?: number): string {
+export function ghWithStderr(run: typeof execFileSync, args: string[], input?: string, maxBuffer?: number): string {
   try {
     return run("gh", args, {
       cwd: process.cwd(),
@@ -236,88 +263,36 @@ function ghWithStderr(run: typeof execFileSync, args: string[], input?: string, 
       ...(maxBuffer === undefined ? {} : { maxBuffer }),
     });
   } catch (error) {
-    const stderr = (error as { stderr?: unknown }).stderr;
-    const detail = typeof stderr === "string" ? stderr.trim() : "";
-    throw new Error(`gh ${args.slice(0, 2).join(" ")} failed${detail ? `:\n${detail}` : ""}`, { cause: error });
+    const { stderr } = (error ?? {}) as { stderr?: unknown };
+    // gh's own text when it printed some; else why it stopped, so the text after "failed:" (all build.mts's commandOutput reads) never holds
+    // Node's command line, which quotes titles and branch names.
+    const detail = (typeof stderr === "string" ? stderr.trim() : "") || whyGhStopped(error);
+    throw new Error(`gh ${args.slice(0, 2).join(" ")} failed:\n${detail}`, { cause: error });
   }
 }
 
-// A PR this opens gets REVIEW_LABEL, so Claude reviews it. A PR it reuses
-// gets it only if it has never carried it: PR Auto-Merge removes the label
-// once the review cap is reached, and adding it back on every publish would
-// get round that cap. A reused PR can still be one this never labelled: a
-// create GitHub carried out but answered with an error, retried by
-// lib/build.mts#publish. A run that stops between the create and the label
-// isn't covered here: no later run calls this for that branch, since the gate
-// holds back an issue with an open PR, so the follow-up sweep labels that PR
-// instead (lib/follow-up.mts#sweepPullRequests, #51). Labelling comes after
-// the create, and a failure only warns and goes in the run report, so a
-// missing label never costs a finished build its PR and the owner still sees
-// it.
+// The open pull request from this repository's `branch`, or a new one for it
+// with the title and body, as its URL. A fork's PR from a branch of the same
+// name doesn't count.
 export function openPullRequest(
   branch: string,
   title: string,
   body: string,
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
-  warn: (message: string) => void = console.error,
-  report: Pick<UnlabelledPrReport, "record"> = unlabelledPrReport,
 ): string {
   const listed = JSON.parse(
     ghWithStderr(run, [
-      "pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,headRefName,isCrossRepository,labels,url",
+      "pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,headRefName,isCrossRepository,url",
     ]),
-  ) as (ListedPullRequest & { labels?: { name: string }[] })[];
-  const existing = sameRepository(listed).find((pr) => pr.headRefName === branch);
-  if (existing?.url) {
-    const { number, url } = existing;
-    const carriesLabel = (existing.labels ?? []).some(({ name }) => isReviewLabel(name));
-    if (!carriesLabel) {
-      addReviewLabel(number, url, run, repo, warn, report, () => hasCarriedReviewLabel(labelTimeline(number, run, repo)));
-    }
-    return url;
-  }
-  const url = ghWithStderr(
+  ) as ListedPullRequest[];
+  const existing = sameRepository(listed).find((pr) => pr.headRefName === branch)?.url;
+  if (existing) return existing;
+  return ghWithStderr(
     run,
     ["pr", "create", "--repo", repo, "--base", "main", "--head", branch, "--title", title, "--body-file", "-"],
     body,
   ).trim();
-  addReviewLabel(Number(url.slice(url.lastIndexOf("/") + 1)), url, run, repo, warn, report, () => false);
-  return url;
-}
-
-// Whether `timeline` has a "labeled" event for REVIEW_LABEL: the PR carried it
-// at some point, even if PR Auto-Merge or a person has since removed it. Both
-// openPullRequest and the follow-up sweep (lib/follow-up.mts) use it, so a PR
-// that has had the label is never labelled again and the review cap holds.
-export function hasCarriedReviewLabel(timeline: readonly TimelineLabelEvent[]): boolean {
-  return timeline.some((event) => event.event === "labeled" && isReviewLabel(event.label));
-}
-
-// GitHub matches label names case-insensitively.
-function isReviewLabel(name: string): boolean {
-  return name.toLowerCase() === REVIEW_LABEL.toLowerCase();
-}
-
-// Adds REVIEW_LABEL to the PR `number` unless `everLabelled` says it has
-// carried it before. A failure, reading the history included, warns and
-// records the PR rather than throw.
-function addReviewLabel(
-  number: number,
-  url: string,
-  run: typeof execFileSync,
-  repo: string,
-  warn: (message: string) => void,
-  report: Pick<UnlabelledPrReport, "record">,
-  everLabelled: () => boolean,
-): void {
-  try {
-    if (everLabelled()) return;
-    ghWithStderr(run, ["pr", "edit", String(number), "--repo", repo, "--add-label", REVIEW_LABEL]);
-  } catch (error) {
-    warn(`  ⚠ Couldn't add ${REVIEW_LABEL} to ${url}, so add it by hand for Claude to review it: ${error}`);
-    report.record({ pr: number, url });
-  }
 }
 
 // The fields the follow-up sweep (lib/follow-up.mts) checks on every PR it
@@ -369,7 +344,7 @@ query($owner: String!, $name: String!, $cursor: String) {
     pullRequests(states: OPEN, baseRefName: "main", first: 50, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        id number url title isDraft isCrossRepository baseRefName headRefName headRefOid body mergeStateStatus
+        id number title isDraft isCrossRepository baseRefName headRefName headRefOid body mergeStateStatus
         author { login }
         labels(first: 50) { pageInfo { hasNextPage } nodes { name } }
         reviewRequests(first: 20) {
@@ -379,11 +354,7 @@ query($owner: String!, $name: String!, $cursor: String) {
         reviews(last: 50) { pageInfo { hasPreviousPage } nodes { author { login } commit { oid } } }
         reviewThreads(first: 100) {
           pageInfo { hasNextPage }
-          nodes {
-            isResolved
-            comments(first: 1) { nodes { author { __typename login } } }
-            recentComments: comments(last: 10) { pageInfo { hasPreviousPage } nodes { author { __typename login } body } }
-          }
+          nodes { isResolved comments(first: 1) { nodes { author { __typename login } } } }
         }
         commits(last: 1) {
           nodes {
@@ -394,7 +365,7 @@ query($owner: String!, $name: String!, $cursor: String) {
                   pageInfo { hasNextPage }
                   nodes {
                     __typename
-                    ... on CheckRun { name status conclusion completedAt checkSuite { workflowRun { databaseId workflow { name } } } }
+                    ... on CheckRun { name status conclusion completedAt checkSuite { workflowRun { workflow { name } } } }
                     ... on StatusContext { context state createdAt }
                   }
                 }
@@ -428,8 +399,7 @@ type CheckContext = {
 type SweepNode = {
   id: string;
   number: number;
-  url: string;
-  title: string | null;
+  title: string;
   isDraft: boolean;
   isCrossRepository: boolean;
   baseRefName: string;
@@ -441,19 +411,14 @@ type SweepNode = {
   labels: Connection<{ name: string }>;
   reviewRequests: Connection<{ requestedReviewer: Login }>;
   reviews: Connection<{ author: Login; commit: { oid?: string } | null }>;
-  reviewThreads: Connection<{
-    isResolved: boolean;
-    comments: Connection<{ author?: { __typename?: string; login?: string } | null }>;
-    recentComments?: Connection<{ author?: { __typename?: string; login?: string } | null; body?: string | null }>;
-  }>;
+  reviewThreads: Connection<{ isResolved: boolean; comments: Connection<{ author?: { __typename?: string; login?: string } | null }> }>;
   commits: Connection<{ commit: { oid?: string; statusCheckRollup: { contexts: Connection<CheckContext> } | null } | null }>;
   timelineItems: Connection<{ createdAt?: string; requestedReviewer?: Login }>;
 };
 
 // The open PRs into main with everything the follow-up sweep decides from
 // (lib/follow-up.mts#sweepPullRequests), through one GraphQL query paged by
-// hand, 50 PRs a page. Normalised to SweepPullRequest, without the checks of
-// Sandcastle's own workflow (isSandcastleCheck).
+// hand, 50 PRs a page. Normalised to SweepPullRequest.
 export function openPullRequestsForSweep(
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
@@ -492,8 +457,7 @@ function sweepPullRequest(node: SweepNode): SweepPullRequest {
   return {
     id: node.id,
     number: node.number,
-    url: node.url,
-    title: node.title ?? "",
+    title: node.title,
     author: authorLogin(node.author),
     body: node.body ?? "",
     baseRefName: node.baseRefName,
@@ -511,19 +475,9 @@ function sweepPullRequest(node: SweepNode): SweepPullRequest {
     threads: nodesOf(node.reviewThreads).map((thread) => {
       const first = nodesOf(thread.comments)[0];
       const author = first?.author;
-      return {
-        resolved: thread.isResolved,
-        byBot: author?.__typename === "Bot",
-        author: authorLogin(author),
-        recentComments: nodesOf(thread.recentComments).map((comment) => ({
-          author: authorLogin(comment.author),
-          byBot: comment.author?.__typename === "Bot",
-          body: comment.body ?? "",
-        })),
-        ...(thread.recentComments?.pageInfo?.hasPreviousPage === true ? { recentTruncated: true as const } : {}),
-      };
+      return { resolved: thread.isResolved, byBot: author?.__typename === "Bot", author: authorLogin(author) };
     }),
-    checks: nodesOf(contexts).filter((context) => !isSandcastleCheck(context)).map(checkState),
+    checks: nodesOf(contexts).map(checkState),
     copilotRequestedAt: nodesOf(node.timelineItems)
       .filter((event) => typeof event.createdAt === "string" && isCopilot(event.requestedReviewer?.login ?? null))
       .map((event) => event.createdAt as string),
@@ -534,17 +488,6 @@ function sweepPullRequest(node: SweepNode): SweepPullRequest {
       // nothing about whether the head is settled.
       (head?.oid !== undefined && head.oid !== node.headRefOid),
   };
-}
-
-// Whether `context` is a check run of Sandcastle's own workflow (#53): the
-// job, or the job that chooses its mode, which a run started by a PR's review
-// or label reports on the PR's head. It runs while the run does, Fail on
-// hand-backs turns it red for a hand-back on any issue, and GitHub cancels it
-// when a run waits too long in its concurrency group, so no pass can fix it.
-// Matched by workflow rather than check name, so a check another workflow
-// names "Sandcastle", and one with no workflow run, are kept.
-function isSandcastleCheck(context: CheckContext): boolean {
-  return context.__typename === "CheckRun" && context.checkSuite?.workflowRun?.workflow?.name === SANDCASTLE_WORKFLOW;
 }
 
 // A check run is green when it succeeded, or was neutral or skipped; a
@@ -561,11 +504,13 @@ function checkState(context: CheckContext): CheckState {
       completedAt: context.createdAt ?? null,
     };
   }
+  const workflow = context.checkSuite?.workflowRun?.workflow?.name;
   return {
     name: context.name ?? "",
     completed: context.status === "COMPLETED",
     green: ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(context.conclusion ?? ""),
     completedAt: context.completedAt ?? null,
+    ...(workflow === undefined ? {} : { workflow }),
   };
 }
 
@@ -588,32 +533,50 @@ export function requestCopilotReview(pullRequestId: string, run: typeof execFile
   ghWithStderr(run, ["api", "graphql", "-f", `query=${mutation}`, "-f", `pullRequestId=${pullRequestId}`]);
 }
 
-// Thrown by updatePullRequestBranch when GitHub refuses because the PR's head
-// moved since the sweep read it: another run, or a push, got there first.
-export class HeadMovedError extends Error {}
-
 // Updates a PR's branch from its base on GitHub's server
 // (lib/follow-up.mts#decide), for a settled PR whose only problem is being
 // behind main. expected_head_sha makes GitHub refuse (422) when the head
 // moved since the sweep read it, rather than merge into a head it never
-// judged. That refusal throws HeadMovedError, which the sweep treats as "the
-// head moved, another run got there first" and skips (#53); any other failure
-// throws as before. Other 422s, such as a merge conflict, aren't matched.
+// judged.
 export function updatePullRequestBranch(
   number: number,
   expectedHeadSha: string,
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
 ): void {
-  try {
-    ghWithStderr(run, ["api", "--method", "PUT", `repos/${repo}/pulls/${number}/update-branch`, "-f", `expected_head_sha=${expectedHeadSha}`]);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    if (/HTTP 422/.test(message) && /expected head sha|expected_head_sha|head branch was modified/i.test(message)) {
-      throw new HeadMovedError(`PR #${number}'s head moved since the sweep read it (${expectedHeadSha.slice(0, 7)})`, { cause: error });
-    }
-    throw error;
-  }
+  ghWithStderr(run, ["api", "--method", "PUT", `repos/${repo}/pulls/${number}/update-branch`, "-f", `expected_head_sha=${expectedHeadSha}`]);
+}
+
+// What mainMergeOf found: the first parent of a merge GitHub made of main into a branch the host updated, or why the commit is not one.
+export type MainMerge = { firstParent: string } | { problem: string };
+
+// Whether `commit` is GitHub's own merge of main into a branch, made for the host: committed by web-flow with a signature GitHub
+// verified, authored by `host` (a merge someone else makes, through the web conflict editor or the merges API, carries their
+// login, and so does one built by hand, which can't be signed as web-flow), with two parents, the second a commit main
+// contains. Main's tip is read as a commit first, since a bare `main` in the compare API can resolve to a tag. Used by
+// lib/follow-up.mts#handOffApproval to accept the heads that update-branch makes under the host's login: PR Auto-Merge's when its RELEASE_PR_PAT is the host's account, and the
+// owner's Update branch click when the owner is the host. A merge under any other login, or by GITHUB_TOKEN, is refused.
+export function mainMergeOf(
+  commit: string,
+  host: string,
+  run: typeof execFileSync = execFileSync,
+  repo: string = repoName(),
+): MainMerge {
+  const info = JSON.parse(
+    ghWithStderr(run, [
+      "api", `repos/${repo}/commits/${commit}`,
+      "--jq", "{parents: [.parents[].sha], committer: .committer.login, author: .author.login, verified: .commit.verification.verified}",
+    ]),
+  ) as { parents: string[]; committer: string | null; author: string | null; verified: boolean };
+  const short = commit.slice(0, 7);
+  if (info.committer !== "web-flow" || info.verified !== true) return { problem: `${short} isn't a commit GitHub made and signed itself` };
+  if (info.author === null || info.author.toLowerCase() !== host.toLowerCase()) return { problem: `${short} wasn't made for ${host}` };
+  const [first, second] = info.parents;
+  if (info.parents.length !== 2 || first === undefined || second === undefined) return { problem: `${short} isn't a merge` };
+  const tip = ghWithStderr(run, ["api", `repos/${repo}/git/ref/heads/main`, "--jq", ".object.sha"]).trim();
+  const status = ghWithStderr(run, ["api", `repos/${repo}/compare/${second}...${tip}`, "--jq", ".status"]).trim();
+  if (status !== "ahead" && status !== "identical") return { problem: `${short} merges ${second.slice(0, 7)}, which main doesn't contain` };
+  return { firstParent: first };
 }
 
 // One comment in a review thread, first comment first (lib/github.mts#reviewThreadsOf).
@@ -635,7 +598,7 @@ export type ReviewThread = {
 // (lib/follow-up-pass.mts#runPass), through one GraphQL query. Throws when
 // any nested list (threads or a thread's comments) is truncated, or the
 // answer names no such PR, so a pass never decides from partial information
-// (#78, fail closed as lib/github.mts#bodyEdits already does for issues).
+// (fail closed as lib/github.mts#bodyEdits already does for issues).
 export function reviewThreadsOf(
   number: number,
   run: typeof execFileSync = execFileSync,
@@ -700,7 +663,7 @@ type ReviewThreadsNode = {
   }>;
 };
 
-// One check on a PR's head as a follow-up pass reads it (#79): its
+// One check on a PR's head as a follow-up pass reads it: its
 // CheckState, and the id of the GitHub Actions run behind it, which is what
 // `gh run rerun` and `gh run view` take. A status, or a check run another
 // app made (such as code scanning's own "CodeQL" result), has none.
@@ -733,8 +696,7 @@ query($owner: String!, $name: String!, $number: Int!) {
 }`;
 
 // The checks on PR `number`'s head, read fresh for a follow-up pass
-// (lib/follow-up-pass.mts#PassHost.checks), normalised as the sweep's are and
-// without the checks of Sandcastle's own workflow (isSandcastleCheck).
+// (lib/follow-up-pass.mts#PassHost.checks), normalised as the sweep's are.
 // Throws, rather than deciding from part of them, when the list is
 // truncated, the answer names no such PR, or the checks read are on a commit
 // other than its head.
@@ -768,16 +730,14 @@ export function headChecksOf(
   if (truncated(contexts)) throw new Error(`Pull request #${number}'s checks are truncated, so they can't be read in full`);
   return {
     headRefOid: pr.headRefOid,
-    checks: nodesOf(contexts)
-      .filter((context) => !isSandcastleCheck(context))
-      .map((context) => ({ ...checkState(context), runId: context.checkSuite?.workflowRun?.databaseId })),
+    checks: nodesOf(contexts).map((context) => ({ ...checkState(context), runId: context.checkSuite?.workflowRun?.databaseId })),
   };
 }
 
 // The head checks named in `names`, each with the Actions run behind it. Reads
 // the checks afresh and refuses when the head has moved past `expectedHead`
 // (the commit a follow-up pass gated), rather than re-run or forward a check
-// read from a commit the pass never judged (#79).
+// read from a commit the pass never judged.
 function namedRuns(
   number: number,
   names: readonly string[],
@@ -792,9 +752,11 @@ function namedRuns(
   // A head can carry a name in `names` from more than one Actions run, for
   // example a workflow triggered by both `push` and `pull_request`: one run
   // green, one red. Keeping only the failed ones here stops a caller from
-  // re-running, or reading the failed-job log of, a run that already passed
-  // (#259).
-  const checks = allChecks.filter((check) => names.includes(check.name) && check.completed && !check.green);
+  // re-running, or reading the failed-job log of, a run that already passed.
+  // Sandcastle's own check is left out as the sweep leaves it out
+  // (withoutOwnCheck): its run's log isn't for the follow-up role, and
+  // its run isn't one to re-run.
+  const checks = withoutOwnCheck(allChecks).filter((check) => names.includes(check.name) && check.completed && !check.green);
   const runIds = [...new Set(checks.flatMap((check) => (check.runId === undefined ? [] : [check.runId])))];
   return { checks, runIds };
 }
@@ -813,7 +775,7 @@ function stateOf({ runId: _runId, ...state }: HeadCheck): CheckState {
 // re-run already, by a pass or a person, and its checks are reported as they
 // stand, so one still red there hands the PR back. Throws for a named check
 // with no Actions run, which can't be re-run, or when the head has moved past
-// `expectedHead` since the pass gated it (#79).
+// `expectedHead` since the pass gated it.
 export function rerunFailedChecksOnce(
   number: number,
   names: readonly string[],
@@ -848,12 +810,12 @@ const FAILED_LOG_BUFFER = 256 * 1024 * 1024;
 // for each Actions run behind the checks in `names`, read once per run under
 // a header naming its checks. A check with no Actions run gets a line saying
 // so rather than failing the pass: the follow-up role can still fix the rest.
-// Throws when the head has moved past `expectedHead` since the pass gated it
-// (#79), rather than quote a log for a commit the pass never judged. `limit`,
+// Throws when the head has moved past `expectedHead` since the pass gated
+// it, rather than quote a log for a commit the pass never judged. `limit`,
 // when given, keeps each run's own section to an even share of it (the end,
 // where its error is) rather than cutting the joined text as a whole: two
 // runs' logs otherwise compete for the same budget, and the later one in the
-// join can crowd the earlier one out of it entirely (#79).
+// join can crowd the earlier one out of it entirely.
 export function failedCheckLogs(
   number: number,
   names: readonly string[],
@@ -888,15 +850,15 @@ export function replyToReviewThread(threadId: string, body: string, run: typeof 
 // Resolves a review thread (lib/follow-up-pass.mts#runPass), through
 // resolveReviewThread. GitHub's mutation takes only the thread id: there's no
 // ADDRESSED/WONT_FIX/INVALID argument, so that resolution travels in the
-// reply and the pass summary instead (#78).
+// reply and the pass summary instead.
 export function resolveReviewThread(threadId: string, run: typeof execFileSync = execFileSync): void {
   const mutation = "mutation($threadId: ID!) { resolveReviewThread(input: { threadId: $threadId }) { thread { id } } }";
   ghWithStderr(run, ["api", "graphql", "-f", `query=${mutation}`, "-f", `threadId=${threadId}`]);
 }
 
-// Posts the follow-up pass's summary comment on a pull request
-// (lib/follow-up-pass.mts#runPass#passSummaryComment), through gh pr comment,
-// with the body on stdin.
+// Posts a comment on a pull request through gh pr comment, with the body on stdin: the follow-up pass's summary
+// (lib/follow-up-pass.mts#runPass#passSummaryComment) and the record of an approved head (lib/follow-up.mts#recordApprovedHead).
+// It posts as the signed-in login, the host's, and handOffApproval trusts a record only from that login.
 export function commentOnPullRequest(
   number: number,
   body: string,
@@ -906,55 +868,45 @@ export function commentOnPullRequest(
   ghWithStderr(run, ["pr", "comment", String(number), "--repo", repo, "--body-file", "-"], body);
 }
 
-// Every path an open PR changes, from all pages of its file list. The REST
-// endpoint pages with --paginate, where `gh pr view --json files` may stop at
-// the first 100 paths, so a larger PR was checked against part of its list
-// and the overlap check failed open (#425). A renamed file counts under its
-// old path too, since a branch that edits the old path conflicts with it.
-export function pullRequestFiles(
-  pr: number,
-  run: typeof execFileSync = execFileSync,
-  repo: string = repoName(),
-): string[] {
-  return jsonLines(
+// GitHub's cap on the files the REST list returns for one PR.
+const PULL_REQUEST_FILES_CAP = 3000;
+
+// Every path an open PR changes, for lib/overlap.mts, a renamed file's old
+// path included, since a pick that names either would conflict. It reads the
+// REST list with --paginate rather than `gh pr view --json files`, which can
+// stop at 100 paths and so leave the check blind to the rest. Each path
+// comes out as one JSON string per line, so a path with a line break stays
+// whole. A failed read throws rather than return part of the list, and so does
+// a list at GitHub's 3000-file cap, which may be cut short.
+export function pullRequestFiles(pr: number, run: typeof execFileSync = execFileSync, repo: string = repoName()): string[] {
+  const files = jsonLines(
     ghWithStderr(run, [
       "api", "--paginate", `repos/${repo}/pulls/${pr}/files`,
-      "--jq", ".[] | (.filename, (.previous_filename // empty)) | @json",
+      "--jq", ".[] | [.filename, .previous_filename // empty] | @json",
     ]),
-  ) as string[];
-}
-
-// Whether the host (`poster`) has commented on the issue or PR `number` with a
-// body that carries `marker`. Only the host's own comments count: anyone can
-// comment on a public issue, and a pasted marker mustn't stand in for one. The
-// overlap check reads it so a pick deferred again in a later run isn't
-// commented on every run (#425).
-export function hostCommentedWith(
-  number: number,
-  marker: string,
-  run: typeof execFileSync = execFileSync,
-  repo: string = repoName(),
-  poster: string = (signedInLogin ??= hostLogin(run)),
-): boolean {
-  const comments = jsonLines(
-    ghWithStderr(run, ["api", "--paginate", `repos/${repo}/issues/${number}/comments`, "--jq", ".[] | {body, author: .user.login} | @json"]),
-  ) as { body: string; author: string }[];
-  return comments.some((comment) => comment.author === poster && comment.body.includes(marker));
+  ) as string[][];
+  const paths = files.flat();
+  if (files.length >= PULL_REQUEST_FILES_CAP) {
+    throw new Error(`PR #${pr} changes ${PULL_REQUEST_FILES_CAP} files or more, which is GitHub's cap on its file list, so the list may be incomplete`);
+  }
+  return paths;
 }
 
 // Any issue's body, or "" when it has none.
-export function issueBody(number: number): string {
-  return sh(process.cwd(), "gh", "api", `repos/${repoName()}/issues/${number}`, "--jq", '.body // ""');
+export function issueBody(number: number, run: typeof execFileSync = execFileSync, repo: string = repoName()): string {
+  return ghWithStderr(run, ["api", `repos/${repo}/issues/${number}`, "--jq", '.body // ""']).trim();
 }
 
 // Add the native "#issue blocked by #blocker" link. The API names the blocker
 // by its id, not its number.
-export function addBlockedBy(issue: number, blocker: number): void {
-  const id = sh(process.cwd(), "gh", "api", `repos/${repoName()}/issues/${blocker}`, "--jq", ".id");
-  sh(
-    process.cwd(), "gh", "api", "--method", "POST", `repos/${repoName()}/issues/${issue}/dependencies/blocked_by`,
-    "-F", `issue_id=${id}`,
-  );
+export function addBlockedBy(
+  issue: number,
+  blocker: number,
+  run: typeof execFileSync = execFileSync,
+  repo: string = repoName(),
+): void {
+  const id = ghWithStderr(run, ["api", `repos/${repo}/issues/${blocker}`, "--jq", ".id"]).trim();
+  ghWithStderr(run, ["api", "--method", "POST", `repos/${repo}/issues/${issue}/dependencies/blocked_by`, "-F", `issue_id=${id}`]);
 }
 
 // The numbers of `issue`'s native "blocked by" links to issues in this
@@ -1077,20 +1029,17 @@ export function commentOnIssue(
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
 ): void {
-  run("gh", ["issue", "comment", String(issue), "--repo", repo, "--body-file", "-"], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    stdio: ["pipe", "pipe", "inherit"],
-    input: body,
-  });
+  ghWithStderr(run, ["issue", "comment", String(issue), "--repo", repo, "--body-file", "-"], body);
 }
 
 // Creates any of `labels` this repository doesn't already have, with its
 // colour and description. Run once at the host's startup, before the first
 // round, so a fresh repository (or one whose labels were deleted) always has
-// them (see docs/plans/sandcastle-workflow.md, "Labels").
+// them (see Blazor-Server's docs/plans/sandcastle-workflow.md, "Labels"). By default that's
+// HOST_LABELS: SANDCASTLE_LABELS, `Sandcastle:local` (not one of them, but it must exist
+// before an issue moves to it) and the owner's hand-off label.
 export function ensureLabels(
-  labels: readonly SandcastleLabel[] = SANDCASTLE_LABELS,
+  labels: readonly SandcastleLabel[] = HOST_LABELS,
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
 ): void {
@@ -1111,15 +1060,6 @@ export function ensureLabels(
       if (!String(error).includes("already exists")) throw error;
     }
   }
-}
-
-// Creates every label the host needs at startup: SANDCASTLE_LABELS,
-// REVIEW_LABEL_DEFINITION and FOLLOW_UP_LABEL_DEFINITION, through
-// ensureLabels. Without REVIEW_LABEL, every label add in a run fails, and no
-// PR it opens is reviewed (#51); without FOLLOW_UP_LABEL, the owner has no
-// label to hand a PR off with (#58).
-export function ensureHostLabels(run: typeof execFileSync = execFileSync, repo: string = repoName()): void {
-  ensureLabels([...SANDCASTLE_LABELS, REVIEW_LABEL_DEFINITION, FOLLOW_UP_LABEL_DEFINITION], run, repo);
 }
 
 // Adds `label` to the issue `number`, or every label in it, in one edit so
@@ -1145,9 +1085,21 @@ export function removeIssueLabel(
   ghWithStderr(run, ["issue", "edit", String(number), "--repo", repo, "--remove-label", label]);
 }
 
+// Replaces `from` with `to` on the issue `number`, in one edit so the issue
+// never carries both or neither.
+export function replaceIssueLabel(
+  number: number,
+  from: string,
+  to: string,
+  run: typeof execFileSync = execFileSync,
+  repo: string = repoName(),
+): void {
+  ghWithStderr(run, ["issue", "edit", String(number), "--repo", repo, "--add-label", to, "--remove-label", from]);
+}
+
 // Adds `label` to the pull request `number`: gh issue edit refuses a PR
 // number, so restoring a PR-level hand-back label someone other than the
-// repository owner removed (lib/follow-up.mts#sweepPullRequests, #146) needs
+// repository owner removed (lib/follow-up.mts#sweepPullRequests) needs
 // its own gh pr edit call.
 export function addPullRequestLabel(
   number: number,
@@ -1170,7 +1122,8 @@ export function issueLabels(
   ) as string[];
 }
 
-// The numbers of the open issues carrying `label`. As with
+// The numbers of the issues carrying `label`, open or closed: a hand-off pass can label the closed issue its branch
+// names (lib/follow-up-pass.mts#runPass), and a run killed meanwhile must not leave the label there. As with
 // listSandcastleIssues, the cap sits far above any real queue.
 export function issuesWithLabel(
   label: string,
@@ -1179,97 +1132,9 @@ export function issuesWithLabel(
 ): number[] {
   return JSON.parse(
     ghWithStderr(run, [
-      "issue", "list", "--repo", repo, "--state", "open", "--label", label, "--limit", "1000", "--json", "number", "--jq", "[.[].number]",
+      "issue", "list", "--repo", repo, "--state", "all", "--label", label, "--limit", "1000", "--json", "number", "--jq", "[.[].number]",
     ]),
   ) as number[];
-}
-
-// The names of the labels on the issue or PR `number` now, from the REST
-// labels endpoint, which covers both (gh issue view refuses a PR here, #58).
-// Every page, read fresh rather than from a round's snapshot.
-export function labelsOn(number: number, run: typeof execFileSync = execFileSync, repo: string = repoName()): string[] {
-  return jsonLines(
-    ghWithStderr(run, ["api", "--paginate", `repos/${repo}/issues/${number}/labels`, "--jq", ".[] | .name | @json"]),
-  ) as string[];
-}
-
-// Adds `label` to the issue or PR `number` with the REST labels endpoint,
-// which gh issue edit can't do for a PR. The repository must already have
-// the label (see ensureLabels).
-export function addLabelOn(
-  number: number,
-  label: string,
-  run: typeof execFileSync = execFileSync,
-  repo: string = repoName(),
-): void {
-  ghWithStderr(run, ["api", "-X", "POST", `repos/${repo}/issues/${number}/labels`, "-f", `labels[]=${label}`]);
-}
-
-// Removes `label` from the issue or PR `number`. GitHub answers 404 when the
-// label isn't on it, which counts as removed: the label is gone either way.
-export function removeLabelFrom(
-  number: number,
-  label: string,
-  run: typeof execFileSync = execFileSync,
-  repo: string = repoName(),
-): void {
-  try {
-    ghWithStderr(run, ["api", "-X", "DELETE", `repos/${repo}/issues/${number}/labels/${encodeURIComponent(label)}`]);
-  } catch (error) {
-    if (!/\(HTTP 404\)/.test(String(error))) throw error;
-  }
-}
-
-// The numbers of the open issues and PRs carrying `label`, every page of the
-// REST issues endpoint, which lists PRs too where gh issue list leaves them
-// out. lib/building.mts reads it to clear a crashed run's claim on either.
-export function openNumbersWithLabel(label: string, run: typeof execFileSync = execFileSync, repo: string = repoName()): number[] {
-  return jsonLines(
-    ghWithStderr(run, [
-      "api", "--paginate", `repos/${repo}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100`,
-      "--jq", ".[] | .number | @json",
-    ]),
-  ) as number[];
-}
-
-// A hand-off PR's own text, the brief of a pass that has no issue (#58): its
-// title and description, and the comments of authors with write access.
-export type PullRequestText = { number: number; title: string; body: string; comments: string[] };
-
-// Reads PR `number`'s title, description and comments with gh pr view,
-// dropping the comments of authors without write access (see ownerApproved,
-// which shares `canPush` and `failed` with the round's other reads). Throws
-// when gh can't read the PR, so a pass never runs on an empty brief.
-export function pullRequestText(
-  number: number,
-  run: typeof execFileSync = execFileSync,
-  repo: string = repoName(),
-  canPush: Map<string, boolean> = writeAccessByLogin,
-  warn: (message: string) => void = console.error,
-  failed: Set<string> = new Set(),
-): PullRequestText {
-  const viewed = JSON.parse(
-    ghWithStderr(run, [
-      "pr", "view", String(number), "--repo", repo,
-      "--json", "number,title,body,comments",
-      "--jq", "{number, title, body, comments: [.comments[] | {author: .author.login, body}]}",
-    ]),
-  ) as Omit<GhIssue, "labels" | "comments"> & { comments: { author: string | { login: string }; body: string }[] };
-  // gh's raw --json shape nests the login, the --jq one above flattens it;
-  // read either, so a change to the jq never lets an author through unchecked.
-  const comments = viewed.comments.map((comment) => ({
-    author: typeof comment.author === "string" ? comment.author : comment.author.login,
-    body: comment.body,
-  }));
-  const approved = ownerApproved(
-    { number: viewed.number, title: viewed.title, body: viewed.body, labels: [], comments },
-    repo,
-    run,
-    canPush,
-    warn,
-    failed,
-  );
-  return { number: approved.number, title: approved.title, body: approved.body, comments: approved.comments };
 }
 
 // One "labeled" or "unlabeled" event from an issue's or PR's REST timeline.
@@ -1302,7 +1167,7 @@ export function labelTimeline(
 // One "labeled", "unlabeled" or "renamed" event from an issue's or PR's REST
 // events list (PRs share it). Unlike labelTimeline, this names who made it:
 // lib/queue.mts#approval and #labelOriginFixes need that to tell the
-// repository owner's own labelling from anyone else's (#146). `actor` is
+// repository owner's own labelling from anyone else's. `actor` is
 // null for a deleted account; `label` is null on a renamed event, which
 // carries no label.
 export type IssueEvent = { event: "labeled" | "unlabeled" | "renamed"; actor: string | null; label: string | null; createdAt: string };
@@ -1347,38 +1212,23 @@ function isIssueEvent(value: unknown): value is IssueEvent {
 // issue.
 export type ContentEdit = { editor: string | null; editedAt: string };
 
-// Every edit to the issue `number`'s body, or with `kind` "pullRequest" the
-// PR's (#58: repository.issue answers null for a PR), every page (GraphQL
-// userContentEdits, --paginate with $endCursor), in GitHub's order:
+// Every edit to the issue `number`'s body, every page (GraphQL
+// issue.userContentEdits, --paginate with $endCursor), in GitHub's order:
 // lib/queue.mts#approval compares each edit's time, not its position. Throws
-// when the answer names no such issue or PR, or any edit doesn't fit
-// ContentEdit.
+// when the answer names no such issue, or any edit doesn't fit ContentEdit.
 export function bodyEdits(
   number: number,
   run: typeof execFileSync = execFileSync,
   repo: string = repoName(),
-  kind: "issue" | "pullRequest" = "issue",
 ): ContentEdit[] {
-  const [owner, name] = repo.split("/") as [string, string];
-  const what = kind === "issue" ? "issue" : "PR";
-  return jsonLines(
-    ghWithStderr(run, [
-      "api", "graphql", "--paginate", "-f", `query=${bodyEditsQuery(kind)}`, "-f", `owner=${owner}`, "-f", `name=${name}`,
-      "-F", `number=${number}`,
-      // A missing issue prints null, which the check below throws on, rather
-      // than nothing, which would read as an issue nobody has edited.
-      "--jq",
-      `.data.repository.${kind} | if . == null then null | @json` +
-        " else .userContentEdits.nodes[] | {editor: .editor.login, editedAt} | @json end",
-    ]),
-  ).map((edit) => {
-    if (!isContentEdit(edit)) throw new Error(`GitHub's answer names no ${what} ${number}'s body edits: ${JSON.stringify(edit)}`);
-    return edit;
-  });
+  return contentEdits("issue", number, run, repo);
 }
 
-function bodyEditsQuery(kind: "issue" | "pullRequest"): string {
-  return `query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+// The edits to the issue's or pull request's body behind bodyEdits and pullRequestBodyEdits. `kind` is the GraphQL field:
+// issue(number:) answers null for a pull request, so a pull request is asked as pullRequest(number:).
+function contentEdits(kind: "issue" | "pullRequest", number: number, run: typeof execFileSync, repo: string): ContentEdit[] {
+  const [owner, name] = repo.split("/") as [string, string];
+  const query = `query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
     ${kind}(number: $number) {
       userContentEdits(first: 100, after: $endCursor) {
@@ -1388,6 +1238,69 @@ function bodyEditsQuery(kind: "issue" | "pullRequest"): string {
     }
   }
 }`;
+  return jsonLines(
+    ghWithStderr(run, [
+      "api", "graphql", "--paginate", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`,
+      "-F", `number=${number}`,
+      // A missing issue or pull request prints null, which the check below throws on, rather
+      // than nothing, which would read as one nobody has edited.
+      "--jq",
+      `.data.repository.${kind} | if . == null then null | @json` +
+        " else .userContentEdits.nodes[] | {editor: .editor.login, editedAt} | @json end",
+    ]),
+  ).map((edit) => {
+    if (!isContentEdit(edit)) {
+      const subject = kind === "issue" ? "issue" : "pull request";
+      throw new Error(`GitHub's answer names no ${subject} ${number}'s body edits: ${JSON.stringify(edit)}`);
+    }
+    return edit;
+  });
+}
+
+// Every edit to the pull request `number`'s title-and-body, every page, as bodyEdits reads an issue's (GraphQL
+// issue(number:) answers null for a PR, so this asks pullRequest(number:)). Throws when the answer names no such pull
+// request, or any edit doesn't fit ContentEdit.
+export function pullRequestBodyEdits(
+  number: number,
+  run: typeof execFileSync = execFileSync,
+  repo: string = repoName(),
+): ContentEdit[] {
+  return contentEdits("pullRequest", number, run, repo);
+}
+
+// The numbers of the open pull requests carrying `label` (gh issue list leaves pull requests out, so
+// issuesWithLabel can't see them). The cap sits far above any real number of open pull requests.
+export function pullRequestsWithLabel(
+  label: string,
+  run: typeof execFileSync = execFileSync,
+  repo: string = repoName(),
+): number[] {
+  return JSON.parse(
+    ghWithStderr(run, [
+      "pr", "list", "--repo", repo, "--state", "open", "--label", label, "--limit", "1000", "--json", "number", "--jq", "[.[].number]",
+    ]),
+  ) as number[];
+}
+
+// The names of the labels the pull request `number` carries now, read fresh.
+export function pullRequestLabels(
+  number: number,
+  run: typeof execFileSync = execFileSync,
+  repo: string = repoName(),
+): string[] {
+  return JSON.parse(
+    ghWithStderr(run, ["pr", "view", String(number), "--repo", repo, "--json", "labels", "--jq", "[.labels[].name]"]),
+  ) as string[];
+}
+
+// Removes `label` from the pull request `number` (gh issue edit refuses a pull request's number).
+export function removePullRequestLabel(
+  number: number,
+  label: string,
+  run: typeof execFileSync = execFileSync,
+  repo: string = repoName(),
+): void {
+  ghWithStderr(run, ["pr", "edit", String(number), "--repo", repo, "--remove-label", label]);
 }
 
 function isContentEdit(value: unknown): value is ContentEdit {
@@ -1401,14 +1314,16 @@ function isContentEdit(value: unknown): value is ContentEdit {
 
 // One comment, with when it was posted, so markerCommentsSince can tell
 // which side of a label's removal it falls on, and who posted it.
-export type TimestampedComment = { body: string; createdAt: string; author: string };
+// `updatedAt` is when the comment was last edited (GitHub sets it to the creation time for one never edited). Only issueComments fills it in,
+// and lib/follow-up.mts#handOffApproval counts a head record only when it equals createdAt, so a comment without it counts for no record.
+export type TimestampedComment = { body: string; createdAt: string; updatedAt?: string; author: string };
 
 // The comments in `comments` that `poster` posted and that carry `marker`,
 // posted after `label` was last removed from this issue or PR (its most
 // recent "unlabeled" event naming `label` in `timeline`), or since
 // `createdAt` when `label` was never removed. Counting from the timeline rather than a running counter means the
 // count survives a restart, and a human re-queueing by removing the label
-// resets it (see docs/plans/sandcastle-workflow.md, "Giving up and telling
+// resets it (see Blazor-Server's docs/plans/sandcastle-workflow.md, "Giving up and telling
 // the human").
 export function markerCommentsSince(
   comments: readonly TimestampedComment[],
@@ -1456,7 +1371,7 @@ export function cacheHostLogin(run: typeof execFileSync = execFileSync): string 
 // The host's own login (see hostLogin), cached the same way markerComments and
 // openIssuesWithComment already do, for the follow-up sweep
 // (lib/follow-up.mts), which needs it outside any single GitHub read: "the
-// repository owner opened it" means this login authored the PR (#77, #214).
+// repository owner opened it" means this login authored the PR.
 export function signedInHostLogin(run: typeof execFileSync = execFileSync): string {
   if (sweepLogin?.run !== run) sweepLogin = { run, login: hostLogin(run) };
   return sweepLogin.login;
@@ -1479,89 +1394,20 @@ export function markerComments(
   run: typeof execFileSync = execFileSync,
   poster: string = (signedInLogin ??= hostLogin(run)),
 ): TimestampedComment[] {
-  const { comments, timeline, createdAt } = markerCommentReads(number, repo, run);
+  const comments = issueComments(number, run, repo);
+  const timeline = labelTimeline(number, run, repo);
+  const createdAt = ghWithStderr(run, ["api", `repos/${repo}/issues/${number}`, "--jq", ".created_at"]).trim();
   return markerCommentsSince(comments, timeline, label, marker, createdAt, poster);
 }
 
-// The raw reads markerCommentsSince counts from: the comments, the label
-// timeline and when the issue or PR was created (#65).
-export type CommentReads = { comments: TimestampedComment[]; timeline: TimelineLabelEvent[]; createdAt: string };
-
-// Reads what markerComments counts from, without counting, so the status
-// command (lib/status.mts, #65) counts follow-up passes from the same reads
-// the pass does.
-export function markerCommentReads(number: number, repo: string = repoName(), run: typeof execFileSync = execFileSync): CommentReads {
-  const comments = jsonLines(
+// Every comment on the issue or PR `number`, oldest first (PRs share the issues API).
+export function issueComments(number: number, run: typeof execFileSync = execFileSync, repo: string = repoName()): TimestampedComment[] {
+  return jsonLines(
     ghWithStderr(run, [
       "api", "--paginate", `repos/${repo}/issues/${number}/comments`,
-      "--jq", ".[] | {body, createdAt: .created_at, author: .user.login} | @json",
+      "--jq", ".[] | {body, createdAt: .created_at, updatedAt: .updated_at, author: .user.login} | @json",
     ]),
   ) as TimestampedComment[];
-  const timeline = labelTimeline(number, run, repo);
-  const createdAt = ghWithStderr(run, ["api", `repos/${repo}/issues/${number}`, "--jq", ".created_at"]).trim();
-  return { comments, timeline, createdAt };
-}
-
-// One run of Sandcastle's workflow that hasn't completed, as `gh run list --json` gives it.
-export type WorkflowRun = {
-  id: number;
-  status: string;
-  event: string;
-  displayTitle: string;
-  headBranch: string | null;
-  createdAt: string;
-  url: string;
-};
-
-// The statuses of a run that hasn't completed, as `gh run list --status` names them.
-const UNFINISHED_RUN_STATUSES = ["in_progress", "queued", "requested", "waiting", "pending"] as const;
-
-// Sandcastle's workflow runs that haven't completed, oldest first, for the
-// status command (#65). One `gh run list` per status rather than one list
-// filtered afterwards: every CI completion starts a run that's skipped at
-// once, so a queued run can be older than the last 100 runs. An answer that
-// isn't a list of runs throws, rather than report that nothing is running.
-export function sandcastleWorkflowRuns(run: typeof execFileSync = execFileSync, repo: string = repoName()): WorkflowRun[] {
-  const byId = new Map<number, WorkflowRun>();
-  for (const status of UNFINISHED_RUN_STATUSES) {
-    const answer = JSON.parse(
-      ghWithStderr(run, [
-        "run", "list", "--repo", repo, "--workflow", SANDCASTLE_WORKFLOW, "--status", status, "--limit", "100",
-        "--json", "databaseId,status,event,displayTitle,headBranch,createdAt,url",
-      ]),
-    ) as unknown;
-    if (!Array.isArray(answer)) throw new Error(`gh run list answered with something other than a list of runs: ${JSON.stringify(answer)}`);
-    for (const entry of answer) {
-      const workflowRun = workflowRunOf(entry);
-      byId.set(workflowRun.id, workflowRun);
-    }
-  }
-  return [...byId.values()].sort((a, b) => timestamp(a.createdAt) - timestamp(b.createdAt));
-}
-
-// One entry of `gh run list --json`, checked field by field: an entry of any
-// other shape throws.
-function workflowRunOf(entry: unknown): WorkflowRun {
-  const raw = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
-  const text = (key: string): string => {
-    const value = raw[key];
-    if (typeof value !== "string") throw new Error(`gh run list gave a run without a ${key}: ${JSON.stringify(entry)}`);
-    return value;
-  };
-  if (typeof raw.databaseId !== "number") throw new Error(`gh run list gave a run without an id: ${JSON.stringify(entry)}`);
-  const headBranch = raw.headBranch;
-  if (headBranch !== null && headBranch !== undefined && typeof headBranch !== "string") {
-    throw new Error(`gh run list gave a run with an unreadable branch: ${JSON.stringify(entry)}`);
-  }
-  return {
-    id: raw.databaseId,
-    status: text("status"),
-    event: text("event"),
-    displayTitle: text("displayTitle"),
-    headBranch: headBranch ?? null,
-    createdAt: text("createdAt"),
-    url: text("url"),
-  };
 }
 
 // A label only the host or a human applies to hand work back: the issue's or
@@ -1593,4 +1439,62 @@ export function handBack(
   ghWithStderr(run, [target.kind, "comment", number, "--repo", repo, "--body-file", "-"], body);
   ghWithStderr(run, [target.kind, "edit", number, "--repo", repo, "--add-label", label, ...removeReady]);
   report.record({ kind: target.kind, number: target.number, label, reason, url: targetUrl(repo, target) });
+}
+
+// Passes a PR has had since sandcastle:needs-human was last removed: the host's FOLLOW_UP_MARKER comments. The follow-up
+// pass and `pnpm run sandcastle:status` both count them here, so the status shows the number the cap is checked against.
+export function followUpPassCount(number: number, run: typeof execFileSync = execFileSync, repo: string = repoName()): number {
+  return markerComments(number, "sandcastle:needs-human", FOLLOW_UP_MARKER, repo, run).length;
+}
+
+// One run of the Sandcastle workflow, as `gh run list` reports it.
+export type WorkflowRun = {
+  id: number;
+  status: string;
+  conclusion: string | null;
+  event: string;
+  branch: string;
+  createdAt: string;
+  url: string;
+};
+
+// The Sandcastle workflow's latest `limit` runs, newest first. Throws on a shape it doesn't expect, so the status
+// reports the runs as unreadable rather than guessing, and on a limit that isn't a positive whole number.
+export function sandcastleWorkflowRuns(
+  limit: number = 10,
+  run: typeof execFileSync = execFileSync,
+  repo: string = repoName(),
+): WorkflowRun[] {
+  if (!Number.isInteger(limit) || limit < 1) throw new Error(`The number of workflow runs to list must be a positive whole number, not ${limit}.`);
+  const listed: unknown = JSON.parse(
+    ghWithStderr(run, [
+      "run", "list", "--workflow", "sandcastle.yml", "--limit", String(limit),
+      "--json", "databaseId,status,conclusion,event,headBranch,createdAt,url", "--repo", repo,
+    ]),
+  );
+  if (!Array.isArray(listed)) throw new Error("gh run list didn't return a list of runs.");
+  return listed.map((entry: Record<string, unknown> | null) => {
+    if (
+      entry === null ||
+      typeof entry !== "object" ||
+      typeof entry.databaseId !== "number" ||
+      typeof entry.status !== "string" ||
+      !(entry.conclusion === null || typeof entry.conclusion === "string") ||
+      typeof entry.event !== "string" ||
+      typeof entry.headBranch !== "string" ||
+      typeof entry.createdAt !== "string" ||
+      typeof entry.url !== "string"
+    ) {
+      throw new Error("gh run list returned a run in a shape the status doesn't expect.");
+    }
+    return {
+      id: entry.databaseId,
+      status: entry.status,
+      conclusion: entry.conclusion,
+      event: entry.event,
+      branch: entry.headBranch,
+      createdAt: entry.createdAt,
+      url: entry.url,
+    };
+  });
 }

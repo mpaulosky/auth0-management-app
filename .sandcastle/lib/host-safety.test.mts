@@ -1,10 +1,152 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { hostGitEnv, mainGitDir, protectedGitMounts, withoutGitHooks, worktreeLinkProblems, worktreePathFor } from "./host-safety.mts";
+import { pathToFileURL } from "node:url";
+import { configIncludeProblem, hostGitEnv, mainGitDir, protectedGitMounts, protectedRecordMounts, withoutGitHooks, worktreeConfigProblem, worktreeLinkProblems, worktreePathFor } from "./host-safety.mts";
+
+describe("worktreeConfigProblem", () => {
+  const configIn = (setup: (gitDir: string) => void) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "sandcastle-worktree-config-")));
+    try {
+      execFileSync("git", ["init", "--quiet", join(root, "repo")], { stdio: "ignore" });
+      setup(join(root, "repo", ".git"));
+      return worktreeConfigProblem(join(root, "repo", ".git"));
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  };
+  const setExtension = (value: string) => (gitDir: string) =>
+    execFileSync("git", ["config", "--file", join(gitDir, "config"), "extensions.worktreeConfig", value]);
+
+  it("is undefined for a repository that doesn't turn it on", () => {
+    assert.equal(configIn(() => {}), undefined);
+    assert.equal(configIn(setExtension("false")), undefined);
+  });
+
+  it("names the config when extensions.worktreeConfig is on, however it is spelled", () => {
+    for (const value of ["true", "yes", "on", "1"]) {
+      assert.match(configIn(setExtension(value)) ?? "", /extensions\.worktreeConfig/, value);
+    }
+  });
+});
+
+// git run as a stand-in that fails with a message of its own on stderr. The host's two config reads must capture it, so it reaches the
+// terminal only through the thrown message. Run in a child process, so the child's own stderr shows whether git's text was let through.
+describe("the host's git config reads", () => {
+  const inChild = (call: string) => {
+    const bin = mkdtempSync(join(tmpdir(), "sandcastle-failing-git-"));
+    try {
+      writeFileSync(join(bin, "git"), "#!/bin/sh\necho 'fatal: from the stand-in git' >&2\nexit 128\n");
+      chmodSync(join(bin, "git"), 0o755);
+      const module = pathToFileURL(join(import.meta.dirname, "host-safety.mts")).href;
+      const script = `import(${JSON.stringify(module)}).then((m) => { try { m.${call}; } catch (error) { process.stdout.write(error.message); } })`;
+      return spawnSync(process.execPath, [...process.execArgv, "--input-type=module", "-e", script], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      });
+    } finally {
+      rmSync(bin, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  };
+
+  for (const call of ['worktreeConfigProblem("/nonexistent/.git")', 'configIncludeProblem("/nonexistent/.git")']) {
+    it(`${call.split("(")[0]} throws with git's stderr in the message and writes none itself`, () => {
+      const result = inChild(call);
+
+      assert.match(result.stdout, /fatal: from the stand-in git/);
+      assert.equal(result.stderr, "");
+    });
+  }
+});
+
+describe("configIncludeProblem", () => {
+  // setup gets the repo's config path and a directory outside the checkout and .git.
+  const configIn = (setup: (config: string, outside: string) => void) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "sandcastle-config-include-")));
+    try {
+      execFileSync("git", ["init", "--quiet", join(root, "repo")], { stdio: "ignore" });
+      mkdirSync(join(root, "outside"));
+      const gitDir = join(root, "repo", ".git");
+      setup(join(gitDir, "config"), join(root, "outside"));
+      return configIncludeProblem(gitDir);
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  };
+  const set = (key: string, value: string) => (config: string) => execFileSync("git", ["config", "--file", config, key, value]);
+
+  it("is undefined for a repository whose config includes nothing", () => {
+    assert.equal(configIn(() => {}), undefined);
+  });
+
+  it("names the include, whether relative, includeIf, or spelled in another case", () => {
+    for (const [key, value] of [
+      ["include.path", "local.inc"],
+      ["includeIf.gitdir:/work/.path", "~/work.inc"],
+      ["INCLUDE.PATH", "local.inc"],
+    ] as const) {
+      assert.match(configIn(set(key, value)) ?? "", /includes .*\.inc/, key);
+    }
+  });
+
+  it("allows an absolute path outside .git and the checkout, as actions/checkout writes", () => {
+    assert.equal(
+      configIn((config, outside) => set("includeIf.gitdir:/work/repo/.git.path", join(outside, "git-credentials.config"))(config)),
+      undefined,
+    );
+  });
+
+  it("names an absolute path inside .git or the checkout", () => {
+    assert.match(configIn((config) => set("include.path", join(config, "..", "local.inc"))(config)) ?? "", /includes .*local\.inc/);
+    assert.match(configIn((config) => set("include.path", join(config, "..", "..", "local.inc"))(config)) ?? "", /includes .*local\.inc/);
+  });
+
+  it("names a path outside whose symlink leads inside", () => {
+    const problem = configIn((config, outside) => {
+      symlinkSync(join(config, ".."), join(outside, "link"));
+      set("include.path", join(outside, "link", "local.inc"))(config);
+    });
+    assert.match(problem ?? "", /includes .*local\.inc/);
+  });
+});
+
+describe("protectHostGit", () => {
+  // Runs in a child process: repoGitDir() caches process.cwd() and protectHostGit() changes process.env.
+  const protectIn = (setup: (gitDir: string) => void) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "sandcastle-protect-")));
+    try {
+      execFileSync("git", ["init", "--quiet", join(root, "repo")], { stdio: "ignore" });
+      setup(join(root, "repo", ".git"));
+      const module = pathToFileURL(join(import.meta.dirname, "host-safety.mts")).href;
+      return spawnSync(process.execPath, [...process.execArgv, "--input-type=module", "-e", `import(${JSON.stringify(module)}).then((m) => m.protectHostGit())`], {
+        cwd: join(root, "repo"),
+        encoding: "utf8",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  };
+
+  it("refuses a repository that has extensions.worktreeConfig on", () => {
+    const result = protectIn((gitDir) => execFileSync("git", ["config", "--file", join(gitDir, "config"), "extensions.worktreeConfig", "true"]));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /extensions\.worktreeConfig/);
+  });
+
+  it("refuses a repository whose config includes another file", () => {
+    const result = protectIn((gitDir) => execFileSync("git", ["config", "--file", join(gitDir, "config"), "include.path", "local.inc"]));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /includes local\.inc/);
+  });
+
+  it("succeeds in a repository that doesn't", () => {
+    const result = protectIn(() => {});
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
 
 describe("withoutGitHooks", () => {
   it("forces core.hooksPath to /dev/null through the environment", () => {
@@ -42,7 +184,7 @@ describe("withoutGitHooks", () => {
       git(process.env, "commit", "--quiet", "--allow-empty", "-m", "unguarded");
       assert.equal(existsSync(ran), true);
     } finally {
-      rmSync(repo, { recursive: true, force: true });
+      rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });
@@ -87,7 +229,7 @@ describe("protectedGitMounts", () => {
 
       assert.equal(existsSync(join(gitDir, "review")), true);
     } finally {
-      rmSync(gitDir, { recursive: true, force: true });
+      rmSync(gitDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -99,7 +241,7 @@ describe("protectedGitMounts", () => {
 
       assert.throws(() => protectedGitMounts(gitDir, existsSync, "/empty"), (error: Error) => error.message.startsWith(`${join(gitDir, "review")} isn't a real folder`));
     } finally {
-      rmSync(gitDir, { recursive: true, force: true });
+      rmSync(gitDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -114,7 +256,7 @@ describe("protectedGitMounts", () => {
 
         assert.throws(() => protectedGitMounts(gitDir, existsSync, "/empty"), (error: Error) => error.message.startsWith(`${join(gitDir, "review")} isn't a real folder`));
       } finally {
-        rmSync(gitDir, { recursive: true, force: true });
+        rmSync(gitDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
     });
   }
@@ -130,7 +272,7 @@ describe("protectedGitMounts", () => {
 
       assert.equal(statSync(join(gitDir, "review")).mode & 0o777, 0o700);
     } finally {
-      rmSync(gitDir, { recursive: true, force: true });
+      rmSync(gitDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -140,6 +282,62 @@ describe("protectedGitMounts", () => {
     assert.ok(review !== undefined);
     assert.deepEqual(readdirSync(review.hostPath), []);
   });
+});
+
+// The main checkout's .security/ holds the local record of security findings (security-record.mts). Head-mode sandboxes mount the
+// checkout itself, so an agent that reads untrusted text would otherwise read the record, and the host publishes what agents write.
+describe("protectedRecordMounts", () => {
+  it("covers the checkout's .security with one empty read-only folder, whether or not it exists yet", () => {
+    for (const exists of [() => true, () => false]) {
+      assert.deepEqual(protectedRecordMounts("/repo", exists, "/empty", () => {}), [{ hostPath: "/empty", sandboxPath: "/repo/.security", readonly: true }]);
+    }
+  });
+
+  it("makes the folder on the host first, so Docker doesn't make it as root", () => {
+    const made: string[] = [];
+
+    protectedRecordMounts("/repo", () => false, "/empty", (path) => made.push(path));
+
+    assert.deepEqual(made, ["/repo/.security"]);
+  });
+
+  it("makes a folder that already exists readable only by its owner", () => {
+    const checkout = mkdtempSync(join(tmpdir(), "record-mounts-"));
+    try {
+      mkdirSync(join(checkout, ".security"), { mode: 0o755 });
+      chmodSync(join(checkout, ".security"), 0o755);
+
+      protectedRecordMounts(checkout, existsSync, "/empty");
+
+      assert.equal(statSync(join(checkout, ".security")).mode & 0o777, 0o700);
+    } finally {
+      rmSync(checkout, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("covers them with a folder that is empty", () => {
+    const [mount] = protectedRecordMounts("/repo", () => false, undefined, () => {});
+
+    assert.ok(mount !== undefined);
+    assert.deepEqual(readdirSync(mount.hostPath), []);
+  });
+
+  for (const [kind, plant] of [
+    ["a symlink", (path: string) => symlinkSync(join(path, "..", "elsewhere"), path)],
+    ["a file", (path: string) => writeFileSync(path, "")],
+  ] as const) {
+    it(`stops, saying what to look at, when .security is ${kind}`, () => {
+      const checkout = realpathSync(mkdtempSync(join(tmpdir(), "sandcastle-checkout-")));
+      try {
+        mkdirSync(join(checkout, "elsewhere"));
+        plant(join(checkout, ".security"));
+
+        assert.throws(() => protectedRecordMounts(checkout, existsSync, "/empty"), (error: Error) => error.message.startsWith(`${join(checkout, ".security")} isn't a real folder`));
+      } finally {
+        rmSync(checkout, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    });
+  }
 });
 
 describe("worktreeLinkProblems", () => {
@@ -161,7 +359,7 @@ describe("worktreeLinkProblems", () => {
     try {
       assert.deepEqual(worktreeLinkProblems(worktree, commonDir), []);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -172,7 +370,7 @@ describe("worktreeLinkProblems", () => {
       writeFileSync(join(worktree, ".git"), `gitdir: ${join(worktree, "evil")}\n`);
       assert.match(worktreeLinkProblems(worktree, commonDir).join(), /doesn't point into/);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -182,7 +380,7 @@ describe("worktreeLinkProblems", () => {
       writeFileSync(join(commonDir, "worktrees", "feature-1-x", "commondir"), `${join(root, "evil")}\n`);
       assert.match(worktreeLinkProblems(worktree, commonDir).join(), /doesn't lead back/);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -194,7 +392,7 @@ describe("worktreeLinkProblems", () => {
       symlinkSync(`${admin}-moved`, admin);
       assert.match(worktreeLinkProblems(worktree, commonDir).join(), /symlink/);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });
@@ -233,7 +431,7 @@ describe("hostGitEnv", () => {
       }
       assert.equal(existsSync(ran), true);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });
@@ -245,7 +443,7 @@ describe("mainGitDir", () => {
       execFileSync("git", ["init", "--quiet"], { cwd: root, stdio: "ignore" });
       assert.equal(mainGitDir(root), join(root, ".git"));
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -256,7 +454,7 @@ describe("mainGitDir", () => {
       writeFileSync(join(root, ".git", "commondir"), "evil\n");
       assert.throws(() => mainGitDir(root), /commondir exists/);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -265,7 +463,7 @@ describe("mainGitDir", () => {
     try {
       assert.throws(() => mainGitDir(root), /isn't a directory/);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });
