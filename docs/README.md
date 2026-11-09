@@ -74,6 +74,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.33](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.33) | 2026-11-09 | chore(baseline): Re-apply the repo-ci-baseline Template | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-11-09-pr-111-chore-baseline-re-apply-the-repo-ci-baseline-template.md) |
 | [v0.0.32](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.32) | 2026-11-01 | chore: Bump the all-nuget group with 9 updates | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-11-01-pr-107-chore-bump-the-all-nuget-group-with-9-updates.md) |
 | [v0.0.31](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.31) | 2026-10-30 | chore(baseline): Migrate auth0-management-app to the repo-ci-baseline Template | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-30-pr-100-chore-baseline-migrate-auth0-management-app-to-the-repo-ci-baseline-template.md) |
 | [v0.0.30](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.30) | 2026-10-21 | chore(review): Follow up on the local review's last round | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-94-chore-review-follow-up-on-the-local-review-s-last-round.md) |
@@ -83,7 +84,6 @@ Blue, the default, renders no attribute.
 | [v0.0.26](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.26) | 2026-10-20 | feat(sandcastle): Show why each Sandcastle PR is held | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-79-feat-sandcastle-show-why-each-sandcastle-pr-is-held.md) |
 | [v0.0.25](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.25) | 2026-10-20 | feat: Warn when the git hooks aren't enabled, so the pre-push gate isn't silently skipped | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-75-feat-warn-when-the-git-hooks-aren-t-enabled-so-the-pre-push-gate-isn-t-silently-skipped.md) |
 | [v0.0.24](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.24) | 2026-10-20 | chore: Re-apply the repo-ci-baseline Template | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-74-chore-re-apply-the-repo-ci-baseline-template.md) |
-| [v0.0.23](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.23) | 2026-10-20 | chore(scripts): Skip Sandcastle's own comments in watch-pr.sh | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-72-chore-scripts-skip-sandcastle-s-own-comments-in-watch-pr-sh.md) |
 
 <!-- RELEASES_END -->
 
