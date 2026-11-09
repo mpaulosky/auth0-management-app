@@ -2,3 +2,16 @@
 # check: the files this repo's .sandcastle/ tests read (CLAUDE.md, .github/workflows, the solution
 # file and so on). One git pathspec per line; blank lines and # lines are ignored. An exclude line (:(exclude), :^, :!) only trims the other lines.
 # A line that matches no tracked file watches nothing until one is added: check.sh names it on stderr on every run.
+
+README.md
+CLAUDE.md
+.gitignore
+scripts/gate.sh
+scripts/check-branch-name.sh
+scripts/watch-pr.sh
+.claude/skills/code-review
+.claude/rules
+.claude/settings.json
+docs/plans/sandcastle-workflow.md
+.github/workflows
+.github/ci

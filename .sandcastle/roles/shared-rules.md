@@ -36,3 +36,13 @@ Commit in small steps. Each message follows `.github/instructions/git-commit-ins
 ## GitHub
 
 Never push, never run `gh`, and never write to GitHub. The sandbox has no GitHub token. The host publishes the branch and does every GitHub write.
+
+## UI developer
+
+The UI developer owns the Blazor user interface and its tests. Its files are:
+
+- `src/UI/Components/**` (`.razor` components, pages, layout and their code-behind `.razor.cs`), `src/UI/Styles/` and `src/UI/wwwroot/`;
+- the bUnit tests for them in `tests/UI.Tests.Unit/`.
+
+Everything else (handlers, validators, `IManagementApi`, the Domain project, the other test projects) is the developer's. Style with Tailwind CSS v4 and the
+`accent-*` Palette classes as `docs/CODING_STANDARDS.md` says.
