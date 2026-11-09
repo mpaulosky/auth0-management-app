@@ -6,27 +6,41 @@ import { fileURLToPath } from "node:url";
 import {
   BUILD_ROLES,
   BUILDING_LABEL_MAX_AGE_MS,
+  ROLE_RUN_GRACE_MINUTES,
   BudgetError,
   DEFAULT_BUDGET_MINUTES,
+  FIXED_ROLE_AGENTS,
   FOLLOW_UP_LABEL,
   FOLLOW_UP_LABEL_DEFINITION,
   GATE_FIXER_ATTEMPTS,
   HOST_LABELS,
   LOCAL_QUEUE_LABEL,
   LOCAL_QUEUE_LABEL_DEFINITION,
+  MAX_CONCURRENT_SUBAGENTS,
+  MAX_GATE_RUNS,
+  MAX_REVIEWERS_PER_ROUND,
   OPTIONAL_ROLES,
   QUEUE_LABEL,
   QUEUE_SCOPE_USAGE,
   QueueScopeError,
+  REVIEW_FIX_ROUNDS,
+  REVIEW_WALL_CLOCK_MINUTES,
+  REVIEWER_ATTEMPTS,
   ROLES,
   RunModeError,
+  ReviewerModeError,
+  SANDBOX_CPUS,
   SANDCASTLE_LABELS,
   SESSION_REPLY_MARKER,
   budgetMinutesFrom,
   isDefaultQueueScope,
+  reviewerMode,
   queueScopeFrom,
   runModeFrom,
+  sandboxCpus,
 } from "./config.mts";
+import { GATE_LIMIT_MINUTES } from "./repo-config.mts";
+import { COMMAND_LIMIT_MINUTES } from "./step-limit.mts";
 import * as config from "./config.mts";
 import { roleAgent, uiEnabled } from "./agents.mts";
 import { ROLE_AGENTS } from "./repo-config.mts";
@@ -51,12 +65,24 @@ describe("ROLE_AGENTS", () => {
 
     assert.ok(existsSync(file("roles/ui.md")), "roles/ui.md is missing");
     assert.match(readFileSync(file("roles/backend.md"), "utf8"), /\{\{UI_DEVELOPER\}\}/);
-    assert.match(readFileSync(file("plan-prompt.md"), "utf8"), /^- `ui`:/m);
+    assert.match(readFileSync(file("plan-prompt.md"), "utf8"), /\{\{UI_ROLE\}\}/, "plan-prompt.md is missing {{UI_ROLE}}, where the host puts the planner's ui bullet");
+    // The planner's bullet, backend.md and roles/ui.md all send the reader to the shared rules for which files are the UI developer's. The file is
+    // the repo's own Seed, so only that the section exists and has text of its own is checked, not its wording: the Seed ships the heading with
+    // only a comment under it, which a repo that opted in and edited nothing must not pass.
+    // The section ends at the next heading of its own level or a higher one, so sub-headings under it are part of it.
+    const rules = visibleMarkdown(readFileSync(file("roles/shared-rules.md"), "utf8"));
+    const heading = /^ {0,3}(#{1,6})\s+UI developer\s*$/m.exec(rules);
+
+    assert.ok(heading, 'roles/shared-rules.md has no "## UI developer" section outside a comment or an unclosed code fence (either hides everything after it): add one that names the UI files, or the developer and the ui role each leave them to the other');
+
+    const afterHeading = rules.slice(heading.index + heading[0].length);
+    const body = (afterHeading.split(new RegExp(`^ {0,3}#{1,${heading[1]!.length}}\\s`, "m"))[0] ?? "").trim();
+
+    assert.notEqual(body, "", 'roles/shared-rules.md\'s "## UI developer" section has only a comment: replace it with the UI files the ui role builds');
   });
 });
 
-// The Seed review-prompt.md is never overwritten, so a repo whose copy lacks the placeholder never tells its reviewer
-// what the host refuses in a PR description.
+// A review-prompt.md without the placeholder never tells its reviewer what the host refuses in a PR description.
 describe("review-prompt.md", () => {
   it("has {{PR_BODY_RULES}} where the PR description's rules go", () => {
     const prompt = readFileSync(new URL("../review-prompt.md", import.meta.url), "utf8");
@@ -64,8 +90,103 @@ describe("review-prompt.md", () => {
     assert.match(
       prompt,
       /\{\{PR_BODY_RULES\}\}/,
-      "add `{{PR_BODY_RULES}}` where the PR description's rules go; the Template's Seed review-prompt.md shows where",
+      "add `{{PR_BODY_RULES}}` where the PR description's rules go; the Template's Owned review-prompt.md shows where",
     );
+  });
+});
+
+describe("the host-side review's fixed role", () => {
+  it("is the pre-push-review skill's reviewer: sonnet at high effort, once per run, and in no repo's ROLES", () => {
+    const agent = FIXED_ROLE_AGENTS["pre-push-reviewer"];
+
+    assert.equal(agent.model, "sonnet");
+    assert.equal(agent.effort, "high");
+    assert.equal(agent.maxIterations, 1);
+    assert.ok(agent.timeoutMinutes > 0);
+    assert.ok(!(ROLES as readonly string[]).includes("pre-push-reviewer"), "a repo's ROLE_AGENTS would have to name it");
+  });
+
+  it("stops fixing after 3 rounds and asks each reviewer for a valid answer twice", () => {
+    assert.equal(REVIEW_FIX_ROUNDS, 3);
+    assert.equal(REVIEWER_ATTEMPTS, 2);
+  });
+});
+
+// Issue 399: the lead of a round's parallel subagents is a fixed role of its own, so one timeout covers the whole wave.
+describe("the review lead's fixed role", () => {
+  it("is sonnet at the reviewer's effort, once per run, for 30 minutes: the reviewer's 20 with all lenses in one wave, plus relay time", () => {
+    const lead = FIXED_ROLE_AGENTS["pre-push-review-lead"];
+
+    assert.equal(lead.model, "sonnet");
+    assert.equal(lead.effort, FIXED_ROLE_AGENTS["pre-push-reviewer"].effort);
+    assert.equal(lead.maxIterations, 1);
+    assert.equal(lead.timeoutMinutes, 30);
+  });
+
+  it("is in no repo's ROLES, so a repo's ROLE_AGENTS names none", () => {
+    assert.ok(!(ROLES as readonly string[]).includes("pre-push-review-lead"));
+    assert.deepEqual(roleAgent("pre-push-review-lead"), FIXED_ROLE_AGENTS["pre-push-review-lead"]);
+  });
+
+  it("starts every reviewer of a round in one wave: MAX_REVIEWERS_PER_ROUND is within Claude Code's 20 concurrent subagents", () => {
+    assert.equal(MAX_CONCURRENT_SUBAGENTS, 20);
+    assert.ok(MAX_REVIEWERS_PER_ROUND <= MAX_CONCURRENT_SUBAGENTS, `${MAX_REVIEWERS_PER_ROUND} reviewers > ${MAX_CONCURRENT_SUBAGENTS} subagents`);
+  });
+});
+
+// The switch stays on "sequential" until the items references/pre-push-review.md lists as open are settled and a person accepts the relay risk, and a typo must not silently pick a path.
+describe("reviewerMode", () => {
+  it("is sequential when SANDCASTLE_REVIEWERS is unset or empty", () => {
+    assert.equal(reviewerMode({}), "sequential");
+    assert.equal(reviewerMode({ SANDCASTLE_REVIEWERS: "" }), "sequential");
+    assert.equal(reviewerMode({ SANDCASTLE_REVIEWERS: undefined }), "sequential");
+  });
+
+  it("reads sequential and subagents as they are", () => {
+    assert.equal(reviewerMode({ SANDCASTLE_REVIEWERS: "sequential" }), "sequential");
+    assert.equal(reviewerMode({ SANDCASTLE_REVIEWERS: "subagents" }), "subagents");
+  });
+
+  it("throws for anything else, rather than pick a path for a typo", () => {
+    for (const value of ["subagent", "Subagents", "parallel", "1", "true"]) {
+      assert.throws(() => reviewerMode({ SANDCASTLE_REVIEWERS: value }), /SANDCASTLE_REVIEWERS/, JSON.stringify(value));
+    }
+  });
+
+  // main.mts catches this class to exit 2 at start-up; a plain Error would read as a crash.
+  it("throws a ReviewerModeError, so main.mts can refuse the value at start-up", () => {
+    for (const value of ["subagent", "subagents ", " subagents", "SEQUENTIAL"]) {
+      assert.throws(() => reviewerMode({ SANDCASTLE_REVIEWERS: value }), ReviewerModeError, JSON.stringify(value));
+    }
+  });
+});
+
+describe("sandboxCpus", () => {
+  it("gives a sandbox 4 CPUs at most (mpaulosky/dotfiles#423)", () => {
+    assert.equal(SANDBOX_CPUS, 4);
+  });
+
+  it("gives a daemon with fewer CPUs all of them, since docker refuses --cpus above its count", () => {
+    assert.equal(sandboxCpus(1), 1);
+    assert.equal(sandboxCpus(2), 2);
+    assert.equal(sandboxCpus(3), 3);
+    assert.equal(sandboxCpus(4), 4);
+    assert.equal(sandboxCpus(5), 4);
+    assert.equal(sandboxCpus(64), 4);
+  });
+
+  it("rounds a fractional count down", () => {
+    assert.equal(sandboxCpus(2.9), 2);
+    assert.equal(sandboxCpus(1.5), 1);
+  });
+
+  it("gives no limit (undefined) for a count that is not a count of CPUs", () => {
+    assert.equal(sandboxCpus(undefined), undefined);
+    assert.equal(sandboxCpus(0.5), undefined);
+    assert.equal(sandboxCpus(0), undefined);
+    assert.equal(sandboxCpus(-3), undefined);
+    assert.equal(sandboxCpus(Number.NaN), undefined);
+    assert.equal(sandboxCpus(Number.POSITIVE_INFINITY), undefined);
   });
 });
 
@@ -74,20 +195,41 @@ describe("BUILDING_LABEL_MAX_AGE_MS", () => {
   // run's, so it must outlast the longest build a live run can make, or a
   // second run would clear a live build's label and build the issue too.
   // BUILD_ROLES, each once, plus the gate-fixer's attempts at both
-  // checkpoints. build.test.mts checks buildIssue runs no other role.
-  it("outlasts the longest build the role timeouts allow, with an hour for gates, sandboxes and publishing", () => {
+  // checkpoints, plus the host-side review (lib/host-review.mts), which is capped at REVIEW_WALL_CLOCK_MINUTES and may overrun it by one step.
+  // build.test.mts checks buildIssue runs no other role.
+  it("outlasts the longest build the role timeouts allow, with twenty minutes for sandboxes and publishing", () => {
     const checkpoints = 2;
     // The UI developer counts even in a repo that hasn't opted in, at the backend developer's budget (the Seed's example
     // entry), so a repo that opts in with a larger one gets the sum checked again by this test in its own config.
     const timeout = (role: (typeof BUILD_ROLES)[number]) => (role === "ui" && !uiEnabled() ? ROLE_AGENTS.backend : roleAgent(role)).timeoutMinutes;
+    // Checkpoint 1 runs the gate, then once more after each gate-fixer attempt. Checkpoint 2 runs it on the merged tree first,
+    // and when that is red goes through the same loop as checkpoint 1: MAX_GATE_RUNS runs in all, each up to its step limit.
+    const gateRuns = MAX_GATE_RUNS;
+    const gateFixing = ROLE_AGENTS["gate-fixer"].timeoutMinutes * GATE_FIXER_ATTEMPTS;
+    // The review stops starting steps after REVIEW_WALL_CLOCK_MINUTES (lib/host-review.mts), so it takes that plus the step it was in:
+    // a reviewer's attempts, or a fixer run with its gate-fixer attempts and gate runs after it.
+    const review =
+      REVIEW_WALL_CLOCK_MINUTES +
+      Math.max(
+        REVIEWER_ATTEMPTS * Math.max(FIXED_ROLE_AGENTS["pre-push-reviewer"].timeoutMinutes, FIXED_ROLE_AGENTS["pre-push-review-lead"].timeoutMinutes) + ROLE_RUN_GRACE_MINUTES,
+        ROLE_AGENTS.backend.timeoutMinutes + ROLE_RUN_GRACE_MINUTES + gateFixing + MAX_GATE_RUNS * GATE_LIMIT_MINUTES,
+      );
     const minutes =
       BUILD_ROLES.reduce((sum, role) => sum + timeout(role), 0) +
-      checkpoints * GATE_FIXER_ATTEMPTS * ROLE_AGENTS["gate-fixer"].timeoutMinutes;
-    const hour = 60;
+      checkpoints * gateFixing +
+      gateRuns * GATE_LIMIT_MINUTES +
+      // A command other than the gate that runs over its limit stalls the sandbox: it throws, as does every later exec and
+      // every role start (lib/step-limit.mts, lib/agents.mts), so one more limit is the most any build adds from them.
+      // The probe before each gate-fixer attempt (lib/checkpoint.mts#sandboxDown) is such a command.
+      COMMAND_LIMIT_MINUTES +
+      // A role run the host gave up on stalls its sandbox the same way, so a build adds this grace once.
+      ROLE_RUN_GRACE_MINUTES +
+      review;
+    const spare = 20;
 
     assert.ok(
-      (minutes + hour) * 60_000 <= BUILDING_LABEL_MAX_AGE_MS,
-      `the longest build takes ${minutes} minutes plus an hour, past BUILDING_LABEL_MAX_AGE_MS`,
+      (minutes + spare) * 60_000 <= BUILDING_LABEL_MAX_AGE_MS,
+      `the longest build takes ${minutes} minutes plus twenty minutes, past BUILDING_LABEL_MAX_AGE_MS`,
     );
   });
 });
@@ -372,3 +514,66 @@ describe("the PR watcher", () => {
     assert.equal(wouldSkip("Look at <!-- sandcastle:give-up --> in the log."), 1);
   });
 });
+
+// The text of a Markdown file as a reader sees it, for the one check above: a comment that opens a line (as the Seed's does) is dropped up to the
+// line holding its "-->", an unclosed one running to the end of the file; a fenced block that holds text is replaced by "X", an unclosed one too,
+// since it runs to the end, and an empty one by nothing; and every other complete comment on a line is dropped, wherever it sits, a code span's
+// included. What is left, an unclosed "<!--" after other text or inside a code span among it, is text as written, so it never hides the heading
+// after it. Read line by line, so a "#" line inside a comment or a fence is never taken for a heading.
+function visibleMarkdown(markdown: string): string {
+  const out: string[] = [];
+  let fence: RegExp | undefined;
+  let fenceHasText = false;
+  let inComment = false;
+
+  for (const line of markdown.split(/\r?\n/)) {
+    if (fence) {
+      if (fence.test(line)) {
+        // An empty fence shows nothing, so only one with text counts as text.
+        if (fenceHasText) out.push("X");
+        fence = undefined;
+      } else if (line.trim() !== "") {
+        fenceHasText = true;
+      }
+      continue;
+    }
+
+    let rest = line;
+    if (inComment) {
+      const end = rest.indexOf("-->");
+      if (end === -1) continue;
+      inComment = false;
+      // The block ends on the line that holds "-->", so a "<!--" after it on that line opens nothing.
+      rest = rest.slice(end + 3);
+    } else {
+      const opener = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      // A backtick fence's info string holds no backtick, or the line is a code span.
+      if (opener && !(opener[1]!.startsWith("`") && opener[2]!.includes("`"))) {
+        const marker = opener[1]![0]!;
+        fence = new RegExp(`^ {0,3}\\${marker}{${opener[1]!.length},}\\s*$`);
+        fenceHasText = false;
+        continue;
+      }
+
+      const comment = /^ {0,3}<!--/.exec(line);
+      if (comment) {
+        // The close may overlap the opener, as in "<!-->", a complete comment of its own.
+        const end = line.indexOf("-->", comment[0].length - 2);
+        if (end === -1) {
+          inComment = true;
+          rest = "";
+        } else {
+          rest = line.slice(end + 3);
+        }
+      }
+    }
+
+    // A line that shows only comments shows nothing.
+    out.push(rest.replace(/<!--.*?-->/g, ""));
+  }
+
+  // A fence still open at the end runs to the end of the file, and what it held is shown.
+  if (fence && fenceHasText) out.push("X");
+
+  return out.join("\n");
+}

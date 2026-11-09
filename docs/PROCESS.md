@@ -68,7 +68,7 @@ post, word for word. Keep it current: after every follow-up commit, update it so
   the PR couldn't merge until it's up to date: bring main in with `git merge origin/main`. Then it runs
   `scripts/gate.sh`: the lints, the local review's check (a clean record for the diff; a clean merge of `main` keeps
   it, a new commit needs a new one), the build and the tests CI runs. `GATE_SKIP_REVIEW=1` skips the review check for
-  gate runs while iterating, never for a push. Sandcastle's sandboxes set it: its own reviewer role stands in there.
+  gate runs while iterating, never for a push. Sandcastle's sandboxes set it: the host runs the review's rounds on a built branch itself (`lib/host-review.mts`).
 - **Required checks:** Build Solution, Test Suite, Branch name, PR title, actionlint, zizmor, shellcheck, markdownlint
   and yamllint. A docs-only PR skips the build and tests, and so does a Dependabot GitHub Actions bump; a skipped check
   counts as passing.
@@ -89,17 +89,23 @@ post, word for word. Keep it current: after every follow-up commit, update it so
   thread is resolved. It asks Copilot for a review of the PR once; where Copilot can't review a head (a quota note, or a request that didn't
   register, which it reads back, or 30 seconds after the ask with no review or request showing), it adds `review:claude` itself and accepts Claude's review instead.
   Copilot isn't asked again for that PR.
-  After three review rounds it stops waiting for a review of the latest commit, so a PR can't chase
-  reviews forever, but every unresolved thread still holds it, Copilot's and Claude's included. At that point, once
-  Claude has reviewed since `review:claude` was last added, it also takes the label off, so Claude stops reviewing new
-  pushes. Re-Apply PRs are capped too. Adding the label again past the cap gets one more Claude review, but the merge
-  doesn't wait for it: if the PR is otherwise ready it can merge first. A review that arrives after a merge comes too
-  late, so answer its findings on the merged PR in a follow-up.
+  A round is a review of a commit of yours (a merge of `main` into the PR is never one), and it is dirty when it raised
+  a thread or a finding outside the diff. Every new commit nobody reviewed gets a review, until three dirty rounds in a
+  row exhaust the loop (a clean round starts the count over). Then PR Auto-Merge takes `review:claude` off, posts one
+  comment on the PR (once it is ready) saying whether its head was reviewed and listing every thread and finding still
+  open, and merges the PR once its required checks pass and it has no conflict. The threads Copilot and Claude Review
+  opened don't hold it, so answer them on the merged PR in a follow-up; a thread opened by a person still does, and the
+  comment says which. Re-Apply PRs are bounded the same way. To start a new loop on a PR that is still open and where
+  Copilot can't review the head, add `review:claude` again, as a login with write access to the repository
+  (mpaulosky/dotfiles#375, mpaulosky/dotfiles#378); PR Auto-Merge never adds it while that comment is the newest word.
+  `review:claude` is ignored while Copilot can review: it calls Claude in only where Copilot can't (its quota note
+  is on the head, or its request didn't register), and PR Auto-Merge takes the label off at once otherwise, whoever
+  added it.
 - **A ready PR is kept up to date.** When `main` moves on, PR Auto-Merge merges `main` into a PR that is otherwise ready
   (Dependabot rebases its own on request). The merge from `main` needs no new review when it is exactly what merging
   `main` gives and no file was changed on both sides; otherwise (a conflict resolved, a file both sides changed, or a
-  change of its own) it waits for a new review: add `review:claude` if Copilot doesn't review it. If the label is already
-  on, Claude reviews the push itself, unless a bot or app pushed it; then remove and re-add the label.
+  change of its own) it waits for a new review: Copilot's, or `review:claude` where Copilot can't review it. If the label
+  is already on, Claude reviews the push itself, unless a bot or app pushed it; then remove and re-add the label.
 - **A draft is never merged.** Open a PR as a draft to hold it back, and mark it ready when it is.
 - **Merging is squash only.** Nobody merges by hand except a fork's PR, which the maintainer merges, and a Baseline
   Standardize PR.

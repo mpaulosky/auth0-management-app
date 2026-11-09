@@ -20,8 +20,8 @@ Only work on the issue specified. You can't reach GitHub from here, and don't ne
 
 Work on branch {{BRANCH}}. It may already hold earlier commits for this issue. Build on them, don't redo them.
 
-You are the UI developer. The tester committed failing tests for the issue's acceptance criteria, then the backend developer made every test pass except those for Blazor
-components and pages. Your job is to build those components and pages, and make their tests pass.
+You are the UI developer. The tester committed failing tests for the issue's acceptance criteria, then the developer made every test pass except those for the UI files the
+shared rules name as yours. Your job is to build those files, and make their tests pass.
 
 The architect may have written a design note for this issue at `.sandcastle/work/{{TASK_ID}}/design.md`. When it exists, read it first and follow it. Where you have to depart
 from it, say what and why in your commit body, so the reviewer can check the difference is explained.
@@ -40,24 +40,14 @@ Here are the last 10 commits:
 
 Explore the repo and fill your context window with relevant information that will allow you to complete the task.
 
-Read `CONTEXT.md` for the domain language, `docs/adr/` for recorded decisions, and the standards for the stack the issue touches: `docs/CODING_STANDARDS.md`, especially its
-Blazor section, and `.claude/rules/blazor.md` for components and pages, and `.claude/rules/sandcastle.md` for Sandcastle's TypeScript in `.sandcastle/`.
+Read `CLAUDE.md` for how the repo is built and laid out, `docs/adr/` (where present) for recorded decisions, `.sandcastle/CODING_STANDARDS.md` where the repo has one for the code standards, and
+whatever else the rules below point to.
 
-Read the tester's and the backend developer's commits on this branch first: the tests are the specification you implement, and the backend's code is what your components call.
+Read the tester's and the developer's commits on this branch first: the tests are the specification you implement, and the developer's code is what your UI calls.
 
-Style with Tailwind CSS v4 utility classes, use the domain terms from `CONTEXT.md` in markup (Theme for light/dark, Palette for accent colour), and keep pages that don't need
-interactivity statically rendered.
+Use the domain terms from `CONTEXT.md` (where present) in markup.
 
-# SKILLS
-
-For .NET work, these skills are mounted into the sandbox from the host's `~/.claude/skills/`. Use them where they apply:
-
-- `dotnet-tdd`: the red-green-refactor loop with xUnit v3
-- `dotnet-add-testing`: scaffolding a new test project
-- `dotnet-xunit`: xUnit v3 conventions
-- `dotnet-testing-strategy`: choosing unit, integration, or E2E tests
-- `dotnet-project-analysis`: solution, project, and Central Package Management wiring
-- `dotnet-inspect`: checking a NuGet package's API surface
+{{REPO_SKILLS}}
 
 # EXECUTION
 
@@ -68,9 +58,10 @@ Work test-first (red → green → refactor), one failing test at a time:
 3. REPEAT until every test passes
 4. REFACTOR with the tests green
 
-Never weaken the tester's tests to make them pass: don't remove or loosen an assertion, skip or todo a test in any form (xUnit's `Skip`, `SkipUnless`,
-`SkipWhen`, `Explicit = true` or `Assert.Skip*`; `node:test`'s `.skip`, `.todo`, `{ skip }`, `{ todo }`, `t.skip()` or `t.todo()`), comment a test out, or delete
-one. When a test is wrong rather than the code, leave it as it is and say why in your commit body.
+Never weaken the tester's tests to make them pass: don't remove or loosen an assertion, skip or todo a test in any form (`node:test`'s `.skip`, `.todo`,
+`{ skip }`, `{ todo }`, `t.skip()` or `t.todo()`; xUnit's `Skip =` or `Assert.Skip()`;
+pytest's `skip`, `skipif` or `xfail` marks, or `pytest.skip()`; an early `exit 0` or `return` in a `.test.sh`), comment a
+test out, or delete one. When a test is wrong rather than the code, leave it as it is and say why in your commit body.
 
 # RULES
 
