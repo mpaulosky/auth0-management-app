@@ -30,7 +30,7 @@ so Sandcastle builds its own upgrade.
 | --- | --- | --- | --- |
 | `Sandcastle` | Human, or the host on the child issues intake creates when it splits an issue | The issue is in the queue. | Human, or intake when it splits the issue into children |
 | `sandcastle:ready` | Host (intake) | The issue passed the Definition of Ready and isn't re-checked. | Human (forces a re-check), or the host when it applies an issue-level `sandcastle:needs-human` |
-| `sandcastle:building` | Host, when a build starts | Sandcastle is building the issue right now. People and other agents leave it alone, and a second Sandcastle run's gate holds it back. | Host, when the build ends however it ends, or at a later run's startup once the label is more than 6 hours old |
+| `sandcastle:building` | Host, when a build starts | Sandcastle is building the issue right now. People and other agents leave it alone, and a second Sandcastle run's gate holds it back. | Host, when the build ends however it ends, or at a later run's startup once the label is more than 12 hours old |
 | `sandcastle:needs-info` | Host (intake) | The issue's text is the problem: answer the questions and edit the issue. | Human, which re-queues the issue |
 | `sandcastle:needs-human` | Host | Sandcastle tried and couldn't. On an issue: two failed builds, a PR closed without merging, or a push touching `.github/workflows/**`. On a PR: follow-up gave up. | Human, which re-queues the issue or PR |
 | `bug` | Human or host (intake) | The issue is a fix, so its branch is `fix/`. | Human |
@@ -49,8 +49,8 @@ A follow-up pass claims it the same way, on the PR's issue, or on the PR itself 
 and the host reads, adds and removes it through the REST labels endpoints, which serve both. The startup sweep of stale labels finds a PR's too.
 A removal that fails is tried again at the start of the run's next round, so it doesn't hold the issue back for the rest of the run.
 A run stopped with Ctrl-C or SIGTERM, or one that crashes, removes the labels it still holds as the process exits.
-A run never removes a label it claimed more than 6 hours ago: by then another run may have cleared it as stale and claimed the issue.
-Only a killed process (SIGKILL) leaves one behind, so at startup the host removes the label from any issue whose most recent `labeled` event for it is more than 6 hours old
+A run never removes a label it claimed more than 12 hours ago: by then another run may have cleared it as stale and claimed the issue.
+Only a killed process (SIGKILL) leaves one behind, so at startup the host removes the label from any issue whose most recent `labeled` event for it is more than 12 hours old
 (`BUILDING_LABEL_MAX_AGE_MS`), longer than any build runs. A newer label belongs to a run that's still going, and stays. To free an issue sooner, remove the label by hand.
 
 **Only the repository owner queues work, and only what they approved reaches an agent.** Anyone with triage access can add a label or edit an issue, anyone can comment on a public

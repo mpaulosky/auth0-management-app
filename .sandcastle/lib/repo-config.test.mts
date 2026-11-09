@@ -122,25 +122,51 @@ describe(".sandcastle/check.sh", () => {
   // catch it. .sandcastle/ and package.json are check.sh's built-in paths. A watched line covers an entry only when it equals the entry or
   // contains it, so a narrower line (.claude/skills/code-review) can't stand in for the folder. Two folders are watched narrowly on purpose,
   // because the tests read only some of their files: the test projects (tests/**/*.csproj) and the scripts the tests name.
+  // check.sh diffs the lines together, so an exclude line (:(exclude), :^, :!) trims what the others watch: one that equals, sits under or
+  // contains a CHECK_PATHS entry leaves that entry partly unwatched, and fails the entry whatever else covers it.
   const narrowOnPurpose: Record<string, string> = { "tests/": ":(glob)tests/**/*.csproj", "scripts/": "scripts/gate.sh" };
+  const excludeLine = /^:(?:\((?:[^),]*,)*exclude(?:,[^)]*)?\)|[!^])/;
+  const withoutMagic = (line: string) => line.replace(/^:(?:\([^)]*\)|[!^]+)/, "").replace(/\/$/, "");
 
-  it("watches every CHECK_PATHS entry, besides check.sh's built-in .sandcastle/ and package.json", () => {
-    const covered = (entry: string) => {
+  const unwatchedEntries = (lines: string[], entries: readonly string[]) => {
+    const positives = lines.filter((line) => !excludeLine.test(line));
+    const excludes = lines.filter((line) => excludeLine.test(line)).map(withoutMagic);
+
+    return entries.filter((entry) => {
+      if (entry === ".sandcastle/" || entry === "package.json") return false;
       const wanted = entry.replace(/\/$/, "");
-      return watched.some((line) => {
-        const spec = line.replace(/^:\(glob\)/, "").replace(/\/$/, "");
+      if (excludes.some((spec) => spec === wanted || spec.startsWith(`${wanted}/`) || wanted.startsWith(`${spec}/`))) return true;
+      if (entry in narrowOnPurpose) return !positives.includes(narrowOnPurpose[entry]!);
+      return !positives.some((line) => {
+        const spec = withoutMagic(line);
         return spec === wanted || wanted.startsWith(`${spec}/`);
       });
-    };
+    });
+  };
 
-    for (const entry of CHECK_PATHS) {
-      if (entry === ".sandcastle/" || entry === "package.json") continue;
-      if (entry in narrowOnPurpose) {
-        assert.ok(watched.includes(narrowOnPurpose[entry]!), `check-paths.txt lacks ${narrowOnPurpose[entry]}, which stands in for ${entry}`);
-        continue;
-      }
-      assert.ok(covered(entry), `check-paths.txt doesn't watch ${entry}`);
-    }
+  it("watches every CHECK_PATHS entry, besides check.sh's built-in .sandcastle/ and package.json", () => {
+    assert.deepEqual(unwatchedEntries(watched, CHECK_PATHS), []);
+  });
+
+  it("names an entry whose line is missing, or that only a narrower line covers", () => {
+    assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== ".github/scripts"), CHECK_PATHS), [".github/scripts/"]);
+    assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== ".claude/skills"), CHECK_PATHS), [".claude/skills/"]);
+    assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== ":(glob)tests/**/*.csproj"), CHECK_PATHS), ["tests/"]);
+  });
+
+  for (const exclude of [":(exclude).github/scripts", ":^.github/scripts", ":!.github/scripts/", ":(glob,exclude).github/scripts"]) {
+    it(`names an entry that ${exclude} leaves unwatched, though its own line is still there`, () => {
+      assert.deepEqual(unwatchedEntries([...watched, exclude], CHECK_PATHS), [".github/scripts/"]);
+    });
+  }
+
+  it("names an entry that an exclude line trims below, or above", () => {
+    assert.deepEqual(unwatchedEntries([...watched, ":(exclude).claude/skills/code-review"], CHECK_PATHS), [".claude/skills/"]);
+    assert.deepEqual(unwatchedEntries([...watched, ":(exclude).github"], CHECK_PATHS), [".github/ci/", ".github/workflows/", ".github/scripts/", ".github/hooks/"]);
+  });
+
+  it("leaves an entry alone when the exclude line only shares a name prefix with it", () => {
+    assert.deepEqual(unwatchedEntries([...watched, ":(exclude).github/scripts-old"], CHECK_PATHS), []);
   });
 
   for (const path of [
