@@ -113,10 +113,102 @@ describe("ROLE_AGENTS", () => {
 describe(".sandcastle/check.sh", () => {
   // The gate runs `pnpm run check:sandcastle` only when one of check.sh's paths changed, and no CI job runs it, so a file that a
   // .sandcastle test reads must be watched or a change to it passes the gate with that test unrun.
-  // Only the pathspec of the `git diff --quiet` that decides the skip, not the comment above it, which names some of the same files.
-  const checkSh = readFileSync(join(root, ".sandcastle/check.sh"), "utf8");
-  const diffStatement = checkSh.slice(checkSh.indexOf("git diff --quiet"), checkSh.indexOf("; then", checkSh.indexOf("git diff --quiet")));
-  const watched = diffStatement.slice(diffStatement.indexOf(" -- ") + 4).split(/[\s\\]+/).map((spec) => spec.replace(/^':\(glob\)|'$/g, ""));
+  // check.sh watches its built-in paths plus the pathspecs in .sandcastle/check-paths.txt (Seed); this repo's tests read the files listed there.
+  // Read the list as check.sh does: a CR, CRLF or LF ends a line, a leading byte-order mark is dropped, and surrounding whitespace is trimmed.
+  // check.sh trims [[:space:]], which is ASCII whitespace in the C locale and adds a few Unicode spaces (U+2000-200A, U+3000 and so on) in a UTF-8
+  // one; this reader trims ASCII whitespace only. A non-breaking space (U+00A0) is trimmed by neither, so a line ending in one is a different pathspec.
+  const pathspecLines = (text: string) =>
+    text
+      .split(/\r\n|\r|\n/)
+      .map((line) => line.replace(/^\uFEFF/, "").replace(/^[ \t\n\v\f\r]+|[ \t\n\v\f\r]+$/g, ""))
+      .filter((line) => line !== "" && !line.startsWith("#"));
+  const watched = pathspecLines(readFileSync(join(root, ".sandcastle/check-paths.txt"), "utf8"));
+  // Every file the gate and these tests read through CHECK_PATHS must be watched, or deleting or adding one skips the check that would
+  // catch it. .sandcastle/ and package.json are check.sh's built-in paths. A watched line covers an entry only when it equals the entry or
+  // contains it, so a narrower line (.claude/skills/code-review) can't stand in for the folder. Two folders are watched narrowly on purpose,
+  // because the tests read only some of their files: the test projects (tests/**/*.csproj) and the scripts the tests name.
+  const narrowOnPurpose: Record<string, string> = { "tests/": ":(glob)tests/**/*.csproj", "scripts/": "scripts/gate.sh" };
+  const withoutGlobMagic = (line: string) => line.replace(/^:\(glob\)/, "").replace(/\/$/, "");
+
+  // check.sh diffs all the lines together, so an exclude line (:(exclude), :^, :!, :/!, in any spelling git accepts) would trim what the
+  // others watch, and an exclude only a glob can describe can't be told from a path by text. Rather than parse every pathspec form, this
+  // repo's list holds plain paths and the :(glob) form only: any other line starting with ":" fails.
+  const linesWithOtherMagic = (lines: string[]) => lines.filter((line) => !/^(?::\(glob\))?[^:]/.test(line));
+
+  const unwatchedEntries = (lines: string[], entries: readonly string[]) =>
+    entries.filter((entry) => {
+      if (entry === ".sandcastle/" || entry === "package.json") return false;
+      if (entry in narrowOnPurpose) return !lines.includes(narrowOnPurpose[entry]!);
+      const wanted = entry.replace(/\/$/, "");
+      return !lines.some((line) => {
+        const spec = withoutGlobMagic(line);
+        return spec === wanted || wanted.startsWith(`${spec}/`);
+      });
+    });
+
+  it("watches every CHECK_PATHS entry, besides check.sh's built-in .sandcastle/ and package.json", () => {
+    assert.deepEqual(unwatchedEntries(watched, CHECK_PATHS), []);
+  });
+
+  it("names an entry whose line is missing, or that only a narrower line covers", () => {
+    assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== ".github/scripts"), CHECK_PATHS), [".github/scripts/"]);
+    assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== ".claude/skills"), CHECK_PATHS), [".claude/skills/"]);
+    assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== ":(glob)tests/**/*.csproj"), CHECK_PATHS), ["tests/"]);
+    assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== "scripts/gate.sh"), CHECK_PATHS), ["scripts/"]);
+  });
+
+  it("reads the list like check.sh: drops a BOM and CR, trims ASCII whitespace only, skips comments", () => {
+    assert.deepEqual(pathspecLines("\uFEFFa\r\n  b \t\r# c\n\n d\u00A0\n#e\n\uFEFF\n"), ["a", "b", "d\u00A0"]);
+    const text = [...watched.filter((line) => line !== ".github/scripts"), ".github/scripts\u00A0"].join("\n");
+    assert.deepEqual(unwatchedEntries(pathspecLines(text), CHECK_PATHS), [".github/scripts/"]);
+  });
+
+  it("covers an entry by a line that contains it, but not by a line that only shares its name prefix", () => {
+    const without = watched.filter((line) => line !== ".github/scripts");
+
+    assert.deepEqual(unwatchedEntries([...without, ".github"], CHECK_PATHS), []);
+    assert.deepEqual(unwatchedEntries([...without, ".github/"], CHECK_PATHS), []);
+    assert.deepEqual(unwatchedEntries([...without, ".github/scr"], CHECK_PATHS), [".github/scripts/"]);
+    assert.deepEqual(unwatchedEntries([...without, ".github/scripts-old"], CHECK_PATHS), [".github/scripts/"]);
+    assert.deepEqual(unwatchedEntries([...without, ".gith"], CHECK_PATHS), [".github/scripts/"]);
+  });
+
+  it("keeps the built-in .sandcastle/ and package.json out of the list's reach", () => {
+    assert.deepEqual(unwatchedEntries([], CHECK_PATHS).includes(".sandcastle/"), false);
+    assert.deepEqual(unwatchedEntries([], CHECK_PATHS).includes("package.json"), false);
+  });
+
+  it("holds only plain paths and :(glob) lines", () => {
+    assert.deepEqual(linesWithOtherMagic(watched), []);
+  });
+
+  for (const line of [
+    ":(exclude).github/scripts",
+    ":(exclude)",
+    ":(glob,exclude).github/scripts",
+    ":(exclude,glob).github/scripts",
+    ":(top,exclude).github/scripts",
+    ":(top).github/scripts",
+    ":^.github/scripts",
+    ":!.github/scripts/",
+    ":!",
+    ":/!.github/scripts",
+    ":/^.github/scripts",
+    ":!/.github/scripts",
+    ":/.github/scripts",
+    ":(glob):!x",
+    ":(glob)",
+    ":(glob):(glob)x",
+    ":",
+  ]) {
+    it(`refuses the pathspec-magic line ${JSON.stringify(line)}`, () => {
+      assert.deepEqual(linesWithOtherMagic(["README.md", line]), [line]);
+    });
+  }
+
+  it("accepts a plain path, a :(glob) line and a path that has a colon later", () => {
+    assert.deepEqual(linesWithOtherMagic(["docs", ":(glob)tests/**/*.csproj", "docs/a:b", "!x", "^x", "/x", "./x"]), []);
+  });
 
   for (const path of [
     "README.md",

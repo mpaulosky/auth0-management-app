@@ -15,6 +15,10 @@ export const ROLES = ["intake", "planner", "critique", "architect", "tester", "b
 
 export type Role = (typeof ROLES)[number];
 
+// How long the host waits for a role's sandbox run after the role's own timeoutMinutes, in minutes, before it gives up on a run
+// that ignored the abort (lib/agents.mts#runRoleInSandbox). A given-up run stalls its sandbox, so a build adds this once.
+export const ROLE_RUN_GRACE_MINUTES = 5;
+
 // The role a repo opts into by giving ROLE_AGENTS a `ui` entry: the UI
 // developer, who builds the Blazor components and pages after the backend
 // developer. It is left out of ROLES so that a repo-config.mts written before
@@ -24,7 +28,11 @@ export type Role = (typeof ROLES)[number];
 export type OptInRole = "ui";
 
 // Every role the Owned modules can run: the ones every repo names, plus the opt-in one.
-export type AnyRole = Role | OptInRole;
+export type AnyRole = Role | OptInRole | FixedRole;
+
+// The role that runs the pre-push review's reviewers on the host (lib/host-review.mts). The skill fixes its model and
+// effort, so it is not in ROLES: a repo's ROLE_AGENTS names none.
+export type FixedRole = "pre-push-reviewer" | "pre-push-review-lead";
 
 // The agent and budget lib/repo-config.mts#ROLE_AGENTS gives one role.
 export type RoleAgent = {
@@ -52,9 +60,10 @@ export const DESIGN_MARKER = "<!-- sandcastle:design -->";
 
 // The roles lib/build.mts#buildIssue runs, each at most once per build,
 // besides the gate-fixer, which runs up to GATE_FIXER_ATTEMPTS times at each
-// checkpoint. BUILDING_LABEL_MAX_AGE_MS is sized from these roles' timeouts:
-// config.test.mts checks the sum fits, and build.test.mts that buildIssue runs
-// no role outside the list.
+// checkpoint. BUILDING_LABEL_MAX_AGE_MS is sized from these roles' timeouts and
+// the gate's limit (lib/repo-config.mts#GATE_LIMIT_MINUTES): config.test.mts checks the sum fits, and build.test.mts
+// that buildIssue runs no role outside the list. The host-side review's own backend, pre-push-reviewer and pre-push-review-lead runs are not counted
+// here: config.test.mts sizes them separately, as REVIEW_WALL_CLOCK_MINUTES and one step of overshoot.
 export const BUILD_ROLES = ["architect", "tester", "backend", "ui", "scribe", "reviewer"] as const satisfies readonly AnyRole[];
 
 // The ref each issue branch is compared with: every issue PR targets main,
@@ -130,10 +139,35 @@ export const INTAKE_FAILED_RUNS_LIMIT = 8;
 export const INTAKE_REFUSED_BATCHES_LIMIT = 2;
 
 // Gate-fixer runs allowed at each gate checkpoint before the issue's round is
-// given up, and how much of the final gate output the issue comment quotes.
+// given up.
 export const GATE_FIXER_ATTEMPTS = 2;
 
+// The most gate runs a build makes outside the host-side review: each of checkpoints 1 and 2 runs it, then once more after each fixer attempt, and
+// checkpoint 2 runs it on the merged tree first. The review's checkpoint 3 runs are sized in config.test.mts, inside REVIEW_WALL_CLOCK_MINUTES.
+// build.test.mts checks buildIssue stays within it (its tests run no review), and config.test.mts sizes BUILDING_LABEL_MAX_AGE_MS from it.
+export const MAX_GATE_RUNS = 2 * (GATE_FIXER_ATTEMPTS + 1) + 1;
+
+// How many lines of the last gate output, and of the first red run's when it
+// differs (see sameGateOutput in lib/checkpoint.mts), the issue comment and the follow-up pass's PR hand-back
+// (lib/follow-up-pass.mts#giveUpComment) quote.
+// runCheckpoint logs as many of the first red run's lines when an error ends a
+// checkpoint.
 export const GATE_COMMENT_LINES = 100;
+
+// The most CPUs a sandbox may use (`docker run --cpus`), the same in every Baseline repo. The gate's Sandcastle check is the one step
+// that gets faster with more: timed in the sandbox image, it took 162s on 1 CPU, 121s on 2 and 52s on 4, and every other step took
+// the same on all three (mpaulosky/dotfiles#423). Sandcastle starts a container with no limit at all when it's given none.
+export const SANDBOX_CPUS = 4;
+
+// What a sandbox is given on a Docker daemon that reports `daemonCpus` CPUs (lib/skills.mts#readDaemonCpus): SANDBOX_CPUS, or all of
+// the daemon's when it has fewer, since docker refuses a `--cpus` above its own count ("range of CPUs is from 0.01 to N") and the
+// sandbox would not start. It is the daemon's count, not this process's: they differ on Docker Desktop's VM and a remote DOCKER_HOST.
+// Undefined, meaning no limit, when the count is unknown or isn't one or more whole CPUs.
+export function sandboxCpus(daemonCpus: number | undefined): number | undefined {
+  if (daemonCpus === undefined || !Number.isFinite(daemonCpus)) return undefined;
+  const whole = Math.floor(daemonCpus);
+  return whole >= 1 ? Math.min(SANDBOX_CPUS, whole) : undefined;
+}
 
 // Attempts allowed for a publish step (git push, gh pr create) that keeps
 // failing with a GitHub server error, before Sandcastle gives up on the round
@@ -238,6 +272,50 @@ export function describeQueueScope(scope: QueueScope): string {
   return scope.kind === "label" ? `issues labelled ${scope.label}` : `issue #${scope.number} and its PR`;
 }
 
+// The agent and budget of each FixedRole.
+export const FIXED_ROLE_AGENTS: Record<FixedRole, RoleAgent> = {
+  "pre-push-reviewer": { model: "sonnet", effort: "high", maxIterations: 1, timeoutMinutes: 20 },
+  // The lead that starts a round's reviewers as parallel subagents (lib/host-review.mts). Its one timeout covers the whole wave: the reviewer's
+  // 20 minutes with every lens in one wave, plus the time to relay the answers. The effort is the reviewer's, which subagents may inherit.
+  "pre-push-review-lead": { model: "sonnet", effort: "high", maxIterations: 1, timeoutMinutes: 30 },
+};
+
+// How many subagents Claude Code runs at once.
+export const MAX_CONCURRENT_SUBAGENTS = 20;
+
+// How a round's reviewers are started: one after another, or as parallel subagents of one lead run.
+export type ReviewerMode = "sequential" | "subagents";
+
+// Thrown by reviewerMode for a SANDCASTLE_REVIEWERS that names no reviewer mode.
+export class ReviewerModeError extends Error {}
+
+// SANDCASTLE_REVIEWERS from `env` as the reviewer mode.
+// Unset or empty is "sequential", and stays so until a person accepts the relay risk and the items pre-push-review.md still lists as open are settled (a plugin agent from an
+// installed marketplace plugin, the ledger denials, a refused out-of-allowlist request in a sandbox run). Any other value throws ReviewerModeError: a typo must not silently pick a path. main.mts reads it at start-up, so a typo
+// exits before any sandbox starts and not after a build, at its review.
+export function reviewerMode(env: Record<string, string | undefined> = process.env): ReviewerMode {
+  const value = env.SANDCASTLE_REVIEWERS;
+  if (value === undefined || value === "") return "sequential";
+  if (value === "sequential" || value === "subagents") return value;
+  throw new ReviewerModeError(`SANDCASTLE_REVIEWERS must be "sequential" or "subagents", not ${JSON.stringify(value.slice(0, 40))}`);
+}
+
+// After this many review rounds that fixed something, one more round only reviews.
+export const REVIEW_FIX_ROUNDS = 3;
+
+// How many times a reviewer is asked for a valid answer before its review is reported failed.
+export const REVIEWER_ATTEMPTS = 2;
+
+// How long the whole host-side review may run, in minutes. It is checked before each round, reviewer and fixer run, never in the middle of one:
+// a spent review ends as failed at the last commit the gate passed on, which the build publishes as a draft, with a note. The longest the review can take is
+// this, plus the step it was in when it ran out (a reviewer, or a fixer with its gate), and BUILDING_LABEL_MAX_AGE_MS is sized from that.
+export const REVIEW_WALL_CLOCK_MINUTES = 180;
+
+// The most reviewers a round runs (the Bar and the lenses that apply). In the "sequential" reviewer mode a round's reviewers run one after another, so the time
+// a build can take grows with this number; in the "subagents" mode they are one wave, so it must stay within MAX_CONCURRENT_SUBAGENTS. A repository whose
+// own lenses push a round past it fails the review. REVIEW_WALL_CLOCK_MINUTES caps the whole review.
+export const MAX_REVIEWERS_PER_ROUND = 14;
+
 // Marks an issue, or a hand-off pull request (lib/building.mts), while a
 // sandbox is working on it (see lib/build.mts#buildIssue and lib/gate.mts), so
 // a second Sandcastle run doesn't start on the same one too (a near-miss once).
@@ -246,10 +324,15 @@ export const BUILDING_LABEL = "sandcastle:building";
 // How old a sandcastle:building label must be before startup clears it as a
 // crashed run's (see lib/building.mts#clearStaleBuildingLabels). It outlasts
 // any real build: every role's timeoutMinutes, even with two gate-fixer
-// attempts at each of the two checkpoints, adds up to well under 6 hours.
-// config.test.mts checks that sum (see BUILD_ROLES), with an hour to spare,
-// stays below it.
-export const BUILDING_LABEL_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+// attempts at each of the two checkpoints, plus MAX_GATE_RUNS gate runs each up to
+// GATE_LIMIT_MINUTES (lib/repo-config.mts), one more command limit (lib/step-limit.mts)
+// and the host-side review, which stops starting steps after REVIEW_WALL_CLOCK_MINUTES
+// and so takes at most that plus the step it was in (a reviewer's attempts, or a fixer
+// with its gate): all under 12 hours. A crashed run therefore holds its issue for up to
+// 12 hours, an Actions run's too: startup uses this one age. It can't be shorter for Actions alone, since the label's timeline names no
+// run kind and a local run may take the full 12 hours, so a shorter age could clear the label of a build that is still working. config.test.mts checks that
+// sum (see BUILD_ROLES), with twenty minutes to spare, stays below it.
+export const BUILDING_LABEL_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
 // Every label from the Labels table that the host, not a human, is
 // responsible for creating. `Sandcastle` is a human's to add. `bug` is

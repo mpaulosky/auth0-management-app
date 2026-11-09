@@ -26,22 +26,26 @@ An issue is **unblocked** if it has zero blocking dependencies on other open iss
 
 # ROLES
 
-The tester, the backend developer and the reviewer build every issue. For each issue you pick, also choose which optional roles it needs, in a `roles` list. Pick a role only
+The tester, the developer and the reviewer build every issue. For each issue you pick, also choose which optional roles it needs, in a `roles` list. Pick a role only
 when the issue needs it: each one costs a run.
 
 - `architect`: the issue needs a design before the tests are written. Pick it when the issue adds a new type, module or public API whose shape the issue leaves open, touches
-  several modules or slices that must agree, or makes a decision that would be hard to reverse. Leave it out for a fix or a change whose shape the issue already spells out.
-- `ui`: the issue adds or changes Blazor components or pages (`.razor` files, their code-behind, layout or Tailwind styling).
-- `scribe`: the issue adds or changes a domain term in `CONTEXT.md`, or changes how the app is set up or used (`README.md` prose, `docs/CONTRIBUTING.md` or another
-  hand-written guide).
+  several scripts or workflows that must agree, or makes a decision that would be hard to reverse. Leave it out for a fix or a change whose shape the issue already spells out.
+{{UI_ROLE}}
+- `scribe`: the issue adds or changes a domain term in `CONTEXT.md`, or changes what `README.md`, `CLAUDE.md` or a page under `docs/` describes. Leave it out when the
+  issue only changes code and its tests.
 
 An empty list, `[]`, means the issue needs none of them. If you leave `roles` out, every optional role runs.
 
 # FILES
 
-For each issue you pick, list in `files` the paths, relative to the repository root, that you expect the issue to change: the files it edits, adds or deletes, its tests
-included. Read the repository to find them. The host builds no two issues at once that name the same path, nor an issue that names a path an open pull request changes. An
-issue with no `files`, or an empty list, is treated as touching anything, and is built only on its own, so name every path you can.
+For each issue you pick, also list in `files` the repo-relative path of every file the issue will add, change, delete or rename (both names for a rename). Find them by reading
+the repo (`CLAUDE.md` says how it is laid out, `.sandcastle/CODING_STANDARDS.md` where the repo has one holds its code standards, and the rules below say what else to read), not by guessing from the
+title. Give paths only: no globs and no directories, unless the issue adds files under a new directory, in which case name the directory, which covers every path under it.
+
+This list matters. Sandcastle won't build two picks that name the same file in one round, or a pick that names a file an open pull request changes, and it builds a pick with no
+`files` only when no pull request is open and it's the only pick it builds that round. A file you leave out risks a merge conflict; a file you list needlessly holds the
+pick back a round.
 
 # OUTPUT
 
@@ -49,8 +53,8 @@ Output your plan as a JSON object wrapped in `<plan>` tags:
 
 <plan>
 {"issues": [
-{"id": "42", "title": "Fix auth bug", "roles": [], "files": ["src/UI/Program.cs", "tests/UI.Tests.Integration/ProgramTests.cs"]},
-{"id": "43", "title": "Add a Palette picker", "roles": ["architect", "ui", "scribe"], "files": ["src/UI/Components/Features/Palettes/PaletteMenu.razor", "CONTEXT.md"]}
+  {"id": "42", "title": "Refuse an order with no lines", "roles": [], "files": ["src/orders/validate.ts", "tests/orders/validate.test.ts"]},
+  {"id": "43", "title": "Add an order history page", "roles": ["architect", "scribe"], "files": ["src/orders/history.ts", "README.md"]}
 ]}
 </plan>
 

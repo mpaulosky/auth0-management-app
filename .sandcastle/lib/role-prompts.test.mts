@@ -13,7 +13,6 @@ import {
   plannerPromptArgs,
   reviewerPromptArgs,
 } from "./prompts.mts";
-import { SANDBOX_SKILLS } from "./repo-config.mts";
 
 const sandcastleFile = (path: string) => new URL(`../${path}`, import.meta.url);
 const read = (path: string) => readFileSync(sandcastleFile(path), "utf8");
@@ -23,19 +22,9 @@ describe("developer role prompts", () => {
     assert.equal(existsSync(sandcastleFile("implement-prompt.md")), false);
   });
 
-  for (const role of ["architect", "tester", "backend", "ui", "scribe", "follow-up"]) {
+  for (const role of ["architect", "tester", "backend", "ui", "scribe", "follow-up", "gate-fixer"]) {
     it(`gives the ${role} the shared rules`, () => {
       assert.match(read(`roles/${role}.md`), /\{\{SHARED_RULES\}\}/);
-    });
-  }
-
-  for (const role of ["tester", "backend", "ui"]) {
-    it(`lists every skill mounted into the sandbox for the ${role}`, () => {
-      const prompt = read(`roles/${role}.md`);
-
-      for (const skill of SANDBOX_SKILLS) {
-        assert.match(prompt, new RegExp(`^- \`${skill}\`:`, "m"));
-      }
     });
   }
 });
@@ -60,17 +49,29 @@ describe("developer roles across stacks", () => {
     assert.match(prompt, /<module>\.test\.mts/);
   });
 
-  it("points the tester and backend at the Sandcastle rule for TypeScript work", () => {
-    for (const role of ["tester", "backend"]) {
-      assert.match(read(`roles/${role}.md`), /\.claude\/rules\/sandcastle\.md/, role);
-    }
+  it("points the roles at the Sandcastle rule for TypeScript work through the shared rules", () => {
+    assert.match(read("roles/shared-rules.md"), /\.claude\/rules\/sandcastle\.md/);
+  });
+
+  // backend.md, ui.md and the planner's ui bullet send the roles to this section to tell the UI developer's files from the developer's.
+  it("names the UI developer's files in the shared rules, and every folder it names exists", () => {
+    const rules = read("roles/shared-rules.md");
+    const start = rules.indexOf("\n## UI developer");
+    assert.notEqual(start, -1, "roles/shared-rules.md has no UI developer section");
+    const end = rules.indexOf("\n## ", start + 1);
+    const section = rules.slice(start, end === -1 ? undefined : end);
+    const folders = [...section.matchAll(/`((?:src|tests)\/[\w./-]+\/)`/g)].map((match) => match[1]!);
+
+    assert.ok(folders.length >= 3, `expected the section to name its folders, found ${folders.length}`);
+    for (const folder of folders) assert.ok(existsSync(new URL(`../../${folder}`, import.meta.url)), `${folder} does not exist`);
+    assert.match(section, /Features\/<Feature>\//, "the section doesn't hand the slices' .cs files to the developer");
   });
 
   it("names every xUnit and node:test way to skip or todo a test as weakening it", () => {
     for (const role of ["backend", "ui", "gate-fixer"]) {
       const prompt = read(`roles/${role}.md`);
 
-      for (const form of ["`Skip`", "`SkipUnless`", "`SkipWhen`", "`Explicit = true`", "`Assert.Skip*`", "`.skip`", "`.todo`", "`{ skip }`", "`{ todo }`", "`t.skip()`", "`t.todo()`"]) {
+      for (const form of ["`Skip =`", "`Assert.Skip()`", "`.skip`", "`.todo`", "`{ skip }`", "`{ todo }`", "`t.skip()`", "`t.todo()`"]) {
         assert.ok(prompt.includes(form), `${role} doesn't name ${form}`);
       }
     }
@@ -80,11 +81,12 @@ describe("developer roles across stacks", () => {
 // Issue #72: the optional roles the planner picks, and the design note the
 // architect passes to the roles after it.
 describe("optional role prompts", () => {
-  it("asks the planner for a roles field naming architect, ui and scribe", () => {
+  it("asks the planner for a roles field naming architect and scribe, with the ui bullet filled in by the host", () => {
     const prompt = read("plan-prompt.md");
 
     assert.match(prompt, /"roles": \[/);
-    for (const role of ["architect", "ui", "scribe"]) {
+    assert.match(prompt, /\{\{UI_ROLE\}\}/);
+    for (const role of ["architect", "scribe"]) {
       assert.match(prompt, new RegExp(`^- \`${role}\`:`, "m"), role);
     }
   });
@@ -212,41 +214,13 @@ describe("every prompt", () => {
   }
 });
 
-// #58: the follow-up role and the gate-fixer also work on a hand-off PR that
-// has no issue, so their prompts name the brief, not "the issue".
-describe("pass role prompts' brief", () => {
-  for (const role of ["follow-up", "gate-fixer"]) {
-    it(`opens the ${role}'s brief with the issue number and the title`, () => {
-      const prompt = read(`roles/${role}.md`);
-
-      assert.match(prompt, /^# THE BRIEF$/m);
-      assert.doesNotMatch(prompt, /^# THE ISSUE$/m);
-      assert.ok(prompt.includes("The branch implements #{{TASK_ID}}: {{ISSUE_TITLE}}"));
-    });
-
-    it(`wraps the ${role}'s brief and its comments in <brief> tags`, () => {
-      const prompt = read(`roles/${role}.md`);
-
-      for (const tag of ["<brief>", "</brief>", "<brief-comments>", "</brief-comments>"]) {
-        assert.ok(prompt.includes(tag), `${role} lacks ${tag}`);
-      }
-      assert.doesNotMatch(prompt, /<issue(-comments)?>/);
-    });
-
-    it(`says the ${role}'s PR and brief, not only an issue, are everything it can see`, () => {
-      const prompt = read(`roles/${role}.md`);
-
-      assert.match(prompt, /everything the PR and its brief say is above|everything the PR and the brief say is above/);
-      assert.match(prompt, /Comments from the repository owner:/);
-    });
-  }
-
-  it("has the follow-up role weigh a bot thread against the brief's acceptance criteria and scope", () => {
+// The follow-up role weighs a bot thread against the issue's acceptance criteria and scope.
+describe("follow-up role prompt's threads", () => {
+  it("has the follow-up role weigh a bot thread against the issue's acceptance criteria and scope", () => {
     const prompt = read("roles/follow-up.md");
 
-    assert.match(prompt, /the brief's acceptance criteria/);
-    assert.match(prompt, /out of the brief's scope/);
-    assert.doesNotMatch(prompt, /the issue's (acceptance criteria|scope)/);
+    assert.match(prompt, /the issue's acceptance criteria/);
+    assert.match(prompt, /out of the issue's scope/);
   });
 });
 
@@ -277,12 +251,12 @@ describe("prompt shell expansions", () => {
 });
 
 // Sandcastle refuses a placeholder with no value, so a prompt that names one its prompt arguments don't supply fails every run of
-// that role. Each prompt is read with the arguments the host passes it; the only name the host adds on its own is SHARED_RULES
+// that role. Each prompt is read with the arguments the host passes it; the names the host adds on its own are SHARED_RULES and REPO_SKILLS
 // (lib/agents.mts#withSharedRules).
 describe("every prompt's placeholders", () => {
   const branch = "feature/3-add-a-thing";
   const issue: SandcastleIssue = { number: 3, title: "Add a thing", body: "Body", labels: ["Sandcastle"], comments: [] };
-  const hostAdded = new Set(["SHARED_RULES"]);
+  const hostAdded = new Set(["SHARED_RULES", "REPO_SKILLS"]);
   const argsOf: Record<string, Record<string, unknown>> = {
     "roles/architect.md": architectPromptArgs(issue, branch, undefined),
     "roles/backend.md": backendPromptArgs(issue, branch, true),
@@ -293,13 +267,13 @@ describe("every prompt's placeholders", () => {
     "roles/ui.md": issuePromptArgs(issue, branch),
     "review-prompt.md": reviewerPromptArgs(issue, branch),
     "intake-prompt.md": intakePromptArgs([issue]),
-    "plan-prompt.md": plannerPromptArgs([issue]),
+    "plan-prompt.md": plannerPromptArgs([issue], false),
     "critique-prompt.md": critiquePromptArgs([issue], [], []),
   };
 
   it("has an entry for every role prompt", () => {
     const roles = readdirSync(sandcastleFile("roles"))
-      .filter((name) => name.endsWith(".md") && name !== "shared-rules.md")
+      .filter((name) => name.endsWith(".md") && name !== "shared-rules.md" && name !== "skills.md")
       .map((name) => `roles/${name}`);
 
     for (const role of roles) assert.ok(role in argsOf, `${role} has no prompt arguments in this test`);

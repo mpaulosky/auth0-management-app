@@ -1,0 +1,30 @@
+# Files, besides the Template's own list, whose change makes .sandcastle/check.sh run Sandcastle's
+# check: the files this repo's .sandcastle/ tests read (CLAUDE.md, .github/workflows, the solution
+# file and so on). One pathspec per line; blank lines and # lines are ignored. This repo's list holds plain paths and :(glob) lines only:
+# lib/repo-config.test.mts fails any other line that starts with ":", because check.sh diffs the lines together and an exclude would trim what the others watch.
+# A line that matches no tracked file watches nothing until one is added: check.sh names it on stderr on every run.
+
+README.md
+CLAUDE.md
+.gitignore
+scripts/gate.sh
+scripts/check-branch-name.sh
+scripts/watch-pr.sh
+.claude/skills/code-review
+.claude/rules
+.claude/settings.json
+docs/plans/sandcastle-workflow.md
+.github/workflows
+.github/ci
+:(glob)tests/**/*.csproj
+Directory.Build.props
+Directory.Packages.props
+.editorconfig
+global.json
+.markdownlint-cli2.jsonc
+.yamllint.yml
+Auth0ManagementApp.slnx
+.github/scripts
+.github/hooks
+.claude/skills
+.claude/agents

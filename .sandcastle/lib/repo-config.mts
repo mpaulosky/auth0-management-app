@@ -56,10 +56,10 @@ export const hooks = {
 export const copyToWorktree = ["node_modules"];
 
 // The host skills the role prompts tell the agent to use, from the host
-// user's ~/.claude/skills (lib/skills.mts mounts each one read-only). None by
-// default: name a skill here only when it isn't in the worktree and you also
-// list it in a `# SKILLS` section of the tester and backend prompts (and of the
-// ui prompt, once the repo opts into that role); lib/skills.test.mts checks it.
+// user's ~/.claude/skills (lib/skills.mts mounts each one read-only; a name the
+// host lacks is skipped). Each one is also listed in the `# SKILLS` block of
+// `.sandcastle/roles/skills.md`, which the host injects as {{REPO_SKILLS}} into
+// the tester, backend and ui prompts; lib/skills.test.mts checks the two agree.
 export const SANDBOX_SKILLS: readonly string[] = [
   "dotnet-tdd",
   "dotnet-add-testing",
@@ -96,6 +96,12 @@ export const GATE_COVERED_CHECKS: readonly string[] = [
 // daemon, so a repo whose tests start containers points this at a script that
 // leaves those out (such as .sandcastle/check.sh) and keeps its lints.
 export const GATE_COMMAND = "scripts/gate.sh";
+
+// How long the gate may run in the sandbox, in minutes, before the host kills it and counts the checkpoint
+// red (lib/step-limit.mts). Parallel builds share one host, so size it for the slowest gate under that load;
+// lib/config.test.mts adds it to the longest build when it checks BUILDING_LABEL_MAX_AGE_MS. A repo whose gate
+// takes a few minutes keeps the default.
+export const GATE_LIMIT_MINUTES = 10;
 
 // The committed file GATE_COMMAND runs. It is written in the worktree by the
 // agents whose work it judges, so a gate whose branch changes it fails without
