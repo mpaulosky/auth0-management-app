@@ -114,10 +114,14 @@ describe(".sandcastle/check.sh", () => {
   // The gate runs `pnpm run check:sandcastle` only when one of check.sh's paths changed, and no CI job runs it, so a file that a
   // .sandcastle test reads must be watched or a change to it passes the gate with that test unrun.
   // check.sh watches its built-in paths plus the pathspecs in .sandcastle/check-paths.txt (Seed); this repo's tests read the files listed there.
-  const watched = readFileSync(join(root, ".sandcastle/check-paths.txt"), "utf8")
-    .split(/\r\n|\r|\n/)
-    .map((line) => line.trim())
-    .filter((line) => line !== "" && !line.startsWith("#"));
+  // Read the list as check.sh does: a CR, CRLF or LF ends a line, a leading byte-order mark is dropped, and only ASCII whitespace is trimmed,
+  // so a line ending in a non-breaking space stays a different pathspec there, and here.
+  const pathspecLines = (text: string) =>
+    text
+      .split(/\r\n|\r|\n/)
+      .map((line) => line.replace(/^\uFEFF/, "").replace(/^[ \t\n\v\f\r]+|[ \t\n\v\f\r]+$/g, ""))
+      .filter((line) => line !== "" && !line.startsWith("#"));
+  const watched = pathspecLines(readFileSync(join(root, ".sandcastle/check-paths.txt"), "utf8"));
   // Every file the gate and these tests read through CHECK_PATHS must be watched, or deleting or adding one skips the check that would
   // catch it. .sandcastle/ and package.json are check.sh's built-in paths. A watched line covers an entry only when it equals the entry or
   // contains it, so a narrower line (.claude/skills/code-review) can't stand in for the folder. Two folders are watched narrowly on purpose,
@@ -149,6 +153,12 @@ describe(".sandcastle/check.sh", () => {
     assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== ".github/scripts"), CHECK_PATHS), [".github/scripts/"]);
     assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== ".claude/skills"), CHECK_PATHS), [".claude/skills/"]);
     assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== ":(glob)tests/**/*.csproj"), CHECK_PATHS), ["tests/"]);
+    assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== "scripts/gate.sh"), CHECK_PATHS), ["scripts/"]);
+  });
+
+  it("reads the list like check.sh: drops a BOM and CR, trims ASCII whitespace only, skips comments", () => {
+    assert.deepEqual(pathspecLines("\uFEFFa\r\n  b \t\r# c\n\n d\u00A0\n#e\n\uFEFF\n"), ["a", "b", "d\u00A0"]);
+    assert.deepEqual(unwatchedEntries([...watched.filter((line) => line !== ".github/scripts"), ".github/scripts\u00A0"], CHECK_PATHS), [".github/scripts/"]);
   });
 
   it("covers an entry by a line that contains it, but not by a line that only shares its name prefix", () => {
@@ -185,10 +195,12 @@ describe(".sandcastle/check.sh", () => {
     ":!/.github/scripts",
     ":/.github/scripts",
     ":(glob):!x",
+    ":(glob)",
+    ":(glob):(glob)x",
     ":",
   ]) {
     it(`refuses the pathspec-magic line ${JSON.stringify(line)}`, () => {
-      assert.deepEqual(linesWithOtherMagic([...watched, line]), [line]);
+      assert.deepEqual(linesWithOtherMagic(["README.md", line]), [line]);
     });
   }
 
