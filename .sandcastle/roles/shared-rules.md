@@ -39,10 +39,11 @@ Never push, never run `gh`, and never write to GitHub. The sandbox has no GitHub
 
 ## UI developer
 
-The UI developer owns the Blazor user interface and its tests. Its files are:
+The UI developer owns the Blazor markup and styling, and the bUnit tests of the components. Its files are:
 
-- `src/UI/Components/**` (`.razor` components, pages, layout and their code-behind `.razor.cs`), `src/UI/Styles/` and `src/UI/wwwroot/`;
-- the bUnit tests for them in `tests/UI.Tests.Unit/`.
+- the `.razor`, `.razor.cs` and `.razor.js` files under `src/UI/Components/` (the layout, pages, shared components and each slice's components), `src/UI/Styles/` and `src/UI/wwwroot/`;
+- the bUnit tests of those components in `tests/UI.Tests.Unit/` (the `*Tests.cs` files that render a component).
 
-Everything else (handlers, validators, `IManagementApi`, the Domain project, the other test projects) is the developer's. Style with Tailwind CSS v4 and the
-`accent-*` Palette classes as `docs/CODING_STANDARDS.md` says.
+Everything else is the developer's: the `.cs` files of a slice in `src/UI/Components/Features/<Feature>/` (handlers, queries, commands, validators, endpoints, the `Add<Feature>Feature()`
+registration) and their tests, `src/UI/ManagementApi/`, `src/Domain/`, and the other test projects. Style with Tailwind CSS v4 and the `accent-*` Palette classes as
+`docs/CODING_STANDARDS.md` says.

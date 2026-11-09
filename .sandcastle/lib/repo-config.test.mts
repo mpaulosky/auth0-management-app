@@ -118,6 +118,23 @@ describe(".sandcastle/check.sh", () => {
     .split(/\r\n|\r|\n/)
     .map((line) => line.trim())
     .filter((line) => line !== "" && !line.startsWith("#"));
+  // Every file the gate and these tests read through CHECK_PATHS must be watched, or deleting or adding one skips the check that would
+  // catch it. .sandcastle/ and package.json are check.sh's built-in paths; a watched line covers an entry it equals, sits under, or contains.
+  it("watches every CHECK_PATHS entry, besides check.sh's built-in .sandcastle/ and package.json", () => {
+    const covered = (entry: string) => {
+      const wanted = entry.replace(/\/$/, "");
+      return watched.some((line) => {
+        const spec = line.replace(/^:\(glob\)/, "").replace(/\/$/, "");
+        return spec === wanted || spec.startsWith(`${wanted}/`) || wanted.startsWith(`${spec}/`);
+      });
+    };
+
+    for (const entry of CHECK_PATHS) {
+      if (entry === ".sandcastle/" || entry === "package.json") continue;
+      assert.ok(covered(entry), `check-paths.txt doesn't watch ${entry}`);
+    }
+  });
+
   for (const path of [
     "README.md",
     "CLAUDE.md",

@@ -15,3 +15,15 @@ scripts/watch-pr.sh
 docs/plans/sandcastle-workflow.md
 .github/workflows
 .github/ci
+:(glob)tests/**/*.csproj
+Directory.Build.props
+Directory.Packages.props
+.editorconfig
+global.json
+.markdownlint-cli2.jsonc
+.yamllint.yml
+Auth0ManagementApp.slnx
+.github/scripts
+.github/hooks
+.claude/skills
+.claude/agents

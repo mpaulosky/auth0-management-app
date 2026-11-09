@@ -49,8 +49,25 @@ describe("developer roles across stacks", () => {
     assert.match(prompt, /<module>\.test\.mts/);
   });
 
-  it("points every role at the Sandcastle rule for TypeScript work, through the shared rules", () => {
+  it("points the roles at the Sandcastle rule for TypeScript work through the shared rules, which every role prompt carries", () => {
     assert.match(read("roles/shared-rules.md"), /\.claude\/rules\/sandcastle\.md/);
+    for (const role of ["architect", "tester", "backend", "ui", "scribe", "follow-up", "gate-fixer"]) {
+      assert.match(read(`roles/${role}.md`), /\{\{SHARED_RULES\}\}/, role);
+    }
+  });
+
+  // backend.md, ui.md and the planner's ui bullet send the roles to this section to tell the UI developer's files from the developer's.
+  it("names the UI developer's files in the shared rules, and every folder it names exists", () => {
+    const rules = read("roles/shared-rules.md");
+    const start = rules.indexOf("\n## UI developer");
+    assert.notEqual(start, -1, "roles/shared-rules.md has no UI developer section");
+    const end = rules.indexOf("\n## ", start + 1);
+    const section = rules.slice(start, end === -1 ? undefined : end);
+    const folders = [...section.matchAll(/`((?:src|tests)\/[\w./-]+\/)`/g)].map((match) => match[1]!);
+
+    assert.ok(folders.length >= 3, `expected the section to name its folders, found ${folders.length}`);
+    for (const folder of folders) assert.ok(existsSync(new URL(`../../${folder}`, import.meta.url)), `${folder} does not exist`);
+    assert.match(section, /Features\/<Feature>\//, "the section doesn't hand the slices' .cs files to the developer");
   });
 
   it("names every xUnit and node:test way to skip or todo a test as weakening it", () => {
