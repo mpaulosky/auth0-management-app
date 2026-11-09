@@ -119,18 +119,26 @@ describe(".sandcastle/check.sh", () => {
     .map((line) => line.trim())
     .filter((line) => line !== "" && !line.startsWith("#"));
   // Every file the gate and these tests read through CHECK_PATHS must be watched, or deleting or adding one skips the check that would
-  // catch it. .sandcastle/ and package.json are check.sh's built-in paths; a watched line covers an entry it equals, sits under, or contains.
+  // catch it. .sandcastle/ and package.json are check.sh's built-in paths. A watched line covers an entry only when it equals the entry or
+  // contains it, so a narrower line (.claude/skills/code-review) can't stand in for the folder. Two folders are watched narrowly on purpose,
+  // because the tests read only some of their files: the test projects (tests/**/*.csproj) and the scripts the tests name.
+  const narrowOnPurpose: Record<string, string> = { "tests/": ":(glob)tests/**/*.csproj", "scripts/": "scripts/gate.sh" };
+
   it("watches every CHECK_PATHS entry, besides check.sh's built-in .sandcastle/ and package.json", () => {
     const covered = (entry: string) => {
       const wanted = entry.replace(/\/$/, "");
       return watched.some((line) => {
         const spec = line.replace(/^:\(glob\)/, "").replace(/\/$/, "");
-        return spec === wanted || spec.startsWith(`${wanted}/`) || wanted.startsWith(`${spec}/`);
+        return spec === wanted || wanted.startsWith(`${spec}/`);
       });
     };
 
     for (const entry of CHECK_PATHS) {
       if (entry === ".sandcastle/" || entry === "package.json") continue;
+      if (entry in narrowOnPurpose) {
+        assert.ok(watched.includes(narrowOnPurpose[entry]!), `check-paths.txt lacks ${narrowOnPurpose[entry]}, which stands in for ${entry}`);
+        continue;
+      }
       assert.ok(covered(entry), `check-paths.txt doesn't watch ${entry}`);
     }
   });

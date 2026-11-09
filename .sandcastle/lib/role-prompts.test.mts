@@ -22,7 +22,7 @@ describe("developer role prompts", () => {
     assert.equal(existsSync(sandcastleFile("implement-prompt.md")), false);
   });
 
-  for (const role of ["architect", "tester", "backend", "ui", "scribe", "follow-up"]) {
+  for (const role of ["architect", "tester", "backend", "ui", "scribe", "follow-up", "gate-fixer"]) {
     it(`gives the ${role} the shared rules`, () => {
       assert.match(read(`roles/${role}.md`), /\{\{SHARED_RULES\}\}/);
     });
@@ -49,11 +49,8 @@ describe("developer roles across stacks", () => {
     assert.match(prompt, /<module>\.test\.mts/);
   });
 
-  it("points the roles at the Sandcastle rule for TypeScript work through the shared rules, which every role prompt carries", () => {
+  it("points the roles at the Sandcastle rule for TypeScript work through the shared rules", () => {
     assert.match(read("roles/shared-rules.md"), /\.claude\/rules\/sandcastle\.md/);
-    for (const role of ["architect", "tester", "backend", "ui", "scribe", "follow-up", "gate-fixer"]) {
-      assert.match(read(`roles/${role}.md`), /\{\{SHARED_RULES\}\}/, role);
-    }
   });
 
   // backend.md, ui.md and the planner's ui bullet send the roles to this section to tell the UI developer's files from the developer's.

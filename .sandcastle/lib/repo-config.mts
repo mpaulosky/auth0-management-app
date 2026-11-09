@@ -56,11 +56,10 @@ export const hooks = {
 export const copyToWorktree = ["node_modules"];
 
 // The host skills the role prompts tell the agent to use, from the host
-// user's ~/.claude/skills (lib/skills.mts mounts each one read-only). None by
-// default: name a skill here only when it isn't in the worktree and you also
-// list it in the `# SKILLS` block of `.sandcastle/roles/skills.md`, which the host
-// injects as {{REPO_SKILLS}} into the tester, backend and ui prompts;
-// lib/skills.test.mts checks the two agree.
+// user's ~/.claude/skills (lib/skills.mts mounts each one read-only; a name the
+// host lacks is skipped). Each one is also listed in the `# SKILLS` block of
+// `.sandcastle/roles/skills.md`, which the host injects as {{REPO_SKILLS}} into
+// the tester, backend and ui prompts; lib/skills.test.mts checks the two agree.
 export const SANDBOX_SKILLS: readonly string[] = [
   "dotnet-tdd",
   "dotnet-add-testing",
