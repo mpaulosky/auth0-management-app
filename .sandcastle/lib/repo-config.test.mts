@@ -122,27 +122,24 @@ describe(".sandcastle/check.sh", () => {
   // catch it. .sandcastle/ and package.json are check.sh's built-in paths. A watched line covers an entry only when it equals the entry or
   // contains it, so a narrower line (.claude/skills/code-review) can't stand in for the folder. Two folders are watched narrowly on purpose,
   // because the tests read only some of their files: the test projects (tests/**/*.csproj) and the scripts the tests name.
-  // check.sh diffs the lines together, so an exclude line (:(exclude), :^, :!) trims what the others watch: one that equals, sits under or
-  // contains a CHECK_PATHS entry leaves that entry partly unwatched, and fails the entry whatever else covers it.
   const narrowOnPurpose: Record<string, string> = { "tests/": ":(glob)tests/**/*.csproj", "scripts/": "scripts/gate.sh" };
-  const excludeLine = /^:(?:\((?:[^),]*,)*exclude(?:,[^)]*)?\)|[!^])/;
-  const withoutMagic = (line: string) => line.replace(/^:(?:\([^)]*\)|[!^]+)/, "").replace(/\/$/, "");
+  const withoutGlobMagic = (line: string) => line.replace(/^:\(glob\)/, "").replace(/\/$/, "");
 
-  const unwatchedEntries = (lines: string[], entries: readonly string[]) => {
-    const positives = lines.filter((line) => !excludeLine.test(line));
-    const excludes = lines.filter((line) => excludeLine.test(line)).map(withoutMagic);
+  // check.sh diffs all the lines together, so an exclude line (:(exclude), :^, :!, :/!, in any spelling git accepts) would trim what the
+  // others watch, and an exclude only a glob can describe can't be told from a path by text. Rather than parse every pathspec form, this
+  // repo's list holds plain paths and the :(glob) form only: any other line starting with ":" fails.
+  const linesWithOtherMagic = (lines: string[]) => lines.filter((line) => !/^(?::\(glob\))?[^:]/.test(line));
 
-    return entries.filter((entry) => {
+  const unwatchedEntries = (lines: string[], entries: readonly string[]) =>
+    entries.filter((entry) => {
       if (entry === ".sandcastle/" || entry === "package.json") return false;
+      if (entry in narrowOnPurpose) return !lines.includes(narrowOnPurpose[entry]!);
       const wanted = entry.replace(/\/$/, "");
-      if (excludes.some((spec) => spec === wanted || spec.startsWith(`${wanted}/`) || wanted.startsWith(`${spec}/`))) return true;
-      if (entry in narrowOnPurpose) return !positives.includes(narrowOnPurpose[entry]!);
-      return !positives.some((line) => {
-        const spec = withoutMagic(line);
+      return !lines.some((line) => {
+        const spec = withoutGlobMagic(line);
         return spec === wanted || wanted.startsWith(`${spec}/`);
       });
     });
-  };
 
   it("watches every CHECK_PATHS entry, besides check.sh's built-in .sandcastle/ and package.json", () => {
     assert.deepEqual(unwatchedEntries(watched, CHECK_PATHS), []);
@@ -154,19 +151,49 @@ describe(".sandcastle/check.sh", () => {
     assert.deepEqual(unwatchedEntries(watched.filter((line) => line !== ":(glob)tests/**/*.csproj"), CHECK_PATHS), ["tests/"]);
   });
 
-  for (const exclude of [":(exclude).github/scripts", ":^.github/scripts", ":!.github/scripts/", ":(glob,exclude).github/scripts"]) {
-    it(`names an entry that ${exclude} leaves unwatched, though its own line is still there`, () => {
-      assert.deepEqual(unwatchedEntries([...watched, exclude], CHECK_PATHS), [".github/scripts/"]);
+  it("covers an entry by a line that contains it, but not by a line that only shares its name prefix", () => {
+    const without = watched.filter((line) => line !== ".github/scripts");
+
+    assert.deepEqual(unwatchedEntries([...without, ".github"], CHECK_PATHS), []);
+    assert.deepEqual(unwatchedEntries([...without, ".github/"], CHECK_PATHS), []);
+    assert.deepEqual(unwatchedEntries([...without, ".github/scr"], CHECK_PATHS), [".github/scripts/"]);
+    assert.deepEqual(unwatchedEntries([...without, ".github/scripts-old"], CHECK_PATHS), [".github/scripts/"]);
+    assert.deepEqual(unwatchedEntries([...without, ".gith"], CHECK_PATHS), [".github/scripts/"]);
+  });
+
+  it("keeps the built-in .sandcastle/ and package.json out of the list's reach", () => {
+    assert.deepEqual(unwatchedEntries([], CHECK_PATHS).includes(".sandcastle/"), false);
+    assert.deepEqual(unwatchedEntries([], CHECK_PATHS).includes("package.json"), false);
+  });
+
+  it("holds only plain paths and :(glob) lines", () => {
+    assert.deepEqual(linesWithOtherMagic(watched), []);
+  });
+
+  for (const line of [
+    ":(exclude).github/scripts",
+    ":(exclude)",
+    ":(glob,exclude).github/scripts",
+    ":(exclude,glob).github/scripts",
+    ":(top,exclude).github/scripts",
+    ":(top).github/scripts",
+    ":^.github/scripts",
+    ":!.github/scripts/",
+    ":!",
+    ":/!.github/scripts",
+    ":/^.github/scripts",
+    ":!/.github/scripts",
+    ":/.github/scripts",
+    ":(glob):!x",
+    ":",
+  ]) {
+    it(`refuses the pathspec-magic line ${JSON.stringify(line)}`, () => {
+      assert.deepEqual(linesWithOtherMagic([...watched, line]), [line]);
     });
   }
 
-  it("names an entry that an exclude line trims below, or above", () => {
-    assert.deepEqual(unwatchedEntries([...watched, ":(exclude).claude/skills/code-review"], CHECK_PATHS), [".claude/skills/"]);
-    assert.deepEqual(unwatchedEntries([...watched, ":(exclude).github"], CHECK_PATHS), [".github/ci/", ".github/workflows/", ".github/scripts/", ".github/hooks/"]);
-  });
-
-  it("leaves an entry alone when the exclude line only shares a name prefix with it", () => {
-    assert.deepEqual(unwatchedEntries([...watched, ":(exclude).github/scripts-old"], CHECK_PATHS), []);
+  it("accepts a plain path, a :(glob) line and a path that has a colon later", () => {
+    assert.deepEqual(linesWithOtherMagic(["docs", ":(glob)tests/**/*.csproj", "docs/a:b", "!x", "^x", "/x", "./x"]), []);
   });
 
   for (const path of [
