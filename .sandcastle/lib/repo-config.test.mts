@@ -114,8 +114,9 @@ describe(".sandcastle/check.sh", () => {
   // The gate runs `pnpm run check:sandcastle` only when one of check.sh's paths changed, and no CI job runs it, so a file that a
   // .sandcastle test reads must be watched or a change to it passes the gate with that test unrun.
   // check.sh watches its built-in paths plus the pathspecs in .sandcastle/check-paths.txt (Seed); this repo's tests read the files listed there.
-  // Read the list as check.sh does: a CR, CRLF or LF ends a line, a leading byte-order mark is dropped, and only ASCII whitespace is trimmed,
-  // so a line ending in a non-breaking space stays a different pathspec there, and here.
+  // Read the list as check.sh does: a CR, CRLF or LF ends a line, a leading byte-order mark is dropped, and surrounding whitespace is trimmed.
+  // check.sh trims [[:space:]], which is ASCII whitespace in the C locale and adds a few Unicode spaces (U+2000-200A, U+3000 and so on) in a UTF-8
+  // one; this reader trims ASCII whitespace only. A non-breaking space (U+00A0) is trimmed by neither, so a line ending in one is a different pathspec.
   const pathspecLines = (text: string) =>
     text
       .split(/\r\n|\r|\n/)
@@ -158,7 +159,8 @@ describe(".sandcastle/check.sh", () => {
 
   it("reads the list like check.sh: drops a BOM and CR, trims ASCII whitespace only, skips comments", () => {
     assert.deepEqual(pathspecLines("\uFEFFa\r\n  b \t\r# c\n\n d\u00A0\n#e\n\uFEFF\n"), ["a", "b", "d\u00A0"]);
-    assert.deepEqual(unwatchedEntries([...watched.filter((line) => line !== ".github/scripts"), ".github/scripts\u00A0"], CHECK_PATHS), [".github/scripts/"]);
+    const text = [...watched.filter((line) => line !== ".github/scripts"), ".github/scripts\u00A0"].join("\n");
+    assert.deepEqual(unwatchedEntries(pathspecLines(text), CHECK_PATHS), [".github/scripts/"]);
   });
 
   it("covers an entry by a line that contains it, but not by a line that only shares its name prefix", () => {
