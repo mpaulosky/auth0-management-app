@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-11-18 | [chore(deps): Bump Aspire to 13.6.5 for security advisories](2026-11-18-pr-117-chore-deps-bump-aspire-to-13-6-5-for-security-advisories.md) | release,automation |
 | 2026-11-09 | [chore(baseline): Re-apply the repo-ci-baseline Template](2026-11-09-pr-111-chore-baseline-re-apply-the-repo-ci-baseline-template.md) | release,automation |
 | 2026-11-01 | [chore: Bump the all-nuget group with 9 updates](2026-11-01-pr-107-chore-bump-the-all-nuget-group-with-9-updates.md) | release,automation |
 | 2026-10-30 | [chore(baseline): Migrate auth0-management-app to the repo-ci-baseline Template](2026-10-30-pr-100-chore-baseline-migrate-auth0-management-app-to-the-repo-ci-baseline-template.md) | release,automation |
