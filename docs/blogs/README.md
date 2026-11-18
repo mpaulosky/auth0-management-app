@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-11-18 | [chore(deps): Bump bunit to 2.14.0 and OpenTelemetry instrumentation to 1.20.2](2026-11-18-pr-119-chore-deps-bump-bunit-to-2-14-0-and-opentelemetry-instrumentation-to-1-20-2.md) | release,automation |
 | 2026-11-18 | [chore(deps): Bump Aspire to 13.6.5 for security advisories](2026-11-18-pr-117-chore-deps-bump-aspire-to-13-6-5-for-security-advisories.md) | release,automation |
 | 2026-11-09 | [chore(baseline): Re-apply the repo-ci-baseline Template](2026-11-09-pr-111-chore-baseline-re-apply-the-repo-ci-baseline-template.md) | release,automation |
 | 2026-11-01 | [chore: Bump the all-nuget group with 9 updates](2026-11-01-pr-107-chore-bump-the-all-nuget-group-with-9-updates.md) | release,automation |
