@@ -229,6 +229,12 @@
             </thead>
             <tbody>
               <tr>
+                <td><a href="https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.36">v0.0.36</a></td>
+                <td>2026-11-23</td>
+                <td>fix(sandcastle): Accept Sandcastle 0.14&#x27;s prompt check in prompts test</td>
+                <td><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-11-23-pr-125-fix-sandcastle-accept-sandcastle-0-14-s-prompt-check-in-prompts-test.md">Post</a></td>
+              </tr>
+              <tr>
                 <td><a href="https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.35">v0.0.35</a></td>
                 <td>2026-11-18</td>
                 <td>chore(deps): Bump bunit to 2.14.0 and OpenTelemetry instrumentation to 1.20.2</td>
@@ -282,12 +288,6 @@
                 <td>feat(review): Review every branch locally before it&#x27;s pushed</td>
                 <td><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-82-feat-review-review-every-branch-locally-before-it-s-pushed.md">Post</a></td>
               </tr>
-              <tr>
-                <td><a href="https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.26">v0.0.26</a></td>
-                <td>2026-10-20</td>
-                <td>feat(sandcastle): Show why each Sandcastle PR is held</td>
-                <td><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-79-feat-sandcastle-show-why-each-sandcastle-pr-is-held.md">Post</a></td>
-              </tr>
             </tbody>
           </table>
         </div>
@@ -298,6 +298,14 @@
         <h2>Blog posts</h2>
         <!-- BLOGS_HTML_START -->
         <ul class="post-grid">
+          <li class="post-card">
+            <article>
+              <p class="post-meta"><time datetime="2026-11-23">23 Nov 2026</time><span class="post-tag">v0.0.36</span></p>
+              <h3 class="post-title"><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-11-23-pr-125-fix-sandcastle-accept-sandcastle-0-14-s-prompt-check-in-prompts-test.md">fix(sandcastle): Accept Sandcastle 0.14&#x27;s prompt check in prompts test</a></h3>
+              <p class="post-excerpt">The gate on main fails in .sandcastle/lib/prompts.test.mts. The test checks that Sandcastle&#x27;s promptArgs check refuses only null and undefined, so UI_ROLE and REPO_SKILLS are safe to pass empty. It…</p>
+              <p class="post-source"><a href="https://github.com/mpaulosky/auth0-management-app/pull/125">PR #125</a></p>
+            </article>
+          </li>
           <li class="post-card">
             <article>
               <p class="post-meta"><time datetime="2026-11-18">18 Nov 2026</time><span class="post-tag">v0.0.35</span></p>
@@ -368,14 +376,6 @@
               <h3 class="post-title"><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-82-feat-review-review-every-branch-locally-before-it-s-pushed.md">feat(review): Review every branch locally before it&#x27;s pushed</a></h3>
               <p class="post-excerpt">Most of the review threads GitHub&#x27;s reviewers opened on this repo&#x27;s PRs were about behaviour a review before the push could have caught: 166 threads in three days, 160 of them from Claude Review…</p>
               <p class="post-source"><a href="https://github.com/mpaulosky/auth0-management-app/pull/82">PR #82</a></p>
-            </article>
-          </li>
-          <li class="post-card">
-            <article>
-              <p class="post-meta"><time datetime="2026-10-20">20 Oct 2026</time><span class="post-tag">v0.0.26</span></p>
-              <h3 class="post-title"><a href="https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-79-feat-sandcastle-show-why-each-sandcastle-pr-is-held.md">feat(sandcastle): Show why each Sandcastle PR is held</a></h3>
-              <p class="post-excerpt">Nothing showed why Sandcastle was holding one of its pull requests. The follow-up pass count, the open review threads, the branch state and the hand-back label each lived in a different place…</p>
-              <p class="post-source"><a href="https://github.com/mpaulosky/auth0-management-app/pull/79">PR #79</a></p>
             </article>
           </li>
         </ul>
