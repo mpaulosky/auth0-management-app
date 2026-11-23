@@ -74,6 +74,7 @@ Blue, the default, renders no attribute.
 
 | Version | Date | Title | Blog post |
 | ------- | ---- | ----- | --------- |
+| [v0.0.36](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.36) | 2026-11-23 | fix(sandcastle): Accept Sandcastle 0.14's prompt check in prompts test | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-11-23-pr-125-fix-sandcastle-accept-sandcastle-0-14-s-prompt-check-in-prompts-test.md) |
 | [v0.0.35](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.35) | 2026-11-18 | chore(deps): Bump bunit to 2.14.0 and OpenTelemetry instrumentation to 1.20.2 | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-11-18-pr-119-chore-deps-bump-bunit-to-2-14-0-and-opentelemetry-instrumentation-to-1-20-2.md) |
 | [v0.0.34](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.34) | 2026-11-18 | chore(deps): Bump Aspire to 13.6.5 for security advisories | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-11-18-pr-117-chore-deps-bump-aspire-to-13-6-5-for-security-advisories.md) |
 | [v0.0.33](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.33) | 2026-11-09 | chore(baseline): Re-apply the repo-ci-baseline Template | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-11-09-pr-111-chore-baseline-re-apply-the-repo-ci-baseline-template.md) |
@@ -83,7 +84,6 @@ Blue, the default, renders no attribute.
 | [v0.0.29](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.29) | 2026-10-21 | feat(review): Grade local review findings as Critical, Warning or Advisory | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-89-feat-review-grade-local-review-findings-as-critical-warning-or-advisory.md) |
 | [v0.0.28](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.28) | 2026-10-21 | docs(README): Point the Releases table to how Releases are cut | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-86-docs-readme-point-the-releases-table-to-how-releases-are-cut.md) |
 | [v0.0.27](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.27) | 2026-10-21 | feat(review): Review every branch locally before it's pushed | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-21-pr-82-feat-review-review-every-branch-locally-before-it-s-pushed.md) |
-| [v0.0.26](https://github.com/mpaulosky/auth0-management-app/releases/tag/v0.0.26) | 2026-10-20 | feat(sandcastle): Show why each Sandcastle PR is held | [Post](https://github.com/mpaulosky/auth0-management-app/blob/main/docs/blogs/2026-10-20-pr-79-feat-sandcastle-show-why-each-sandcastle-pr-is-held.md) |
 
 <!-- RELEASES_END -->
 
