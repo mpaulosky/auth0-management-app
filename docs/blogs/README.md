@@ -4,6 +4,7 @@ This directory contains concise release-review posts for merged PR releases.
 
 | Date | Title | Tags |
 | ---- | ----- | ---- |
+| 2026-11-23 | [chore(deps): Remove the central package pins no project references](2026-11-23-pr-127-chore-deps-remove-the-central-package-pins-no-project-references.md) | release,automation |
 | 2026-11-23 | [fix(sandcastle): Accept Sandcastle 0.14's prompt check in prompts test](2026-11-23-pr-125-fix-sandcastle-accept-sandcastle-0-14-s-prompt-check-in-prompts-test.md) | release,automation |
 | 2026-11-18 | [chore(deps): Bump bunit to 2.14.0 and OpenTelemetry instrumentation to 1.20.2](2026-11-18-pr-119-chore-deps-bump-bunit-to-2-14-0-and-opentelemetry-instrumentation-to-1-20-2.md) | release,automation |
 | 2026-11-18 | [chore(deps): Bump Aspire to 13.6.5 for security advisories](2026-11-18-pr-117-chore-deps-bump-aspire-to-13-6-5-for-security-advisories.md) | release,automation |
